@@ -231,6 +231,44 @@ _Prerequisites_: Make sure you have [Visual Studio Code](https://code.visualstud
 
 ### Installing the Blender Addon
 
+#### Windows one-command installer
+
+From a cloned or downloaded repository, open PowerShell in the repository root
+and run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The human-readable installer detects Blender 4.2+, creates or reuses `.venv`,
+installs the MCP server, builds and validates the Extension ZIP, installs and
+enables it in Blender, and registers `blender_mcp` with Codex when the Codex CLI
+is available. It is safe to run again when updating the repository.
+
+Useful options:
+
+```powershell
+# Preview every step without changing the machine
+.\install.ps1 -DryRun
+
+# Select a specific Blender installation
+.\install.ps1 -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+
+# Install without changing Codex configuration
+.\install.ps1 -SkipCodexRegistration
+
+# Install only the Python MCP server
+.\install.ps1 -SkipBlenderExtension
+
+# Replace an existing non-matching Codex entry named blender_mcp
+.\install.ps1 -ForceCodexRegistration
+```
+
+After installation, open Blender, start the bridge from the **BlenderMCP**
+sidebar panel, then restart Codex or open a new session.
+
+#### Manual Extension installation
+
 For Blender 4.2 or newer, use the packaged Extension ZIP:
 
 1. Download `blender_mcp-1.6.0.zip` from the release artifacts.
