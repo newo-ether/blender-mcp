@@ -32,11 +32,13 @@ class _FakeBlenderConnection:
 class BlenderDocumentationToolTests(unittest.TestCase):
     def setUp(self):
         self.original_connection = server.get_blender_connection
+        self.original_client = server.BlenderDocumentationClient
         self.original_telemetry = telemetry_decorator.get_telemetry
         telemetry_decorator.get_telemetry = lambda: _SilentTelemetry()
 
     def tearDown(self):
         server.get_blender_connection = self.original_connection
+        server.BlenderDocumentationClient = self.original_client
         telemetry_decorator.get_telemetry = self.original_telemetry
 
     def test_explicit_version_does_not_connect_to_blender(self):
@@ -94,6 +96,64 @@ class BlenderDocumentationToolTests(unittest.TestCase):
         )
         self.assertTrue(response.startswith("Error resolving Blender documentation context:"))
         self.assertNotIn("Traceback", response)
+
+    def test_search_tool_defaults_to_manual_and_returns_json(self):
+        calls = []
+
+        class FakeClient:
+            def search(self, context, *, query, limit):
+                calls.append((context, query, limit))
+                return {
+                    "schema": "blender-documentation-search/1",
+                    "query": query,
+                    "results": [],
+                    "errors": [],
+                }
+
+        server.BlenderDocumentationClient = FakeClient
+        server.get_blender_connection = lambda: (_ for _ in ()).throw(
+            AssertionError("explicit version unexpectedly connected to Blender")
+        )
+        response = server.search_blender_docs(
+            None,
+            query="Geometry Nodes",
+            version="5.1",
+            limit=3,
+        )
+        parsed = json.loads(response)
+        self.assertEqual(parsed["schema"], "blender-documentation-search/1")
+        context, query, limit = calls[0]
+        self.assertEqual(context["requested"]["sources"], ["manual"])
+        self.assertEqual(query, "Geometry Nodes")
+        self.assertEqual(limit, 3)
+
+    def test_page_tool_normalizes_source_alias_before_client(self):
+        calls = []
+
+        class FakeClient:
+            def get_page(self, context, **kwargs):
+                calls.append((context, kwargs))
+                return {
+                    "schema": "blender-documentation-page/1",
+                    "content": "Node reference",
+                }
+
+        server.BlenderDocumentationClient = FakeClient
+        response = server.get_blender_doc_page(
+            None,
+            page="bpy.types.Node",
+            version="5.1",
+            source="api",
+            heading="Inherited Properties",
+            max_chars=2_000,
+        )
+        parsed = json.loads(response)
+        self.assertEqual(parsed["schema"], "blender-documentation-page/1")
+        context, kwargs = calls[0]
+        self.assertEqual(context["requested"]["sources"], ["python_api"])
+        self.assertEqual(kwargs["source"], "python_api")
+        self.assertEqual(kwargs["heading"], "Inherited Properties")
+        self.assertEqual(kwargs["max_chars"], 2_000)
 
 
 if __name__ == "__main__":
