@@ -1299,8 +1299,12 @@ try {
             if ($blenderVersion -lt [version]"4.2") {
                 throw "Blender $blenderVersion is too old; Blender 4.2+ is required: $blenderExecutable"
             }
+            # Loading factory preferences here would make `-e` persist Blender's
+            # defaults over the user's settings. Load the real preferences while
+            # disabling startup-file script execution, then change only the
+            # Extension installation/enabled state.
             Invoke-CheckedCommand -FilePath $blenderExecutable -ArgumentList @(
-                "--factory-startup", "--command", "extension", "install-file",
+                "--disable-autoexec", "--command", "extension", "install-file",
                 "-r", "user_default", "-e", $archivePath
             ) -Description "Installing and enabling Blender MCP in Blender $blenderVersion..."
             $installedVersions += [string]$blenderVersion
