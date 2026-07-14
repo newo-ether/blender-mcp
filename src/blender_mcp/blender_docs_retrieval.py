@@ -49,10 +49,18 @@ _WORD_RE = re.compile(r"[^\W_]+(?:[-_.][^\W_]+)*", re.UNICODE)
 class BlenderDocumentationRetrievalError(RuntimeError):
     """Raised when an official documentation request cannot be completed."""
 
-    def __init__(self, code: str, message: str, *, url: str | None = None):
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        url: str | None = None,
+        status_code: int | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.url = url
+        self.status_code = status_code
 
     def as_dict(self, *, source: str | None = None) -> dict[str, Any]:
         result: dict[str, Any] = {"code": self.code, "message": str(self)}
@@ -60,6 +68,8 @@ class BlenderDocumentationRetrievalError(RuntimeError):
             result["source"] = source
         if self.url is not None:
             result["url"] = self.url
+        if self.status_code is not None:
+            result["status_code"] = self.status_code
         return result
 
 
@@ -71,6 +81,9 @@ class FetchedDocument:
     content_type: str
     content: bytes
     redirects: tuple[str, ...]
+    etag: str | None = None
+    last_modified: str | None = None
+    cache: Mapping[str, Any] | None = None
 
 
 def validate_official_url(url: str) -> str:
@@ -110,6 +123,7 @@ class OfficialDocsFetcher:
         *,
         accepted_content_types: Iterable[str],
         max_bytes: int,
+        request_headers: Mapping[str, str] | None = None,
     ) -> FetchedDocument:
         requested_url = validate_official_url(url)
         current_url = requested_url
@@ -119,6 +133,8 @@ class OfficialDocsFetcher:
             "Accept": ", ".join(sorted(accepted)),
             "User-Agent": "blender-mcp-documentation/1",
         }
+        if request_headers:
+            headers.update({str(key): str(value) for key, value in request_headers.items()})
 
         with httpx.Client(
             follow_redirects=False,
@@ -148,11 +164,25 @@ class OfficialDocsFetcher:
                             current_url = target
                             continue
 
+                        if response.status_code == 304:
+                            return FetchedDocument(
+                                requested_url=requested_url,
+                                url=current_url,
+                                status_code=304,
+                                content_type="",
+                                content=b"",
+                                redirects=tuple(redirects),
+                                etag=response.headers.get("etag"),
+                                last_modified=response.headers.get("last-modified"),
+                                cache={"status": "network_not_modified"},
+                            )
+
                         if response.status_code != 200:
                             raise BlenderDocumentationRetrievalError(
                                 "http_error",
                                 f"Official documentation returned HTTP {response.status_code}",
                                 url=current_url,
+                                status_code=response.status_code,
                             )
 
                         content_type = response.headers.get("content-type", "")
@@ -194,6 +224,9 @@ class OfficialDocsFetcher:
                             content_type=content_type,
                             content=b"".join(chunks),
                             redirects=tuple(redirects),
+                            etag=response.headers.get("etag"),
+                            last_modified=response.headers.get("last-modified"),
+                            cache={"status": "network"},
                         )
                 except BlenderDocumentationRetrievalError:
                     raise
@@ -682,7 +715,21 @@ class BlenderDocumentationClient:
         self,
         fetcher: Callable[..., FetchedDocument] | None = None,
     ) -> None:
-        self.fetcher = fetcher or OfficialDocsFetcher()
+        if fetcher is None:
+            from .blender_docs_cache import CachingOfficialDocsFetcher
+
+            fetcher = CachingOfficialDocsFetcher()
+        self.fetcher = fetcher
+
+    def _retrieval_marker(self) -> int | None:
+        events = getattr(self.fetcher, "events", None)
+        return len(events) if isinstance(events, list) else None
+
+    def _retrieval_events(self, marker: int | None) -> list[dict[str, Any]]:
+        events = getattr(self.fetcher, "events", None)
+        if marker is None or not isinstance(events, list):
+            return []
+        return [dict(item) for item in events[marker:]]
 
     @staticmethod
     def _validate_context(context: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -708,6 +755,7 @@ class BlenderDocumentationClient:
         heading: str | None = None,
         max_chars: int = DEFAULT_PAGE_MAX_CHARS,
     ) -> dict[str, Any]:
+        retrieval_marker = self._retrieval_marker()
         sources = self._validate_context(context)
         source_record = next(
             (record for record in sources if record.get("source") == source),
@@ -763,6 +811,8 @@ class BlenderDocumentationClient:
             "page": normalized_page,
             "url": fetched.url,
             "redirects": list(fetched.redirects),
+            "cache": dict(fetched.cache or {"status": "unmanaged"}),
+            "retrieval": self._retrieval_events(retrieval_marker),
             **extracted,
         }
 
@@ -826,6 +876,7 @@ class BlenderDocumentationClient:
                 "score": candidate["score"],
                 "_needs_snippet": True,
                 "_english_page_url": english_page_url,
+                "index_cache": dict(fetched.cache or {"status": "unmanaged"}),
             }
             results.append(result)
         return results
@@ -866,6 +917,7 @@ class BlenderDocumentationClient:
                 "snippet": candidate.get("snippet", ""),
                 "url": url,
                 "score": candidate["score"],
+                "index_cache": dict(fetched.cache or {"status": "unmanaged"}),
             })
         return results
 
@@ -876,6 +928,7 @@ class BlenderDocumentationClient:
         query: str,
         limit: int = DEFAULT_SEARCH_LIMIT,
     ) -> dict[str, Any]:
+        retrieval_marker = self._retrieval_marker()
         normalized_query = _validate_query(query)
         if not isinstance(limit, int) or not 1 <= limit <= MAX_SEARCH_LIMIT:
             raise BlenderDocumentationRetrievalError(
@@ -917,7 +970,19 @@ class BlenderDocumentationClient:
                 str(item["path"]),
             )
         )
-        results = results[:limit]
+        deduplicated = []
+        seen = set()
+        for result in results:
+            identity = (
+                result["source"],
+                str(result["path"]).casefold(),
+                str(result["heading"] or "").casefold(),
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            deduplicated.append(result)
+        results = deduplicated[:limit]
         for result in results:
             if not result.pop("_needs_snippet", False):
                 result.pop("_english_page_url", None)
@@ -932,6 +997,9 @@ class BlenderDocumentationClient:
                 extracted = extract_html_page(page_response.content, max_chars=2_000)
                 result["snippet"] = _snippet(extracted["content"], normalized_query)
                 result["url"] = page_response.url
+                result["snippet_cache"] = dict(
+                    page_response.cache or {"status": "unmanaged"}
+                )
             except BlenderDocumentationRetrievalError as exc:
                 if exc.code == "http_error" and english_page_url:
                     try:
@@ -952,6 +1020,9 @@ class BlenderDocumentationClient:
                             "en",
                             "localized_page_unavailable_uses_english",
                         )
+                        result["snippet_cache"] = dict(
+                            page_response.cache or {"status": "unmanaged"}
+                        )
                     except BlenderDocumentationRetrievalError as fallback_exc:
                         result["snippet_error"] = fallback_exc.code
                 else:
@@ -964,4 +1035,5 @@ class BlenderDocumentationClient:
             "result_count": len(results),
             "results": results,
             "errors": errors,
+            "retrieval": self._retrieval_events(retrieval_marker),
         }

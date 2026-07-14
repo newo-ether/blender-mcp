@@ -148,6 +148,31 @@ class BlenderDocumentationRetrievalTests(unittest.TestCase):
         self.assertNotIn("Navigation", response["results"][0]["snippet"])
         self.assertTrue(response["results"][0]["url"].startswith(base))
 
+    def test_search_deduplicates_canonical_page_aliases(self):
+        duplicate_index = b"Search.setIndex(" + json.dumps({
+            "docnames": [
+                "modeling/geometry_nodes/index",
+                "modeling/geometry_nodes/index",
+            ],
+            "titles": ["Geometry Nodes", "Geometry Nodes"],
+            "terms": {"geometry": [0, 1], "nodes": [0, 1]},
+            "titleterms": {"geometry": [0, 1], "nodes": [0, 1]},
+        }).encode("utf-8") + b");"
+        base = "https://docs.blender.org/manual/en/5.1/"
+        fetcher = FakeFetcher({
+            base + "searchindex.js": (duplicate_index, "application/javascript"),
+            base + "modeling/geometry_nodes/index.html": (MANUAL_PAGE, "text/html"),
+        })
+
+        response = retrieval.BlenderDocumentationClient(fetcher).search(
+            manual_context(),
+            query="Geometry Nodes",
+            limit=8,
+        )
+
+        self.assertEqual(response["result_count"], 1)
+        self.assertEqual(response["results"][0]["title"], "Geometry Nodes")
+
     def test_page_extracts_exact_heading_section_and_removes_chrome(self):
         base = "https://docs.blender.org/manual/en/5.1/"
         fetcher = FakeFetcher({
