@@ -42,7 +42,7 @@ human-readable: [install.ps1](install.ps1). For a reproducible, version-pinned
 install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.7.0/install.ps1))) -ReleaseTag v1.7.0
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.7.1/install.ps1))) -ReleaseTag v1.7.1
 ```
 
 Before changing the machine, the installer:
@@ -53,7 +53,11 @@ Before changing the machine, the installer:
 4. verifies the wheel, Extension ZIP, and optional MCPB against `SHA256SUMS.txt`;
 5. creates or reuses `%LOCALAPPDATA%\BlenderMCP\venv`;
 6. installs the server and the Extension into each selected Blender version;
-7. registers selected clients without silently replacing a conflicting Codex configuration.
+7. adds or updates the canonical `blender_mcp` entry for selected clients.
+
+Updates are idempotent: an exact matching Codex entry is left alone, while a
+different `blender_mcp` Codex or Claude Code user entry is replaced in place.
+Use `-PreserveExistingMcpEntries` when an existing custom entry must not change.
 
 ### Target selector
 
@@ -69,9 +73,9 @@ Use `-Gui` for a WinForms checkbox window.
 
 | Target | Installer behavior |
 | --- | --- |
-| Codex CLI | Adds the per-user `blender_mcp` stdio server. |
+| Codex CLI | Adds or updates the per-user `blender_mcp` stdio server. |
 | Codex Desktop (ChatGPT) | Uses the same Codex MCP configuration as the CLI. |
-| Claude Code CLI | Adds `blender_mcp` in Claude Code user scope. |
+| Claude Code CLI | Adds or updates `blender_mcp` in user scope; project/local entries are not removed. |
 | Claude Desktop | Opens the checksummed MCPB; Claude Desktop performs final confirmation. |
 | Blender 4.2+ | Select one or several detected versions. The newest is selected by default. |
 | Blender below 4.2 | Shown for clarity but disabled for Extension installation. |
@@ -80,7 +84,7 @@ Use `-Gui` for a WinForms checkbox window.
 
 1. Open a selected Blender version.
 2. In the 3D View, press N and open the **BlenderMCP** tab.
-3. Click **Connect to Claude** to start the bridge on port `9876`.
+3. The bridge starts automatically on port `9876`; the preference is enabled by default.
 4. Restart or reopen the selected MCP clients.
 5. If Claude Desktop was selected, approve the MCPB inside Claude Desktop.
 
@@ -116,7 +120,7 @@ exercise the published Release path instead.
 | `-UseRelease` | Use Release assets even when the script is run from a clone. |
 | `-SkipBlenderExtension` | Install only the Python MCP server. |
 | `-SkipCodexRegistration` | Leave Codex/ChatGPT configuration unchanged. |
-| `-ForceCodexRegistration` | Replace a different Codex entry named `blender_mcp`. |
+| `-PreserveExistingMcpEntries` | Keep a different same-name Codex or Claude Code entry instead of updating it. |
 | `-SkipClaudeCodeRegistration` | Leave Claude Code configuration unchanged. |
 | `-SkipClaudeDesktop` | Do not download or open the Claude Desktop MCPB. |
 
@@ -241,7 +245,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.7.0-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.7.1-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -249,7 +253,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.7.0-py3-none-any.whl
+python -m pip install ./blender_mcp-1.7.1-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -310,7 +314,7 @@ switches.
 Persistent settings are available under
 **Edit > Preferences > Add-ons > Blender MCP**:
 
-- telemetry consent and auto-connect;
+- telemetry consent and auto-connect (enabled by default);
 - bridge port;
 - Poly Haven enablement;
 - Hyper3D provider and API key;
@@ -336,8 +340,9 @@ MCP server telemetry.
 | --- | --- |
 | No checklist appears | Use a normal PowerShell console. Redirected streams, CI, SSH, and `-NonInteractive` intentionally use defaults. Use `-Gui` for WinForms. |
 | A client is unavailable | Install it, open a new PowerShell session, and rerun the installer. |
-| Codex says “existing different entry preserved” | Inspect `codex mcp get blender_mcp --json`. Use `-ForceCodexRegistration` only when replacement is intentional. |
-| The client cannot reach Blender | Start the BlenderMCP bridge and confirm both sides use the same host and port. |
+| A custom MCP entry must not be updated | Rerun with `-PreserveExistingMcpEntries`, or use the client-specific skip switch. |
+| Claude Code still uses another same-name entry | Run `claude mcp get blender_mcp` and check its scope. Local and project entries take precedence and are intentionally not removed by this installer. |
+| The client cannot reach Blender | Open Blender and confirm auto-connect is enabled, or click **Connect to Claude** manually; both sides must use the same host and port. |
 | The Extension is absent from one Blender | Rerun and select that version, or pass its executable with `-BlenderPath`. |
 | A Geometry Nodes patch is stale | Re-index or re-export the tree and rebuild the patch with the new revision. |
 | A linked node group cannot be edited | Linked-library trees are intentionally read-only in Geometry Nodes v1. |
