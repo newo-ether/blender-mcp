@@ -1,3 +1,5 @@
+<p align="right">Language: <strong>English</strong> | <a href="README_CN.md">简体中文</a></p>
+
 # Blender MCP — Geometry Nodes Automation Fork
 
 [![Release](https://img.shields.io/github/v/release/newo-ether/blender-mcp)](https://github.com/newo-ether/blender-mcp/releases/latest)
