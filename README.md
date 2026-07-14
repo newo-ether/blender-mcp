@@ -1,422 +1,322 @@
+# Blender MCP — Geometry Nodes Automation Fork
 
+[![Release](https://img.shields.io/github/v/release/newo-ether/blender-mcp)](https://github.com/newo-ether/blender-mcp/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Blender 4.2+](https://img.shields.io/badge/Blender-4.2%2B-orange.svg)](https://www.blender.org/)
 
-# BlenderMCP - Blender Model Context Protocol Integration
+This community fork connects MCP clients to Blender and adds a structured,
+revision-safe workflow for reading and editing Geometry Nodes.
 
-BlenderMCP connects Blender to Claude AI through the Model Context Protocol (MCP), allowing Claude to directly interact with and control Blender. This integration enables prompt assisted 3D modeling, scene creation, and manipulation.
+It retains the upstream BlenderMCP scene, object, viewport, asset, and
+model-generation tools while adding:
 
-**[Official website](https://blendermcp.org/)**
+- first-class Geometry Nodes discovery, export, validation, and transactional edits;
+- a checksummed GitHub Release containing the Blender Extension, Python wheel, and Claude Desktop MCPB;
+- a one-command Windows installer with automatic client and Blender detection;
+- terminal and graphical target selectors for multi-version installation.
 
-[Full tutorial](https://www.youtube.com/watch?v=lCyQ717DuzQ)
+> This is a third-party community project. It is not affiliated with or endorsed
+> by Blender, OpenAI, or Anthropic.
 
-### Join the Community
+## Quick start on Windows
 
-Give feedback, get inspired, and build on top of the MCP: [Discord](https://discord.gg/z5apgR8TFU)
+### Requirements
 
-### Supporters
-
-[CodeRabbit](https://www.coderabbit.ai/)
-
-**All supporters:**
-
-[Support this project](https://github.com/sponsors/ahujasid)
-
-## Highlights
-
-For the current version and changelog, see the [releases page](https://github.com/ahujasid/blender-mcp/releases).
-
-- Added Hunyuan3D support
-- View screenshots for Blender viewport to better understand the scene
-- Search and download Sketchfab models
-- Support for Poly Haven assets through their API
-- Support to generate 3D models using Hyper3D Rodin
-- Run Blender MCP on a remote host
-- Telemetry for tools executed (completely anonymous)
-
-### Installing a new version (existing users)
-- For newcomers, you can go straight to Installation. For existing users, see the points below
-- Download the latest addon.py file and replace the older one, then add it to Blender
-- Delete the MCP server from Claude and add it back again, and you should be good to go!
-
-
-## Features
-
-- **Two-way communication**: Connect Claude AI to Blender through a socket-based server
-- **Object manipulation**: Create, modify, and delete 3D objects in Blender
-- **Material control**: Apply and modify materials and colors
-- **Scene inspection**: Get detailed information about the current Blender scene
-- **Code execution**: Run arbitrary Python code in Blender from Claude
-
-## Components
-
-The system consists of two main components:
-
-1. **Blender Addon (`addon.py`)**: A Blender addon that creates a socket server within Blender to receive and execute commands
-2. **MCP Server (`src/blender_mcp/server.py`)**: A Python server that implements the Model Context Protocol and connects to the Blender addon
-
-## Installation
-
-
-### Prerequisites
-
-- Blender 3.0 or newer
+- Windows PowerShell 5.1 or newer
 - Python 3.10 or newer
-- uv package manager: 
+- Blender 4.2 or newer for the Extension package
+- at least one MCP client, such as Codex, ChatGPT with Codex mode, Claude Code,
+  or Claude Desktop
 
-**If you're on Mac, please install uv as**
-```bash
-brew install uv
-```
-**On Windows**
-```powershell
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex" 
-```
-and then add uv to the user path in Windows (you may need to restart Claude Desktop after):
-```powershell
-$localBin = "$env:USERPROFILE\.local\bin"
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-[Environment]::SetEnvironmentVariable("Path", "$userPath;$localBin", "User")
-```
+### One-command installation
 
-Otherwise installation instructions are on their website: [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
-
-**Linux:** install uv with `curl -LsSf https://astral.sh/uv/install.sh | sh` (it lands in `~/.local/bin`; open a new shell so it's on your PATH). On every OS, use uv's **official installer above — not `pip install uv`**, which may not create the `uvx` command and can hide uv inside an environment your client can't see.
-
-**⚠️ Do not proceed before installing UV**
-
-### Make your client find uvx
-
-MCP clients started from a GUI (Claude Desktop, Cursor, VS Code from the Dock/Start menu) do **not** inherit your terminal's PATH, so a bare `"command": "uvx"` can fail with **`spawn uvx ENOENT`** even though `uvx` works in your terminal. If that happens:
-
-- Find uvx's full path — `which uvx` (macOS/Linux) or `where uvx` (Windows) — and use it as `"command"`, e.g. `/opt/homebrew/bin/uvx` or `C:\Users\<you>\.local\bin\uvx.exe`.
-- On Windows you can instead wrap it: `"command": "cmd", "args": ["/c", "uvx", "blender-mcp"]`.
-- After any PATH or config change, **fully quit and relaunch** the client (Windows: quit from the system tray, not just the window; macOS: Cmd-Q).
-
-### Pin the Python version (avoid conda / pyenv / version conflicts)
-
-uv chooses which Python runs the server. On machines with conda (auto-activated base), pyenv, or asdf — or with a newer CPython release that some dependencies do not have wheels for yet — uv can grab an interpreter that makes installation fail. Pin Python 3.11 and prefer uv-managed interpreters to avoid using whatever is on your PATH:
-
-```json
-{
-    "mcpServers": {
-        "blender": {
-            "command": "uvx",
-            "args": ["--python", "3.11", "blender-mcp"],
-            "env": { "UV_PYTHON_PREFERENCE": "only-managed" }
-        }
-    }
-}
-```
-
-`--python 3.11` still satisfies this package's `requires-python >=3.10`, and `UV_PYTHON_PREFERENCE=only-managed` keeps uv from selecting conda, pyenv, asdf, or system Python first. (The repo's `.python-version` is only a hint for contributors and does **not** affect `uvx`.) If a previous failed attempt keeps replaying after a fix, clear the cache: `uv cache clean blender-mcp && uvx --refresh blender-mcp`.
-
-### If uv won't work: install without uv
-
-On locked-down machines you can skip uvx entirely with [`pipx`](https://pipx.pypa.io), then point your client at the installed command:
-
-```bash
-pipx install blender-mcp
-pipx ensurepath          # then restart your shell / client
-```
-
-Use the resulting absolute path as `"command"` (find it with `which blender-mcp` / `where blender-mcp`) and omit `args`.
-
-### Environment Variables
-
-The following environment variables can be used to configure the Blender connection:
-
-- `BLENDER_HOST`: Host address for Blender socket server (default: "localhost")
-- `BLENDER_PORT`: Port number for Blender socket server (default: 9876)
-
-Example:
-```bash
-export BLENDER_HOST='host.docker.internal'
-export BLENDER_PORT=9876
-```
-
-### Claude for Desktop Integration
-
-[Watch the setup instruction video](https://www.youtube.com/watch?v=neoK_WMq92g) (Assuming you have already installed uv)
-
-Go to Claude > Settings > Developer > Edit Config > claude_desktop_config.json to include the following:
-
-```json
-{
-    "mcpServers": {
-        "blender": {
-            "command": "uvx",
-            "args": [
-                "blender-mcp"
-            ]
-        }
-    }
-}
-```
-<details>
-<summary>Claude Code</summary>
-
-Use the Claude Code CLI to add the blender MCP server:
-
-```bash
-claude mcp add blender uvx blender-mcp
-```
-</details>
-
-### Cursor integration
-
-[![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/link/mcp%2Finstall?name=blender&config=eyJjb21tYW5kIjoidXZ4IGJsZW5kZXItbWNwIn0%3D)
-
-For Mac users, go to Settings > MCP and paste the following 
-
-- To use as a global server, use "add new global MCP server" button and paste
-- To use as a project specific server, create `.cursor/mcp.json` in the root of the project and paste
-
-
-```json
-{
-    "mcpServers": {
-        "blender": {
-            "command": "uvx",
-            "args": [
-                "blender-mcp"
-            ]
-        }
-    }
-}
-```
-
-For Windows users, go to Settings > MCP > Add Server, add a new server with the following settings:
-
-```json
-{
-    "mcpServers": {
-        "blender": {
-            "command": "cmd",
-            "args": [
-                "/c",
-                "uvx",
-                "blender-mcp"
-            ]
-        }
-    }
-}
-```
-
-[Cursor setup video](https://www.youtube.com/watch?v=wgWsJshecac)
-
-**⚠️ Only run one instance of the MCP server (either on Cursor or Claude Desktop), not both**
-
-### Visual Studio Code Integration
-
-_Prerequisites_: Make sure you have [Visual Studio Code](https://code.visualstudio.com/) installed before proceeding.
-
-[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_blender--mcp_server-0098FF?style=flat-square&logo=visualstudiocode&logoColor=ffffff)](vscode:mcp/install?%7B%22name%22%3A%22blender-mcp%22%2C%22type%22%3A%22stdio%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22blender-mcp%22%5D%7D)
-
-### OpenCode integration
-
-```json
-{
-  "mcp": {
-    "blender-mcp": {
-      "type": "local",
-      "command": ["uvx", "blender-mcp"],
-      "enabled": true,
-      "environment": {
-        "BLENDER_HOST": "localhost",
-        "BLENDER_PORT": "9876"
-      }   
-    }
-  }
-}
-```
-
-### Installing the Blender Addon
-
-#### Windows one-command installer
-
-Open Windows PowerShell and run this single command; cloning the repository is
-not required:
+Open PowerShell and run:
 
 ```powershell
 irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1 | iex
 ```
 
-The human-readable installer opens a terminal checkbox selector before changing
-the machine: use Up/Down to move, Space to toggle, Enter to install, and Esc to
-cancel. Pass `-Gui` if a WinForms checkbox window is preferred. Both selectors
-detect every installed Blender version and these four client surfaces:
-
-| Selector label | Installation behavior |
-| --- | --- |
-| Codex CLI | Registers the per-user `blender_mcp` stdio server. |
-| Codex Desktop (ChatGPT) | Uses the same Codex MCP configuration as the CLI. |
-| Claude Code CLI | Registers `blender_mcp` in Claude Code user scope. |
-| Claude Desktop | Opens the checksummed MCPB and leaves final confirmation to Claude Desktop. |
-
-Blender 4.2+ entries are selectable individually; unsupported older versions
-remain visible but disabled, and the newest supported version is selected by
-default. Multiple Blender versions can be selected in one run.
-
-The script downloads the latest stable GitHub Release, verifies the SHA-256 of
-the Python wheel, Blender Extension ZIP, and optional MCPB, creates or reuses
-`%LOCALAPPDATA%\BlenderMCP\venv`, installs the server, installs the same validated
-Extension into every selected Blender, and configures the selected clients. It
-is safe to run again for updates. Python 3.10+ and Blender 4.2+ are required for
-the full installation; the MCP server can still be installed when Blender is
-not currently present.
-
-For CI, SSH, or other sessions without a graphical desktop, the installer
-automatically uses detected defaults. You can request that behavior explicitly:
+The source is human-readable: [install.ps1](install.ps1). For a reproducible,
+version-pinned install, use:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1))) -NonInteractive
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.7.0/install.ps1))) -ReleaseTag v1.7.0
 ```
 
-To inspect the script before executing it, open the Raw URL above or download
-it first. A tag-specific Raw URL and `-ReleaseTag v1.7.0` can be used when a
-fully pinned installation is preferred.
+Before changing the machine, the installer:
 
-Selector limitations and fallbacks:
+1. detects supported MCP clients and every local Blender installation;
+2. opens a terminal checklist;
+3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
+4. verifies the wheel, Extension ZIP, and optional MCPB against `SHA256SUMS.txt`;
+5. creates or reuses `%LOCALAPPDATA%\BlenderMCP\venv`;
+6. installs the server and the Extension into each selected Blender version;
+7. registers selected clients without silently replacing a conflicting Codex configuration.
 
-- The TUI requires a real interactive Windows console. Redirected input/output,
-  CI, SSH, and `-NonInteractive` use detected defaults instead of waiting for
-  keys.
-- If `Console.ReadKey()` is unavailable in an otherwise interactive host, the
-  installer tries the WinForms selector. If WinForms is also unavailable, it
-  falls back to detected defaults and prints a warning.
-- `-Gui` requires an interactive Windows desktop session.
-- Claude Desktop always requires final MCPB approval inside Claude Desktop; the
-  bootstrap intentionally cannot bypass that confirmation.
+### Target selector
 
-From a cloned repository, the same installer uses and validates local source by
-default:
+The default terminal UI uses:
+
+- Up/Down to move
+- Space to toggle
+- A to toggle all available entries
+- Enter to install
+- Esc or Q to cancel without making changes
+
+Use `-Gui` for a WinForms checkbox window.
+
+| Target | Installer behavior |
+| --- | --- |
+| Codex CLI | Adds the per-user `blender_mcp` stdio server. |
+| Codex Desktop (ChatGPT) | Uses the same Codex MCP configuration as the CLI. |
+| Claude Code CLI | Adds `blender_mcp` in Claude Code user scope. |
+| Claude Desktop | Opens the checksummed MCPB; Claude Desktop performs final confirmation. |
+| Blender 4.2+ | Select one or several detected versions. The newest is selected by default. |
+| Blender below 4.2 | Shown for clarity but disabled for Extension installation. |
+
+### Finish setup
+
+1. Open a selected Blender version.
+2. In the 3D View, press N and open the **BlenderMCP** tab.
+3. Click **Connect to Claude** to start the bridge on port `9876`.
+4. Restart or reopen the selected MCP clients.
+5. If Claude Desktop was selected, approve the MCPB inside Claude Desktop.
+
+![BlenderMCP sidebar](assets/addon-instructions.png)
+
+## Installer reference
+
+Pass parameters to the remote script by creating a script block:
+
+```powershell
+$installer = [scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1))
+& $installer -Gui
+```
+
+From a clone, call the file directly:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Useful options:
+A cloned checkout installs editable local source. Add `-UseRelease` to
+exercise the published Release path instead.
+
+| Option | Purpose |
+| --- | --- |
+| `-DryRun` | Print detection, paths, downloads, and commands without changing state. |
+| `-Gui` | Use the graphical selector instead of the default TUI. |
+| `-NonInteractive` | Skip both selectors and use detected defaults. |
+| `-BlenderPath <path[]>` | Limit Blender targets to explicit executable paths. |
+| `-PythonPath <path>` | Choose the Python 3.10+ interpreter used to create the venv. |
+| `-WorkspacePath <path>` | Set the Geometry Nodes JSON workspace. |
+| `-ReleaseTag <tag>` | Install an exact Release instead of the latest stable release. |
+| `-InstallRoot <path>` | Override the per-user Release installation directory. |
+| `-UseRelease` | Use Release assets even when the script is run from a clone. |
+| `-SkipBlenderExtension` | Install only the Python MCP server. |
+| `-SkipCodexRegistration` | Leave Codex/ChatGPT configuration unchanged. |
+| `-ForceCodexRegistration` | Replace a different Codex entry named `blender_mcp`. |
+| `-SkipClaudeCodeRegistration` | Leave Claude Code configuration unchanged. |
+| `-SkipClaudeDesktop` | Do not download or open the Claude Desktop MCPB. |
+
+Examples:
 
 ```powershell
-# Preview every step without changing the machine
-.\install.ps1 -DryRun
+# Inspect the Release path without writing state
+& $installer -DryRun
 
-# Use the graphical selector instead of the default terminal UI
-.\install.ps1 -Gui
+# Install into two explicit Blender versions
+& $installer -BlenderPath @(
+    "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe",
+    "C:\Program Files\Blender Foundation\Blender 5.2 LTS\blender.exe"
+)
 
-# Limit selection to one or more explicit Blender installations
-.\install.ps1 -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
-
-# Install without changing Codex or Claude client configuration
-.\install.ps1 -SkipCodexRegistration
-.\install.ps1 -SkipClaudeCodeRegistration -SkipClaudeDesktop
-
-# Install only the Python MCP server
-.\install.ps1 -SkipBlenderExtension
-
-# Replace an existing non-matching Codex entry named blender_mcp
-.\install.ps1 -ForceCodexRegistration
-
-# Exercise GitHub Release installation from a cloned checkout
-.\install.ps1 -UseRelease -ReleaseTag v1.7.0
+# Install only the server
+& $installer -SkipBlenderExtension -SkipCodexRegistration `
+    -SkipClaudeCodeRegistration -SkipClaudeDesktop
 ```
 
-After installation, open Blender, start the bridge from the **BlenderMCP**
-sidebar panel, then restart the selected clients. Claude Desktop users must also
-approve the opened MCPB inside Claude Desktop.
+The TUI requires a real interactive console. CI, SSH, redirected input/output,
+and `-NonInteractive` use detected defaults. If
+`Console.ReadKey()` is unavailable, the installer tries WinForms and
+then falls back to detected defaults with a warning.
 
-#### Manual Extension installation
+## Architecture
 
-For Blender 4.2 or newer, use the packaged Extension ZIP:
-
-1. Download `blender_mcp-1.7.0.zip` from the release artifacts.
-2. Open Blender and go to Edit > Preferences > Add-ons.
-3. Open the drop-down menu and choose **Install from Disk...**.
-4. Select the ZIP without extracting it, then enable **Blender MCP**.
-
-The legacy `addon.py` installation remains available for Blender 3.x: choose
-**Install...** in Preferences > Add-ons and select the Python file directly.
-
-Maintainers can reproduce all GitHub Release assets with:
-
-```powershell
-.\scripts\build_release.ps1 -BlenderPath "C:\path\to\blender.exe"
+```text
+Codex / ChatGPT / Claude
+          |
+          | MCP over stdio
+          v
+Python MCP server
+          |
+          | JSON over TCP localhost:9876
+          v
+Blender Extension <-> Blender scene and node trees
 ```
 
-Or build only the Extension package with:
+The MCP server is launched by the client. The Blender Extension hosts the local
+bridge. Start the bridge before asking the client to use Blender tools.
 
-```bash
-python scripts/build_blender_extension.py --blender /path/to/blender
-```
+## Geometry Nodes automation
 
-For the revisioned Geometry Nodes workflow, tool reference, safety model,
-compatibility matrix, performance measurements, and example patch files, see
+This fork treats a node tree as a normalized graph, not as recursive prose or a
+single generated `bpy` script. Reads are revisioned; edits are small
+semantic patches that can be validated before application.
+
+### Dedicated tools
+
+| Tool | Purpose | Mutates Blender |
+| --- | --- | --- |
+| `list_geometry_node_trees` | List groups, users, editability, graph size, and revisions. | No |
+| `get_geometry_node_tree_index` | Search and page a compact node index. | No |
+| `export_geometry_node_tree` | Return or write a full graph or targeted N-hop subgraph. | No |
+| `get_geometry_node_type_schema` | Probe sockets and editable properties from the running Blender version. | No |
+| `validate_geometry_node_patch` | Validate structure and run a patch against a disposable copy. | No |
+| `apply_geometry_node_patch` | Validate, copy, verify, remap users, and report the actual diff. | Yes |
+
+### Recommended workflow
+
+1. Call `list_geometry_node_trees`.
+2. Search large graphs with `get_geometry_node_tree_index`.
+3. Export only the relevant nodes and neighbors.
+4. Put the returned `revision` into a small patch JSON file.
+5. Edit that file with the client's normal file-edit tool.
+6. Call `validate_geometry_node_patch`.
+7. Apply only a valid patch, then inspect `actual_diff` and
+   `new_revision`.
+
+The workspace boundary is controlled by `BLENDER_MCP_WORKSPACE`.
+Patch files outside it, non-JSON files, and patch files larger than 4 MiB are
+rejected.
+
+For the operation catalog, shared-tree policies, rollback behavior, performance
+measurements, and compatibility details, read
 [Geometry Nodes automation](docs/geometry-nodes.md).
 
+Useful artifacts:
 
-## Usage
+- [Example snapshot](examples/geometry-nodes-snapshot.json)
+- [Example patch](examples/geometry-nodes-patch.json)
+- [Public JSON schemas](schemas)
 
-### Starting the Connection
-![BlenderMCP in the sidebar](assets/addon-instructions.png)
+## Other capabilities
 
-1. In Blender, go to the 3D View sidebar (press N if not visible)
-2. Find the "BlenderMCP" tab
-3. Turn on the Poly Haven checkbox if you want assets from their API (optional)
-4. Click "Connect to Claude"
-5. Make sure the MCP server is running in your terminal
+The server currently exposes 28 MCP tools, including:
 
-### Using with Claude
+- scene and object inspection;
+- viewport screenshots;
+- arbitrary Blender Python execution;
+- object, material, camera, lighting, and scene manipulation through Blender code;
+- Poly Haven search, download, and texture application;
+- Sketchfab search, preview, and model import;
+- Hyper3D Rodin text/image generation and import;
+- Hunyuan3D generation and import;
+- the six Geometry Nodes tools above.
 
-Once the config file has been set on Claude, and the addon is running on Blender, you will see a hammer icon with tools for the Blender MCP.
+Example requests:
 
-![BlenderMCP in the sidebar](assets/hammer-icon.png)
+- “Inspect the scene and frame the camera around the selected object.”
+- “Create a low-poly dungeon scene with studio-quality lighting.”
+- “Find the Geometry Nodes group used by the selected object and list its inputs.”
+- “Export the nodes around Join Geometry and validate a patch that inserts a
+  Transform Geometry node.”
+- “Search Poly Haven for a concrete material and apply it to the floor.”
 
-#### Capabilities
+## Manual and cross-platform installation
 
-- Get scene and object information 
-- List and export Geometry Node trees as revisioned JSON (full graph or targeted subgraph)
-- Search a paginated node index before loading only the relevant subgraph
-- Inspect node sockets and properties from the running Blender version
-- Validate revision-guarded Geometry Nodes patch files with a non-mutating dry-run
-- Apply validated patches with copy-on-write commit, explicit shared-user policy, and rollback backups
-- Create, delete and modify shapes
-- Apply or create materials for objects
-- Execute any Python code in Blender
-- Download the right models, assets and HDRIs through [Poly Haven](https://polyhaven.com/)
-- AI generated 3D models through [Hyper3D Rodin](https://hyper3d.ai/)
+The automated bootstrap and Claude Desktop launcher are Windows-only. The
+Python wheel and Blender Extension ZIP are platform-independent.
 
+Download the latest assets from
+[Releases](https://github.com/newo-ether/blender-mcp/releases/latest):
 
-### Example Commands
+- `blender_mcp-<version>.zip` — Blender Extension
+- `blender_mcp-<version>-py3-none-any.whl` — Python MCP server
+- `blender_mcp-<version>.mcpb` — Windows Claude Desktop package
+- `SHA256SUMS.txt` — integrity checks
 
-Here are some examples of what you can ask Claude to do:
+Install the server on Windows:
 
-- "Create a low poly scene in a dungeon, with a dragon guarding a pot of gold" [Demo](https://www.youtube.com/watch?v=DqgKuLYUv00)
-- "Create a beach vibe using HDRIs, textures, and models like rocks and vegetation from Poly Haven" [Demo](https://www.youtube.com/watch?v=I29rn92gkC4)
-- Give a reference image, and create a Blender scene out of it [Demo](https://www.youtube.com/watch?v=FDRb03XPiRo)
-- "Generate a 3D model of a garden gnome through Hyper3D"
-- "Get information about the current scene, and make a threejs sketch from it" [Demo](https://www.youtube.com/watch?v=jxbNI5L7AH8)
-- "Make this car red and metallic" 
-- "Create a sphere and place it above the cube"
-- "Make the lighting like a studio"
-- "Point the camera at the scene, and make it isometric"
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.7.0-py3-none-any.whl
+```
 
-## Hyper3D integration
+On macOS or Linux:
 
-Hyper3D's free trial key allows you to generate a limited number of models per day. If the daily limit is reached, you can wait for the next day's reset or obtain your own key from hyper3d.ai and fal.ai.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install ./blender_mcp-1.7.0-py3-none-any.whl
+```
 
-## Persistent API credentials
+Install the Extension in Blender 4.2+:
 
-BlenderMCP supports persistent credentials via Blender Add-on Preferences:
+1. Open **Edit > Preferences > Add-ons**.
+2. Choose **Install from Disk...**.
+3. Select `blender_mcp-<version>.zip` without extracting it.
+4. Enable **Blender MCP**.
 
-`Edit -> Preferences -> Add-ons -> Blender MCP`
+The legacy [addon.py](addon.py) remains available for Blender 3.x, but the
+Geometry Nodes v1 protocol is not supported or claimed there.
 
-You can store these values there so they survive Blender restarts:
+### Register a client manually
 
-- Sketchfab API Key
-- Hyper3D API Key
-- Hunyuan3D SecretId / SecretKey
-- Hunyuan3D API URL
+Use the absolute path to the installed `blender-mcp` executable.
 
-For headless setups or CI, credentials can also be injected by environment variables:
+Codex CLI and ChatGPT with Codex mode:
+
+```powershell
+codex mcp add blender_mcp `
+  --env BLENDER_HOST=localhost `
+  --env BLENDER_PORT=9876 `
+  --env BLENDER_MCP_WORKSPACE=C:\path\to\workspace `
+  -- C:\path\to\venv\Scripts\blender-mcp.exe
+```
+
+Claude Code:
+
+```powershell
+claude mcp add --scope user blender_mcp `
+  --env BLENDER_HOST=localhost `
+  --env BLENDER_PORT=9876 `
+  --env BLENDER_MCP_WORKSPACE=C:\path\to\workspace `
+  -- C:\path\to\venv\Scripts\blender-mcp.exe
+```
+
+Other stdio MCP clients can use the same executable and environment variables.
+For Claude Desktop on Windows, open the published MCPB and approve it in
+**Settings > Extensions**.
+
+## Configuration
+
+### MCP server environment
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `BLENDER_HOST` | `localhost` | Host running the Blender bridge. |
+| `BLENDER_PORT` | `9876` | TCP port exposed by the Blender Extension. |
+| `BLENDER_MCP_WORKSPACE` | server working directory | Allowed root for Geometry Nodes JSON files. |
+| `DISABLE_TELEMETRY` | unset | Set to `true` to disable MCP server telemetry. |
+
+`BLENDER_MCP_DISABLE_TELEMETRY` and
+`MCP_DISABLE_TELEMETRY` are also accepted as complete-disable
+switches.
+
+### Blender preferences
+
+Persistent settings are available under
+**Edit > Preferences > Add-ons > Blender MCP**:
+
+- telemetry consent and auto-connect;
+- bridge port;
+- Poly Haven enablement;
+- Hyper3D provider and API key;
+- Sketchfab API key;
+- Hunyuan3D mode, credentials, endpoint, and generation defaults.
+
+Headless environments may provide credentials with:
 
 - `BLENDERMCP_SKETCHFAB_API_KEY`
 - `BLENDERMCP_HYPER3D_API_KEY`
@@ -424,65 +324,97 @@ For headless setups or CI, credentials can also be injected by environment varia
 - `BLENDERMCP_HUNYUAN3D_SECRET_KEY`
 - `BLENDERMCP_HUNYUAN3D_API_URL`
 
+Disabling telemetry consent in Blender removes prompts, code, screenshots, and
+other rich metadata but retains minimal anonymous operational events. Set
+`DISABLE_TELEMETRY=true` in the MCP client environment to disable all
+MCP server telemetry.
+
 ## Troubleshooting
 
-- **Connection issues**: Make sure the Blender addon server is running, and the MCP server is configured on Claude, DO NOT run the uvx command in the terminal. Sometimes, the first command won't go through but after that it starts working.
-- **Timeout errors**: Try simplifying your requests or breaking them into smaller steps
-- **Poly Haven integration**: Claude is sometimes erratic with its behaviour
-- **Have you tried turning it off and on again?**: If you're still having connection errors, try restarting both Claude and the Blender server
+| Symptom | Action |
+| --- | --- |
+| No checklist appears | Use a normal PowerShell console. Redirected streams, CI, SSH, and `-NonInteractive` intentionally use defaults. Use `-Gui` for WinForms. |
+| A client is unavailable | Install it, open a new PowerShell session, and rerun the installer. |
+| Codex says “existing different entry preserved” | Inspect `codex mcp get blender_mcp --json`. Use `-ForceCodexRegistration` only when replacement is intentional. |
+| The client cannot reach Blender | Start the BlenderMCP bridge and confirm both sides use the same host and port. |
+| The Extension is absent from one Blender | Rerun and select that version, or pass its executable with `-BlenderPath`. |
+| A Geometry Nodes patch is stale | Re-index or re-export the tree and rebuild the patch with the new revision. |
+| A linked node group cannot be edited | Linked-library trees are intentionally read-only in Geometry Nodes v1. |
 
+Dry-run command:
 
-## Technical Details
-
-### Communication Protocol
-
-The system uses a simple JSON-based protocol over TCP sockets:
-
-- **Commands** are sent as JSON objects with a `type` and optional `params`
-- **Responses** are JSON objects with a `status` and `result` or `message`
-
-## Limitations & Security Considerations
-
-- The `execute_blender_code` tool allows running arbitrary Python code in Blender, which can be powerful but potentially dangerous. Use with caution in production environments. ALWAYS save your work before using it.
-- Poly Haven requires downloading models, textures, and HDRI images. If you do not want to use it, please turn it off in the checkbox in Blender. 
-- Complex operations might need to be broken down into smaller steps
-
-
-#### Telemetry Control
-
-BlenderMCP collects anonymous usage data to help improve the tool. You can control telemetry in two ways:
-
-1. **In Blender**: Go to Edit > Preferences > Add-ons > Blender MCP and uncheck the telemetry consent checkbox
-   - With consent (checked): Collects anonymized prompts, code snippets, and screenshots
-   - Without consent (unchecked): Only collects minimal anonymous usage data (tool names, success/failure, duration)
-
-2. **Environment Variable**: Completely disable all telemetry by running:
-```bash
-DISABLE_TELEMETRY=true uvx blender-mcp
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1))) -DryRun
 ```
 
-Or add it to your MCP config:
-```json
-{
-    "mcpServers": {
-        "blender": {
-            "command": "uvx",
-            "args": ["blender-mcp"],
-            "env": {
-                "DISABLE_TELEMETRY": "true"
-            }
-        }
-    }
-}
+## Security and known limitations
+
+- `execute_blender_code` can run arbitrary Python inside Blender. Save
+  the `.blend` file first and review high-impact operations.
+- Geometry Nodes v1 covers Geometry Nodes only. Shader, Compositor, Texture, and
+  World node trees are outside this contract.
+- Linked-library node trees are exportable but read-only.
+- Shared node groups are rejected by default unless the caller explicitly
+  chooses a single-user copy or accepts shared mutation.
+- Claude Desktop always requires final MCPB approval.
+- Automatic installation is Windows-only.
+- Blender 5.1.2 and 5.2 LTS RC passed the local acceptance suite. Blender 4.2 is
+  the manifest minimum but was unavailable for a runtime acceptance test.
+- Optional asset providers may transmit requests or files to their services.
+
+## Development
+
+```powershell
+git clone https://github.com/newo-ether/blender-mcp.git
+cd blender-mcp
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --editable .
 ```
 
-All telemetry data is fully anonymized and used solely to improve BlenderMCP.
+Run the schema tests:
 
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+```
 
-## Contributing
+Build the Blender Extension:
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+```powershell
+.\.venv\Scripts\python.exe scripts\build_blender_extension.py `
+  --blender "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+```
 
-## Disclaimer
+Build all Release assets:
 
-This is a third-party integration and not made by Blender. Made by [Siddharth](https://x.com/sidahuj)
+```powershell
+.\scripts\build_release.ps1 `
+  -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+```
+
+| Path | Purpose |
+| --- | --- |
+| [addon.py](addon.py) | Blender add-on and Extension source. |
+| [src/blender_mcp/server.py](src/blender_mcp/server.py) | Python MCP server. |
+| [install.ps1](install.ps1) | Windows Release/bootstrap installer. |
+| [scripts/build_release.ps1](scripts/build_release.ps1) | Release asset builder. |
+| [docs/geometry-nodes.md](docs/geometry-nodes.md) | Geometry Nodes protocol guide. |
+| [schemas](schemas) | Public JSON contracts. |
+| [tests](tests) | Pure-Python and Blender acceptance scripts. |
+
+Contributions and issue reports are welcome.
+
+## Upstream and credits
+
+This repository is a fork of
+[ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp), created by
+[Siddharth Ahuja](https://x.com/sidahuj).
+
+Upstream resources:
+
+- [Project website](https://blendermcp.org/)
+- [Discord](https://discord.gg/z5apgR8TFU)
+- [Original tutorial](https://www.youtube.com/watch?v=lCyQ717DuzQ)
+
+## License
+
+[MIT](LICENSE)
