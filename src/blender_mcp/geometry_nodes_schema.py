@@ -19,6 +19,7 @@ from typing import Any, Mapping
 SNAPSHOT_SCHEMA = "blender-geometry-nodes/1"
 PATCH_SCHEMA = "blender-geometry-nodes-patch/1"
 PATCH_VALIDATION_SCHEMA = "blender-geometry-nodes-patch-validation/1"
+PATCH_APPLICATION_SCHEMA = "blender-geometry-nodes-patch-application/1"
 SUPPORTED_VIEWS = frozenset({"semantic", "layout", "all"})
 SUPPORTED_PATCH_OPERATIONS = frozenset({
     "add_node",
@@ -424,10 +425,14 @@ def canonical_json(value: Any) -> str:
 
 def snapshot_content_revision(snapshot: Mapping[str, Any]) -> str:
     """Hash exactly the graph content present in this snapshot."""
+    tree = snapshot.get("tree") or {}
     revision_input = {
         "schema": snapshot.get("schema"),
         "view": snapshot.get("view"),
-        "tree": snapshot.get("tree"),
+        "tree": {
+            key: tree.get(key)
+            for key in ("bl_idname", "interface", "nodes", "links")
+        },
     }
     digest = hashlib.sha256(canonical_json(revision_input).encode("utf-8")).hexdigest()
     return f"sha256:{digest}"

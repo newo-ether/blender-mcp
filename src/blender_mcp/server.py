@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 
 from .geometry_nodes_schema import (
     GeometryNodesSchemaError,
+    PATCH_APPLICATION_SCHEMA,
     PATCH_VALIDATION_SCHEMA,
     assert_valid_patch,
     read_patch_json,
@@ -498,6 +499,115 @@ def validate_geometry_node_patch(
                     "path": "",
                     "message": str(e),
                 }],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
+@mcp.tool()
+@telemetry_tool("apply_geometry_node_patch")
+def apply_geometry_node_patch(
+    ctx: Context,
+    patch: Dict[str, Any] = None,
+    patch_path: str = "",
+    keep_backup: bool = True,
+    user_prompt: str = "",
+) -> str:
+    """Apply a Geometry Nodes patch through a copy-on-write transaction.
+
+    Provide exactly one of patch or patch_path. The server validates structure,
+    Blender repeats runtime dry-run validation, then operations are applied to a
+    copied NodeTree. Live users are switched only after the copy re-exports
+    successfully. On commit failure, users, modifier inputs, and names are
+    restored. keep_backup preserves the original tree with a revisioned backup
+    name for manual rollback (recommended and enabled by default).
+
+    Parameters:
+    - patch: Inline blender-geometry-nodes-patch/1 object
+    - patch_path: Workspace-relative path to a patch JSON file
+    - keep_backup: Keep the pre-commit NodeTree as a fake-user backup
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        has_inline_patch = patch is not None
+        has_patch_path = bool(patch_path)
+        if has_inline_patch == has_patch_path:
+            return json.dumps(
+                {
+                    "schema": PATCH_APPLICATION_SCHEMA,
+                    "status": "rejected",
+                    "applied": False,
+                    "mutated": False,
+                    "diagnostics": [{
+                        "severity": "error",
+                        "code": "patch_source_count",
+                        "path": "",
+                        "message": "Provide exactly one of patch or patch_path",
+                    }],
+                    "plan": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        patch_document = read_patch_json(patch_path) if patch_path else patch
+        diagnostics = validate_patch_structure(patch_document)
+        if diagnostics:
+            return json.dumps(
+                {
+                    "schema": PATCH_APPLICATION_SCHEMA,
+                    "status": "rejected",
+                    "applied": False,
+                    "mutated": False,
+                    "diagnostics": diagnostics,
+                    "plan": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        patch_document = assert_valid_patch(patch_document)
+
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "apply_geometry_node_patch",
+            {"patch": patch_document, "keep_backup": keep_backup},
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except GeometryNodesSchemaError as e:
+        logger.error(f"Invalid Geometry Nodes patch file: {str(e)}")
+        return json.dumps(
+            {
+                "schema": PATCH_APPLICATION_SCHEMA,
+                "status": "rejected",
+                "applied": False,
+                "mutated": False,
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "patch_file_error",
+                    "path": "/patch_path",
+                    "message": str(e),
+                }],
+                "plan": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as e:
+        logger.error(f"Error applying Geometry Nodes patch: {str(e)}")
+        return json.dumps(
+            {
+                "schema": PATCH_APPLICATION_SCHEMA,
+                "status": "failed",
+                "applied": False,
+                "mutated": False,
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "application_transport_error",
+                    "path": "",
+                    "message": str(e),
+                }],
+                "plan": [],
             },
             ensure_ascii=False,
             indent=2,

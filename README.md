@@ -271,6 +271,7 @@ Once the config file has been set on Claude, and the addon is running on Blender
 - List and export Geometry Node trees as revisioned JSON (full graph or targeted subgraph)
 - Inspect node sockets and properties from the running Blender version
 - Validate revision-guarded Geometry Nodes patch files with a non-mutating dry-run
+- Apply validated patches with copy-on-write commit, explicit shared-user policy, and rollback backups
 - Create, delete and modify shapes
 - Apply or create materials for objects
 - Execute any Python code in Blender

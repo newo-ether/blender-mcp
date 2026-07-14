@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ahujasid/blender-mcp/schemas/geometry-nodes-patch-application-v1.json",
+  "title": "Blender MCP Geometry Nodes patch application result v1",
+  "type": "object",
+  "required": ["schema", "status", "applied", "mutated"],
+  "properties": {
+    "schema": {"const": "blender-geometry-nodes-patch-application/1"},
+    "status": {"enum": ["applied", "rejected", "rolled_back", "rollback_failed", "failed"]},
+    "applied": {"type": "boolean"},
+    "mutated": {"type": "boolean"},
+    "tree_name": {"type": ["string", "null"]},
+    "previous_tree_name": {"type": "string"},
+    "base_revision": {"type": ["string", "null"]},
+    "current_revision": {"type": "string"},
+    "new_revision": {"type": "string"},
+    "shared_tree_policy": {
+      "enum": ["reject", "single_user_copy", "mutate_shared"]
+    },
+    "users_reassigned": {"type": "array", "items": {"type": "object"}},
+    "backup": {
+      "type": ["object", "null"],
+      "properties": {
+        "kept": {"type": "boolean"},
+        "tree_name": {"type": ["string", "null"]}
+      },
+      "required": ["kept", "tree_name"],
+      "additionalProperties": false
+    },
+    "created_nodes": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "created_interface_sockets": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "modifier_input_adapters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["object", "modifier", "socket", "adapter"],
+        "properties": {
+          "object": {"type": "string"},
+          "modifier": {"type": "string"},
+          "socket": {"type": "string"},
+          "adapter": {
+            "enum": ["legacy_id_property", "geometry_nodes_modifier_interface"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "op", "status"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "op": {"type": "string"},
+          "status": {"const": "applied"},
+          "node_name": {"type": "string"},
+          "interface_identifier": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "semantic_diff": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "actual_diff": {
+      "type": "object",
+      "required": [
+        "nodes_added", "nodes_removed", "nodes_changed",
+        "links_added", "links_removed",
+        "interface_added", "interface_removed", "interface_changed", "summary"
+      ],
+      "properties": {
+        "nodes_added": {"type": "array", "items": {"type": "string"}},
+        "nodes_removed": {"type": "array", "items": {"type": "string"}},
+        "nodes_changed": {"type": "array", "items": {"type": "string"}},
+        "links_added": {"type": "array", "items": {"type": "object"}},
+        "links_removed": {"type": "array", "items": {"type": "object"}},
+        "interface_added": {"type": "array", "items": {"type": "string"}},
+        "interface_removed": {"type": "array", "items": {"type": "string"}},
+        "interface_changed": {"type": "array", "items": {"type": "string"}},
+        "summary": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      },
+      "additionalProperties": false
+    },
+    "warnings": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}},
+    "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}},
+    "plan": {"type": "array", "items": {"type": "object"}},
+    "verification": {
+      "type": "object",
+      "required": ["node_count", "link_count", "interface_item_count"],
+      "properties": {
+        "node_count": {"type": "integer", "minimum": 0},
+        "link_count": {"type": "integer", "minimum": 0},
+        "interface_item_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "diagnostic": {
+      "type": "object",
+      "required": ["severity", "code", "path", "message"],
+      "properties": {
+        "severity": {"enum": ["error", "warning"]},
+        "code": {"type": "string"},
+        "path": {"type": "string"},
+        "message": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "applied"}}},
+      "then": {
+        "required": [
+          "tree_name", "previous_tree_name", "base_revision", "new_revision",
+          "shared_tree_policy", "users_reassigned", "backup",
+          "created_nodes", "created_interface_sockets", "modifier_input_adapters",
+          "operations", "semantic_diff", "actual_diff", "warnings", "verification"
+        ]
+      },
+      "else": {"required": ["diagnostics", "plan"]}
+    }
+  ],
+  "additionalProperties": false
+}

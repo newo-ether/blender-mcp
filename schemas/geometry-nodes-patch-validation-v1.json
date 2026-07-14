@@ -12,6 +12,19 @@
     "tree_name": {"type": ["string", "null"]},
     "base_revision": {"type": ["string", "null"]},
     "current_revision": {"type": "string"},
+    "candidate_revision": {"type": "string"},
+    "candidate_stats": {
+      "type": "object",
+      "properties": {
+        "node_count": {"type": "integer", "minimum": 0},
+        "link_count": {"type": "integer", "minimum": 0},
+        "interface_item_count": {"type": "integer", "minimum": 0},
+        "total_node_count": {"type": "integer", "minimum": 0},
+        "total_link_count": {"type": "integer", "minimum": 0},
+        "json_bytes": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
     "shared_tree_policy": {
       "enum": ["reject", "single_user_copy", "mutate_shared"]
     },

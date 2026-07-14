@@ -280,6 +280,10 @@ def run_test():
     assert_true(all(item["status"] == "ready" for item in dry_run["plan"]), "Plan not ready")
     assert_true(len(dry_run["plan"]) == len(patch["operations"]), "Incomplete plan")
     assert_true(
+        dry_run.get("candidate_revision"),
+        "Dry-run did not execute and re-export a candidate working tree",
+    )
+    assert_true(
         len(bpy.data.node_groups) == groups_before_dry_run,
         "Dry-run leaked a temporary validation tree",
     )
@@ -354,6 +358,141 @@ def run_test():
     })
     assert_true(shared_copy["valid"], f"Explicit shared copy was rejected: {shared_copy['diagnostics']}")
 
+    bpy.data.objects.remove(second_object, do_unlink=True)
+    bpy.data.meshes.remove(second_mesh)
+    application = server.apply_geometry_node_patch(patch, keep_backup=True)
+    assert_true(application["status"] == "applied", f"Patch apply failed: {application}")
+    assert_true(application["applied"] and application["mutated"], "Apply result flags are wrong")
+    committed_tree = bpy.data.node_groups[application["tree_name"]]
+    committed_snapshot = server.export_geometry_node_tree(committed_tree.name, "all")
+    backup_tree = bpy.data.node_groups[application["backup"]["tree_name"]]
+    backup_snapshot = server.export_geometry_node_tree(backup_tree.name, "all")
+    modifier = bpy.data.objects[object_name].modifiers[modifier_name]
+    assert_true(modifier.node_group == committed_tree, "Modifier was not committed to working tree")
+    assert_true(backup_snapshot["revision"] == first["revision"], "Backup graph changed")
+    assert_true(backup_tree.use_fake_user, "Backup was not protected with a fake user")
+    assert_true(
+        committed_snapshot["revision"] == application["new_revision"],
+        "Applied revision does not match re-export",
+    )
+    assert_true(
+        PREFIX + "RenamedCube" in committed_tree.nodes,
+        "Rename operation was not committed",
+    )
+    assert_true(
+        cube_name in application["actual_diff"]["nodes_removed"]
+        and PREFIX + "RenamedCube" in application["actual_diff"]["nodes_added"],
+        "Actual diff did not report the committed rename",
+    )
+    assert_true("new_transform" not in application["created_nodes"], "Removed node reported as created")
+    assert_true(
+        "new_density" not in application["created_interface_sockets"],
+        "Removed interface socket reported as created",
+    )
+    assert_true(
+        abs(namespace["_gn_modifier_input_value"](modifier, scale_identifier) - 2.0) < 1e-6,
+        "Modifier input was not committed",
+    )
+    expected_adapter = (
+        "geometry_nodes_modifier_interface"
+        if bpy.app.version >= (5, 2, 0)
+        else "legacy_id_property"
+    )
+    assert_true(
+        application["modifier_input_adapters"][0]["adapter"] == expected_adapter,
+        "Wrong modifier input runtime adapter",
+    )
+
+    committed_before_stale = server.export_geometry_node_tree(committed_tree.name, "all")
+    stale_application = server.apply_geometry_node_patch(patch, keep_backup=True)
+    assert_true(stale_application["status"] == "rejected", "Stale application was not rejected")
+    assert_true(
+        server.export_geometry_node_tree(committed_tree.name, "all") == committed_before_stale,
+        "Rejected stale application mutated the committed tree",
+    )
+
+    copy_mesh = bpy.data.meshes.new(PREFIX + "CopyMesh")
+    copy_object = bpy.data.objects.new(PREFIX + "CopyObject", copy_mesh)
+    bpy.context.scene.collection.objects.link(copy_object)
+    copy_modifier = copy_object.modifiers.new(PREFIX + "CopyModifier", "NODES")
+    copy_modifier.node_group = committed_tree
+    copy_patch = {
+        "schema": "blender-geometry-nodes-patch/1",
+        "tree_name": committed_tree.name,
+        "base_revision": committed_snapshot["revision"],
+        "shared_tree_policy": "single_user_copy",
+        "target_user": {
+            "kind": "MODIFIER",
+            "object": copy_object.name,
+            "modifier": copy_modifier.name,
+        },
+        "operations": [
+            {"op": "set_node_layout", "node": join_name, "width": 210.0},
+        ],
+    }
+    copy_application = server.apply_geometry_node_patch(copy_patch, keep_backup=True)
+    assert_true(copy_application["status"] == "applied", f"Single-user copy failed: {copy_application}")
+    copied_tree = bpy.data.node_groups[copy_application["tree_name"]]
+    assert_true(modifier.node_group == committed_tree, "Non-target user moved during single-user copy")
+    assert_true(copy_modifier.node_group == copied_tree, "Target user did not move to its copy")
+    assert_true(copy_application["backup"] is None, "Single-user copy created a redundant backup")
+
+    rollback_patch = {
+        "schema": "blender-geometry-nodes-patch/1",
+        "tree_name": committed_tree.name,
+        "base_revision": committed_snapshot["revision"],
+        "operations": [
+            {"op": "set_node_layout", "node": join_name, "width": 220.0},
+        ],
+    }
+    rollback_before = server.export_geometry_node_tree(committed_tree.name, "all")
+    groups_before_rollback = len(bpy.data.node_groups)
+
+    def fail_commit():
+        raise RuntimeError("injected commit failure")
+
+    rollback_result = namespace["_gn_apply_patch_transaction"](
+        committed_tree,
+        rollback_patch,
+        True,
+        fail_commit,
+    )
+    assert_true(
+        rollback_result["status"] == "rolled_back",
+        f"Injected failure did not roll back: {rollback_result}",
+    )
+    assert_true(modifier.node_group == committed_tree, "Rollback did not restore the user")
+    assert_true(
+        server.export_geometry_node_tree(committed_tree.name, "all") == rollback_before,
+        "Rollback changed the original tree",
+    )
+    assert_true(len(bpy.data.node_groups) == groups_before_rollback, "Rollback leaked working data")
+
+    cleanup_tree = bpy.data.node_groups.new(PREFIX + "NoBackup", "GeometryNodeTree")
+    cleanup_node = cleanup_tree.nodes.new("GeometryNodeMeshCube")
+    cleanup_revision = server.export_geometry_node_tree(cleanup_tree.name, "all")["revision"]
+    cleanup_result = server.apply_geometry_node_patch(
+        {
+            "schema": "blender-geometry-nodes-patch/1",
+            "tree_name": cleanup_tree.name,
+            "base_revision": cleanup_revision,
+            "operations": [
+                {"op": "set_node_layout", "node": cleanup_node.name, "width": 175.0},
+            ],
+        },
+        keep_backup=False,
+    )
+    assert_true(cleanup_result["status"] == "applied", "No-backup application failed")
+    assert_true(cleanup_result["backup"] == {"kept": False, "tree_name": None}, "Backup cleanup failed")
+    assert_true(
+        bpy.data.node_groups.get(cleanup_result["tree_name"]) is not None,
+        "No-backup commit removed the new tree",
+    )
+    assert_true(
+        bpy.data.node_groups[cleanup_result["tree_name"]].use_fake_user,
+        "Userless committed tree will not persist when the blend file is saved",
+    )
+
     encoded = json.dumps(first, ensure_ascii=False, sort_keys=True)
     assert_true(first["stats"]["json_bytes"] == len(encoded.encode("utf-8")), "json_bytes mismatch")
     json.loads(encoded)
@@ -369,6 +508,12 @@ def run_test():
             json.dumps(dry_run, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
             encoding="utf-8",
         )
+    application_output_path = os.environ.get("BLENDER_MCP_TEST_APPLICATION_OUTPUT")
+    if application_output_path:
+        Path(application_output_path).write_text(
+            json.dumps(application, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
     return {
         "blender_version": list(bpy.app.version[:3]),
@@ -379,6 +524,8 @@ def run_test():
         "json_bytes": first["stats"]["json_bytes"],
         "tree_count": listing["tree_count"],
         "dry_run_operations": len(dry_run["plan"]),
+        "application_status": application["status"],
+        "rollback_status": rollback_result["status"],
     }
 
 

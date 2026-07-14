@@ -18,7 +18,7 @@
     },
     "view": {"enum": ["semantic", "layout", "all"]},
     "revision": {
-      "description": "Full all-view source revision, independent of export view and subgraph scope",
+      "description": "Full all-view graph revision, independent of export view, subgraph scope, data-block name, users, library metadata, and editability",
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
     },

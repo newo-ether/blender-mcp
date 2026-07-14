@@ -355,10 +355,14 @@ def _gn_canonical_json(value):
 
 
 def _gn_snapshot_revision(snapshot):
+    tree = snapshot["tree"]
     revision_input = {
         "schema": snapshot["schema"],
         "view": snapshot["view"],
-        "tree": snapshot["tree"],
+        "tree": {
+            key: tree[key]
+            for key in ("bl_idname", "interface", "nodes", "links")
+        },
     }
     digest = hashlib.sha256(_gn_canonical_json(revision_input).encode("utf-8")).hexdigest()
     return f"sha256:{digest}"
@@ -488,6 +492,45 @@ def _gn_geometry_trees():
         (tree for tree in bpy.data.node_groups if tree.bl_idname == "GeometryNodeTree"),
         key=lambda item: item.name,
     )
+
+
+def _gn_actual_snapshot_diff(before, after):
+    before_nodes = before["tree"]["nodes"]
+    after_nodes = after["tree"]["nodes"]
+    before_node_names = set(before_nodes)
+    after_node_names = set(after_nodes)
+    shared_node_names = before_node_names & after_node_names
+
+    before_links = {_gn_canonical_json(link): link for link in before["tree"]["links"]}
+    after_links = {_gn_canonical_json(link): link for link in after["tree"]["links"]}
+    before_interface = {
+        item["identifier"]: item for item in before["tree"]["interface"]
+    }
+    after_interface = {
+        item["identifier"]: item for item in after["tree"]["interface"]
+    }
+    shared_interface = set(before_interface) & set(after_interface)
+
+    result = {
+        "nodes_added": sorted(after_node_names - before_node_names),
+        "nodes_removed": sorted(before_node_names - after_node_names),
+        "nodes_changed": sorted(
+            name for name in shared_node_names
+            if before_nodes[name] != after_nodes[name]
+        ),
+        "links_added": [after_links[key] for key in sorted(set(after_links) - set(before_links))],
+        "links_removed": [before_links[key] for key in sorted(set(before_links) - set(after_links))],
+        "interface_added": sorted(set(after_interface) - set(before_interface)),
+        "interface_removed": sorted(set(before_interface) - set(after_interface)),
+        "interface_changed": sorted(
+            identifier for identifier in shared_interface
+            if before_interface[identifier] != after_interface[identifier]
+        ),
+    }
+    result["summary"] = {
+        key: len(value) for key, value in result.items()
+    }
+    return result
 
 
 def _gn_property_schema(owner, prop):
@@ -1123,6 +1166,17 @@ def _gn_validate_patch_runtime(tree, patch):
                         interface["item"], "default_value", operation["value"],
                         f"{path}/value", diagnostics, node_refs,
                     )
+                if policy == "single_user_copy":
+                    target_user = patch.get("target_user", {})
+                    if (
+                        target_user.get("kind") != "MODIFIER"
+                        or target_user.get("object") != operation["object"]
+                        or target_user.get("modifier") != operation["modifier"]
+                    ):
+                        diagnostics.append(_gn_patch_diagnostic(
+                            "error", "modifier_input_outside_copy_target", path,
+                            "single_user_copy may only change inputs on its target modifier",
+                        ))
                 diff["modifier_inputs_changed"] += 1
                 summary = f"Set modifier input {operation['object']}/{operation['modifier']}"
 
@@ -1136,7 +1190,31 @@ def _gn_validate_patch_runtime(tree, patch):
     finally:
         bpy.data.node_groups.remove(temp_tree)
 
-    return {
+    candidate_revision = None
+    candidate_stats = None
+    if not any(item["severity"] == "error" for item in diagnostics):
+        execution_probe = tree.copy()
+        execution_probe.name = f".{tree.name}.MCP Dry Run"
+        try:
+            _gn_apply_operations_to_working(execution_probe, patch)
+            invalid_links = [link for link in execution_probe.links if not link.is_valid]
+            if invalid_links:
+                raise RuntimeError(
+                    f"Projected tree contains {len(invalid_links)} invalid links"
+                )
+            projected_snapshot = _gn_export_tree(execution_probe, "all")
+            candidate_revision = projected_snapshot["revision"]
+            candidate_stats = projected_snapshot["stats"]
+        except Exception as exc:
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "dry_run_execution_rejected", "",
+                f"{type(exc).__name__}: {exc}",
+            ))
+        finally:
+            if execution_probe.users == 0:
+                bpy.data.node_groups.remove(execution_probe)
+
+    result = {
         "schema": GEOMETRY_NODES_PATCH_VALIDATION_SCHEMA,
         "valid": not any(item["severity"] == "error" for item in diagnostics),
         "stage": "runtime",
@@ -1150,6 +1228,429 @@ def _gn_validate_patch_runtime(tree, patch):
         "plan": plan,
         "semantic_diff": diff,
     }
+    if candidate_revision is not None:
+        result["candidate_revision"] = candidate_revision
+        result["candidate_stats"] = candidate_stats
+    return result
+
+
+def _gn_modifier_input_value(modifier, identifier):
+    properties = getattr(modifier, "properties", None)
+    if properties is not None:
+        try:
+            socket_value = getattr(properties.inputs, identifier)
+            if hasattr(socket_value, "value"):
+                return socket_value.value
+        except (AttributeError, KeyError, TypeError, RuntimeError):
+            pass
+    try:
+        if identifier in modifier.keys():
+            return modifier[identifier]
+    except (AttributeError, KeyError, TypeError, RuntimeError):
+        pass
+    raise KeyError(f"Modifier input has no restorable value: {identifier}")
+
+
+def _gn_set_modifier_input_value(modifier, identifier, value):
+    properties = getattr(modifier, "properties", None)
+    if properties is not None:
+        try:
+            socket_value = getattr(properties.inputs, identifier)
+            socket_value.value = value
+            return "geometry_nodes_modifier_interface"
+        except (AttributeError, KeyError, TypeError, RuntimeError):
+            pass
+    modifier[identifier] = value
+    return "legacy_id_property"
+
+
+def _gn_modifier_state(modifier, tree):
+    state = {}
+    for item in tree.interface.items_tree:
+        if item.item_type != "SOCKET" or item.in_out != "INPUT":
+            continue
+        identifier = getattr(item, "identifier", "") or item.name
+        try:
+            state[identifier] = _gn_modifier_input_value(modifier, identifier)
+        except (AttributeError, KeyError, TypeError, RuntimeError):
+            continue
+    return state
+
+
+def _gn_restore_modifier_state(modifier, state):
+    errors = []
+    for identifier, value in state.items():
+        try:
+            _gn_set_modifier_input_value(modifier, identifier, value)
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+            errors.append(f"{identifier}: {type(exc).__name__}: {exc}")
+    return errors
+
+
+def _gn_user_handle(user):
+    if user["kind"] == "MODIFIER":
+        obj = bpy.data.objects.get(user["object"])
+        modifier = obj.modifiers.get(user["modifier"]) if obj else None
+        return modifier
+    owner_tree = bpy.data.node_groups.get(user["tree"])
+    return owner_tree.nodes.get(user["node"]) if owner_tree else None
+
+
+def _gn_assign_user(handle, kind, tree):
+    if kind == "MODIFIER":
+        handle.node_group = tree
+    else:
+        handle.node_tree = tree
+
+
+def _gn_apply_operations_to_working(working, patch):
+    node_refs = {
+        node.name: {"node": node, "existing": True, "removed": False}
+        for node in working.nodes
+    }
+    interface_refs = {
+        (getattr(item, "identifier", "") or item.name): {
+            "item": item,
+            "actual_identifier": getattr(item, "identifier", "") or item.name,
+            "removed": False,
+        }
+        for item in working.interface.items_tree
+    }
+    created_nodes = {}
+    created_interface = {}
+    deferred_modifier_inputs = []
+    operation_results = []
+
+    for index, operation in enumerate(patch["operations"]):
+        op = operation["op"]
+        result = {"index": index, "op": op, "status": "applied"}
+
+        if op == "add_node":
+            node = working.nodes.new(operation["node_type"])
+            reference = operation["id"]
+            node_refs[reference] = {"node": node, "existing": False, "removed": False}
+            if "name" in operation:
+                node.name = operation["name"]
+            for property_name, value in operation.get("properties", {}).items():
+                setattr(node, property_name, _gn_decode_patch_value(value, node_refs))
+            layout = operation.get("layout", {})
+            for field in ("location", "width", "height"):
+                if field in layout:
+                    setattr(node, field, layout[field])
+            if layout.get("parent") is not None:
+                node.parent = node_refs[layout["parent"]]["node"]
+            created_nodes[reference] = node.name
+            result["node_name"] = node.name
+
+        elif op == "remove_node":
+            item = node_refs[operation["node"]]
+            working.nodes.remove(item["node"])
+            item["removed"] = True
+            if not item["existing"]:
+                created_nodes.pop(operation["node"], None)
+
+        elif op == "rename_node":
+            node = node_refs[operation["node"]]["node"]
+            node.name = operation["name"]
+            if operation["node"] in created_nodes:
+                created_nodes[operation["node"]] = node.name
+            result["node_name"] = node.name
+
+        elif op == "set_node_property":
+            node = node_refs[operation["node"]]["node"]
+            setattr(
+                node,
+                operation["property"],
+                _gn_decode_patch_value(operation["value"], node_refs),
+            )
+
+        elif op == "set_socket_default":
+            node = node_refs[operation["node"]]["node"]
+            socket = _gn_resolve_patch_socket(
+                node, operation["socket"], "input", "", [],
+            )
+            if socket is None:
+                raise RuntimeError(f"Validated input socket disappeared: {operation['socket']}")
+            socket.default_value = _gn_decode_patch_value(operation["value"], node_refs)
+
+        elif op in {"add_link", "remove_link"}:
+            from_node = node_refs[operation["from_node"]]["node"]
+            to_node = node_refs[operation["to_node"]]["node"]
+            from_socket = _gn_resolve_patch_socket(
+                from_node, operation["from_socket"], "output", "", [],
+            )
+            to_socket = _gn_resolve_patch_socket(
+                to_node, operation["to_socket"], "input", "", [],
+            )
+            if from_socket is None or to_socket is None:
+                raise RuntimeError("Validated link socket disappeared")
+            if op == "add_link":
+                working.links.new(from_socket, to_socket, verify_limits=True)
+            else:
+                match = next(
+                    (
+                        link for link in working.links
+                        if link.from_socket == from_socket and link.to_socket == to_socket
+                    ),
+                    None,
+                )
+                if match is None:
+                    raise RuntimeError("Validated link disappeared before removal")
+                working.links.remove(match)
+
+        elif op == "set_node_layout":
+            node = node_refs[operation["node"]]["node"]
+            for field in ("location", "width", "height"):
+                if field in operation:
+                    setattr(node, field, operation[field])
+            if "parent" in operation:
+                node.parent = (
+                    node_refs[operation["parent"]]["node"]
+                    if operation["parent"] is not None else None
+                )
+
+        elif op == "add_interface_socket":
+            parent_ref = operation.get("parent")
+            parent = interface_refs[parent_ref]["item"] if parent_ref else None
+            item = working.interface.new_socket(
+                name=operation["name"],
+                in_out=operation["in_out"],
+                socket_type=operation["socket_type"],
+                parent=parent,
+            )
+            if "default" in operation and hasattr(item, "default_value"):
+                item.default_value = _gn_decode_patch_value(operation["default"], node_refs)
+            reference = operation["id"]
+            actual_identifier = getattr(item, "identifier", "") or item.name
+            interface_refs[reference] = {
+                "item": item,
+                "actual_identifier": actual_identifier,
+                "removed": False,
+            }
+            created_interface[reference] = actual_identifier
+            result["interface_identifier"] = actual_identifier
+
+        elif op == "remove_interface_socket":
+            item = interface_refs[operation["identifier"]]
+            working.interface.remove(item["item"])
+            item["removed"] = True
+            created_interface.pop(operation["identifier"], None)
+
+        elif op == "set_modifier_input":
+            deferred_modifier_inputs.append({
+                **operation,
+                "actual_identifier": interface_refs[operation["socket"]]["actual_identifier"],
+            })
+
+        operation_results.append(result)
+
+    return {
+        "node_refs": node_refs,
+        "interface_refs": interface_refs,
+        "created_nodes": created_nodes,
+        "created_interface": created_interface,
+        "deferred_modifier_inputs": deferred_modifier_inputs,
+        "operation_results": operation_results,
+    }
+
+
+def _gn_apply_patch_transaction(tree, patch, keep_backup=True, _commit_guard=None):
+    validation = _gn_validate_patch_runtime(tree, patch)
+    if not validation["valid"]:
+        return {
+            "schema": "blender-geometry-nodes-patch-application/1",
+            "status": "rejected",
+            "applied": False,
+            "mutated": False,
+            "tree_name": tree.name,
+            "base_revision": patch.get("base_revision"),
+            "current_revision": validation["current_revision"],
+            "diagnostics": validation["diagnostics"],
+            "plan": validation["plan"],
+        }
+
+    original_snapshot = _gn_export_tree(tree, "all")
+    original_name = tree.name
+    original_fake_user = tree.use_fake_user
+    working = tree.copy()
+    working.name = f".{original_name}.MCP Working"
+    candidate_snapshot = None
+    applied = None
+    selected_users = []
+    modifier_states = {}
+    renamed_original = False
+
+    try:
+        applied = _gn_apply_operations_to_working(working, patch)
+        invalid_links = [link for link in working.links if not link.is_valid]
+        if invalid_links:
+            raise RuntimeError(f"Working tree contains {len(invalid_links)} invalid links")
+        candidate_snapshot = _gn_export_tree(working, "all")
+
+        all_users = _gn_tree_users(tree)
+        policy = patch.get("shared_tree_policy", "reject")
+        if policy == "single_user_copy":
+            target = patch["target_user"]
+            selected_records = [
+                user for user in all_users
+                if all(user.get(key) == value for key, value in target.items())
+            ]
+        else:
+            selected_records = all_users
+
+        for record in selected_records:
+            handle = _gn_user_handle(record)
+            if handle is None:
+                raise RuntimeError(f"User disappeared before commit: {record['name']}")
+            selected_users.append((record, handle))
+            if record["kind"] == "MODIFIER":
+                modifier_states[handle] = _gn_modifier_state(handle, tree)
+
+        for operation in applied["deferred_modifier_inputs"]:
+            obj = bpy.data.objects[operation["object"]]
+            modifier = obj.modifiers[operation["modifier"]]
+            if modifier not in modifier_states:
+                modifier_states[modifier] = _gn_modifier_state(modifier, tree)
+
+        if policy == "single_user_copy":
+            working.name = f"{original_name}.MCP Copy"
+        else:
+            backup_suffix = validation["current_revision"].split(":", 1)[1][:8]
+            tree.name = f"{original_name}.MCP Backup {backup_suffix}"
+            renamed_original = True
+            working.name = original_name
+
+        for record, handle in selected_users:
+            _gn_assign_user(handle, record["kind"], working)
+
+        for operation in applied["deferred_modifier_inputs"]:
+            obj = bpy.data.objects[operation["object"]]
+            modifier = obj.modifiers[operation["modifier"]]
+            if modifier.node_group != working:
+                raise RuntimeError(
+                    f"Modifier input target was not reassigned to working tree: "
+                    f"{operation['object']}/{operation['modifier']}"
+                )
+            decoded = _gn_decode_patch_value(operation["value"], applied["node_refs"])
+            operation["adapter"] = _gn_set_modifier_input_value(
+                modifier, operation["actual_identifier"], decoded,
+            )
+
+        if _commit_guard is not None:
+            _commit_guard()
+
+        committed_snapshot = _gn_export_tree(working, "all")
+        if committed_snapshot["revision"] != candidate_snapshot["revision"]:
+            raise RuntimeError("Committed tree revision differs from verified working revision")
+        if any(
+            (_gn_user_handle(record) != handle)
+            for record, handle in selected_users
+        ):
+            raise RuntimeError("A committed user could not be re-resolved")
+        for record, handle in selected_users:
+            assigned_tree = handle.node_group if record["kind"] == "MODIFIER" else handle.node_tree
+            if assigned_tree != working:
+                raise RuntimeError(f"User was not committed to working tree: {record['name']}")
+
+        backup = None
+        if not selected_users:
+            working.use_fake_user = True
+        if policy != "single_user_copy":
+            if keep_backup:
+                tree.use_fake_user = True
+                backup = {"kept": True, "tree_name": tree.name}
+            else:
+                backup = {"kept": False, "tree_name": None}
+                bpy.data.node_groups.remove(tree)
+
+        warnings = [
+            item for item in validation["diagnostics"] if item["severity"] == "warning"
+        ]
+        return {
+            "schema": "blender-geometry-nodes-patch-application/1",
+            "status": "applied",
+            "applied": True,
+            "mutated": True,
+            "tree_name": working.name,
+            "previous_tree_name": original_name,
+            "base_revision": validation["current_revision"],
+            "new_revision": committed_snapshot["revision"],
+            "shared_tree_policy": policy,
+            "users_reassigned": [record for record, _handle in selected_users],
+            "backup": backup,
+            "created_nodes": applied["created_nodes"],
+            "created_interface_sockets": applied["created_interface"],
+            "modifier_input_adapters": [
+                {
+                    "object": item["object"],
+                    "modifier": item["modifier"],
+                    "socket": item["actual_identifier"],
+                    "adapter": item.get("adapter"),
+                }
+                for item in applied["deferred_modifier_inputs"]
+            ],
+            "operations": applied["operation_results"],
+            "semantic_diff": validation["semantic_diff"],
+            "actual_diff": _gn_actual_snapshot_diff(original_snapshot, committed_snapshot),
+            "warnings": warnings,
+            "verification": {
+                "node_count": committed_snapshot["stats"]["node_count"],
+                "link_count": committed_snapshot["stats"]["link_count"],
+                "interface_item_count": committed_snapshot["stats"]["interface_item_count"],
+            },
+        }
+    except Exception as exc:
+        rollback_errors = []
+        for record, handle in selected_users:
+            try:
+                _gn_assign_user(handle, record["kind"], tree)
+            except (AttributeError, RuntimeError) as rollback_exc:
+                rollback_errors.append(
+                    f"restore user {record['name']}: {type(rollback_exc).__name__}: {rollback_exc}"
+                )
+        if renamed_original:
+            try:
+                working.name = f".{original_name}.MCP Rollback"
+                tree.name = original_name
+            except (AttributeError, RuntimeError) as rollback_exc:
+                rollback_errors.append(
+                    f"restore tree names: {type(rollback_exc).__name__}: {rollback_exc}"
+                )
+        tree.use_fake_user = original_fake_user
+        for modifier, state in modifier_states.items():
+            rollback_errors.extend(
+                f"restore modifier {modifier.name}: {message}"
+                for message in _gn_restore_modifier_state(modifier, state)
+            )
+        for record, handle in selected_users:
+            assigned_tree = handle.node_group if record["kind"] == "MODIFIER" else handle.node_tree
+            if assigned_tree != tree:
+                rollback_errors.append(f"user still points to working tree: {record['name']}")
+        if working.name in bpy.data.node_groups:
+            if working.users == 0:
+                bpy.data.node_groups.remove(working)
+            else:
+                rollback_errors.append(
+                    f"working tree still has {working.users} users and could not be removed"
+                )
+        rollback_diagnostics = [_gn_patch_diagnostic(
+            "error", "transaction_rolled_back", "", f"{type(exc).__name__}: {exc}",
+        )]
+        rollback_diagnostics.extend(
+            _gn_patch_diagnostic("error", "rollback_incomplete", "", message)
+            for message in rollback_errors
+        )
+        return {
+            "schema": "blender-geometry-nodes-patch-application/1",
+            "status": "rollback_failed" if rollback_errors else "rolled_back",
+            "applied": False,
+            "mutated": bool(rollback_errors),
+            "tree_name": original_name,
+            "base_revision": patch.get("base_revision"),
+            "current_revision": _gn_export_tree(tree, "all")["revision"],
+            "diagnostics": rollback_diagnostics,
+            "plan": validation["plan"],
+        }
 
 class BlenderMCPServer:
     def __init__(self, host='localhost', port=9876):
@@ -1388,6 +1889,7 @@ class BlenderMCPServer:
             "export_geometry_node_tree": self.export_geometry_node_tree,
             "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
             "validate_geometry_node_patch": self.validate_geometry_node_patch,
+            "apply_geometry_node_patch": self.apply_geometry_node_patch,
             "get_viewport_screenshot": self.get_viewport_screenshot,
             "execute_code": self.execute_code,
             "get_telemetry_consent": self.get_telemetry_consent,
@@ -1576,6 +2078,29 @@ class BlenderMCPServer:
                 "semantic_diff": {},
             }
         return _gn_validate_patch_runtime(tree, patch)
+
+    def apply_geometry_node_patch(self, patch, keep_backup=True):
+        """Apply a validated patch through a copy-on-write transaction."""
+        if not isinstance(patch, dict):
+            raise ValueError("Geometry Nodes patch must be a JSON object")
+        if patch.get("schema") != GEOMETRY_NODES_PATCH_SCHEMA:
+            raise ValueError(f"Expected patch schema {GEOMETRY_NODES_PATCH_SCHEMA!r}")
+        tree_name = patch.get("tree_name")
+        tree = bpy.data.node_groups.get(tree_name) if isinstance(tree_name, str) else None
+        if tree is None or tree.bl_idname != "GeometryNodeTree":
+            return {
+                "schema": "blender-geometry-nodes-patch-application/1",
+                "status": "rejected",
+                "applied": False,
+                "mutated": False,
+                "tree_name": tree_name,
+                "diagnostics": [_gn_patch_diagnostic(
+                    "error", "tree_not_found", "/tree_name",
+                    f"Geometry Node tree not found: {tree_name}",
+                )],
+                "plan": [],
+            }
+        return _gn_apply_patch_transaction(tree, patch, bool(keep_backup))
 
     @staticmethod
     def _get_aabb(obj):
