@@ -13,7 +13,7 @@ import traceback
 import os
 import shutil
 import zipfile
-from bpy.props import IntProperty, BoolProperty
+from bpy.props import IntProperty, BoolProperty, EnumProperty, StringProperty, FloatProperty
 import io
 from datetime import datetime
 import hashlib, hmac, base64
@@ -42,6 +42,64 @@ def get_blendermcp_addon_preferences(context=None):
         context = bpy.context
     addon = context.preferences.addons.get(__name__)
     return addon.preferences if addon else None
+
+# ── Persistent preference sync ──
+# Scene properties mirror AddonPreferences. On change, they sync to prefs.
+# On Blender start / file load, prefs are copied back to scene.
+
+_PREF_PROPERTY_NAMES = [
+    'port', 'use_polyhaven',
+    'use_hyper3d', 'hyper3d_mode', 'hyper3d_api_key',
+    'use_sketchfab', 'sketchfab_api_key',
+    'use_hunyuan3d', 'hunyuan3d_mode',
+    'hunyuan3d_secret_id', 'hunyuan3d_secret_key',
+    'hunyuan3d_api_url', 'hunyuan3d_octree_resolution',
+    'hunyuan3d_num_inference_steps', 'hunyuan3d_guidance_scale',
+    'hunyuan3d_texture',
+]
+
+def _make_scene_update(prop_name):
+    """Factory: returns an update callback that syncs the scene value to AddonPreferences."""
+    def update(self, context):
+        addon_prefs = context.preferences.addons.get(__name__)
+        if addon_prefs and hasattr(addon_prefs.preferences, prop_name):
+            setattr(addon_prefs.preferences, prop_name, getattr(self, f'blendermcp_{prop_name}'))
+    return update
+
+def sync_prefs_to_scene():
+    """Copy all persistent AddonPreferences values to the current scene."""
+    addon_prefs = bpy.context.preferences.addons.get(__name__)
+    if not addon_prefs:
+        return
+    prefs = addon_prefs.preferences
+    scene = bpy.context.scene
+    for name in _PREF_PROPERTY_NAMES:
+        pref_val = getattr(prefs, name, None)
+        scene_attr = f'blendermcp_{name}'
+        if hasattr(scene, scene_attr):
+            try:
+                setattr(scene, scene_attr, pref_val)
+            except (AttributeError, TypeError):
+                pass
+
+def _auto_connect_if_enabled():
+    """Start MCP server if auto_connect is enabled and not already running."""
+    addon_prefs = bpy.context.preferences.addons.get(__name__)
+    if not addon_prefs:
+        return
+    if not addon_prefs.preferences.auto_connect:
+        return
+    if hasattr(bpy.types, "blendermcp_server") and bpy.types.blendermcp_server:
+        return  # already running
+    bpy.types.blendermcp_server = BlenderMCPServer(port=addon_prefs.preferences.port)
+    bpy.types.blendermcp_server.start()
+    bpy.context.scene.blendermcp_server_running = True
+
+@bpy.app.handlers.persistent
+def _load_post_handler(_dummy):
+    """On .blend file load: sync prefs → scene, auto-connect if enabled."""
+    sync_prefs_to_scene()
+    _auto_connect_if_enabled()
 
 class BlenderMCPServer:
     def __init__(self, host='localhost', port=9876):
@@ -2212,7 +2270,8 @@ class BlenderMCPServer:
     def create_hunyuan_job_local_site(
         self,
         text_prompt: str = None,
-        image: str = None):
+        image: str = None,
+        paint_model: str = "2.0"):
         try:
             base_url = self._get_hunyuan3d_api_url().rstrip('/')
             octree_resolution = bpy.context.scene.blendermcp_hunyuan3d_octree_resolution
@@ -2222,67 +2281,59 @@ class BlenderMCPServer:
 
             if not base_url:
                 return {"error": "API URL is not given"}
-            # Parameter verification
             if not text_prompt and not image:
                 return {"error": "Prompt or Image is required"}
 
-            # Constructing request parameters
             data = {
                 "octree_resolution": octree_resolution,
                 "num_inference_steps": num_inference_steps,
                 "guidance_scale": guidance_scale,
                 "texture": texture,
+                "paint_model": paint_model,
             }
 
-            # Handling text prompts
             if text_prompt:
                 data["text"] = text_prompt
 
-            # Handling image
             if image:
                 if re.match(r'^https?://', image, re.IGNORECASE) is not None:
                     try:
                         resImg = requests.get(image)
                         resImg.raise_for_status()
-                        image_base64 = base64.b64encode(resImg.content).decode("ascii")
-                        data["image"] = image_base64
+                        data["image"] = base64.b64encode(resImg.content).decode("ascii")
                     except Exception as e:
-                        return {"error": f"Failed to download or encode image: {str(e)}"} 
+                        return {"error": f"Failed to download or encode image: {str(e)}"}
                 else:
                     try:
-                        # Convert to Base64 format
                         with open(image, "rb") as f:
-                            image_base64 = base64.b64encode(f.read()).decode("ascii")
-                        data["image"] = image_base64
+                            data["image"] = base64.b64encode(f.read()).decode("ascii")
                     except Exception as e:
                         return {"error": f"Image encoding failed: {str(e)}"}
 
             response = requests.post(
                 f"{base_url}/generate",
-                json = data,
+                json=data,
             )
 
             if response.status_code != 200:
-                return {
-                    "error": f"Generation failed: {response.text}"
-                }
-        
-            # Decode base64 and save to temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".glb") as temp_file:
-                temp_file.write(response.content)
-                temp_file_name = temp_file.name
+                return {"error": f"Generation failed: {response.text}"}
 
-            # Import the GLB file in the main thread
+            # API returns binary GLB — save and import
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".glb") as tmp:
+                tmp.write(response.content)
+                glb_path = tmp.name
+
             def import_handler():
-                bpy.ops.import_scene.gltf(filepath=temp_file_name)
-                os.unlink(temp_file.name)
+                bpy.ops.import_scene.gltf(filepath=glb_path)
+                if os.path.exists(glb_path):
+                    os.unlink(glb_path)
                 return None
-            
+
             bpy.app.timers.register(import_handler)
 
             return {
                 "status": "DONE",
-                "message": "Generation and Import glb succeeded"
+                "message": f"Generated with paint_model={paint_model} and imported"
             }
         except Exception as e:
             print(f"An error occurred: {e}")
@@ -2413,68 +2464,87 @@ class BlenderMCPServer:
                 print(f"Failed to clean up temporary directory {temp_dir}: {e}")
     #endregion
 
-# Blender Addon Preferences
+# ── Blender Addon Preferences (persistent across sessions) ──
 class BLENDERMCP_AddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
-    
+
+    # ── General ──
     telemetry_consent: BoolProperty(
         name="Allow Telemetry",
-        description="Allow collection of prompts, code snippets, and screenshots to help improve Blender MCP",
+        description="Allow collection of prompts, code, and screenshots",
         default=True
     )
-    hyper3d_api_key: bpy.props.StringProperty(
-        name="Hyper3D API Key",
-        subtype="PASSWORD",
-        description="Persistent Hyper3D API Key",
-        default=""
+    auto_connect: BoolProperty(
+        name="Auto-connect on startup",
+        description="Automatically start MCP server when Blender opens or loads a file",
+        default=False
     )
-    sketchfab_api_key: bpy.props.StringProperty(
-        name="Sketchfab API Key",
-        subtype="PASSWORD",
-        description="Persistent Sketchfab API Key",
-        default=""
+    port: IntProperty(
+        name="Default Port",
+        description="Port for the BlenderMCP server",
+        default=9876, min=1024, max=65535
     )
-    hunyuan3d_secret_id: bpy.props.StringProperty(
-        name="Hunyuan3D SecretId",
-        description="Persistent Hunyuan3D SecretId",
-        default=""
+    # ── Poly Haven ──
+    use_polyhaven: BoolProperty(
+        name="Use Poly Haven",
+        description="Enable Poly Haven asset integration",
+        default=False
     )
-    hunyuan3d_secret_key: bpy.props.StringProperty(
-        name="Hunyuan3D SecretKey",
-        subtype="PASSWORD",
-        description="Persistent Hunyuan3D SecretKey",
-        default=""
-    )
-    hunyuan3d_api_url: bpy.props.StringProperty(
-        name="Hunyuan3D API URL",
-        description="Persistent Hunyuan3D API URL",
-        default=""
-    )
+    # ── Hyper3D Rodin ──
+    use_hyper3d: BoolProperty(name="Use Hyper3D Rodin", default=False)
+    hyper3d_mode: EnumProperty(name="Rodin Mode", items=[
+        ("MAIN_SITE", "hyper3d.ai", ""), ("FAL_AI", "fal.ai", ""),
+    ], default="MAIN_SITE")
+    hyper3d_api_key: StringProperty(name="API Key", subtype="PASSWORD", default="")
+    # ── Sketchfab ──
+    use_sketchfab: BoolProperty(name="Use Sketchfab", default=False)
+    sketchfab_api_key: StringProperty(name="API Key", subtype="PASSWORD", default="")
+    # ── Hunyuan3D ──
+    use_hunyuan3d: BoolProperty(name="Use Hunyuan3D", default=False)
+    hunyuan3d_mode: EnumProperty(name="Mode", items=[
+        ("LOCAL_API", "Local API", ""), ("OFFICIAL_API", "Official API", ""),
+    ], default="LOCAL_API")
+    hunyuan3d_secret_id: StringProperty(name="SecretId", default="")
+    hunyuan3d_secret_key: StringProperty(name="SecretKey", subtype="PASSWORD", default="")
+    hunyuan3d_api_url: StringProperty(name="API URL", default="http://localhost:8081")
+    hunyuan3d_octree_resolution: IntProperty(name="Octree Resolution", default=256, min=128, max=512)
+    hunyuan3d_num_inference_steps: IntProperty(name="Inference Steps", default=30, min=20, max=50)
+    hunyuan3d_guidance_scale: FloatProperty(name="Guidance Scale", default=5.5, min=1.0, max=10.0)
+    hunyuan3d_texture: BoolProperty(name="Generate Texture", default=True)
 
     def draw(self, context):
         layout = self.layout
-        
-        # Telemetry section
-        layout.label(text="Telemetry & Privacy:", icon='PREFERENCES')
-        
-        box = layout.box()
-        row = box.row()
-        row.prop(self, "telemetry_consent", text="Allow Telemetry")
-        
-        # Info text
-        box.separator()
-        if self.telemetry_consent:
-            box.label(text="With consent: We collect anonymized prompts, code, and screenshots.", icon='INFO')
-        else:
-            box.label(text="Without consent: We only collect minimal anonymous usage data", icon='INFO')
-            box.label(text="(tool names, success/failure, duration - no prompts or code).", icon='BLANK1')
-        box.separator()
-        box.label(text="All data is fully anonymized. You can change this anytime.", icon='CHECKMARK')
-        
-        # Terms and Conditions link
-        box.separator()
-        row = box.row()
-        row.operator("blendermcp.open_terms", text="View Terms and Conditions", icon='TEXT')
+        layout.prop(self, "telemetry_consent")
+        layout.prop(self, "auto_connect")
+        layout.separator()
+        layout.label(text="Persistent defaults (applied on startup):", icon='SETTINGS')
+        layout.prop(self, "port")
+        layout.separator()
+        layout.prop(self, "use_polyhaven")
+        layout.prop(self, "use_hyper3d")
+        if self.use_hyper3d:
+            box = layout.box()
+            box.prop(self, "hyper3d_mode")
+            box.prop(self, "hyper3d_api_key")
+        layout.prop(self, "use_sketchfab")
+        if self.use_sketchfab:
+            layout.prop(self, "sketchfab_api_key")
+        layout.separator()
+        layout.prop(self, "use_hunyuan3d")
+        if self.use_hunyuan3d:
+            box = layout.box()
+            box.prop(self, "hunyuan3d_mode")
+            if self.hunyuan3d_mode == 'OFFICIAL_API':
+                box.prop(self, "hunyuan3d_secret_id")
+                box.prop(self, "hunyuan3d_secret_key")
+            if self.hunyuan3d_mode == 'LOCAL_API':
+                box.prop(self, "hunyuan3d_api_url")
+                box.prop(self, "hunyuan3d_octree_resolution")
+                box.prop(self, "hunyuan3d_num_inference_steps")
+                box.prop(self, "hunyuan3d_guidance_scale")
+                box.prop(self, "hunyuan3d_texture")
+        layout.separator()
+        layout.operator("blendermcp.open_terms", text="View Terms and Conditions", icon='TEXT')
 
         layout.separator()
         layout.label(text="Persistent API Credentials:", icon='LOCKED')
@@ -2620,162 +2690,123 @@ class BLENDERMCP_OT_OpenTerms(bpy.types.Operator):
 
 # Registration functions
 def register():
+    # Scene properties with update callbacks that sync to persistent AddonPreferences
+    U = lambda name: _make_scene_update(name)  # shorthand
+
     bpy.types.Scene.blendermcp_port = IntProperty(
-        name="Port",
-        description="Port for the BlenderMCP server",
-        default=9876,
-        min=1024,
-        max=65535
+        name="Port", description="Port for the BlenderMCP server",
+        default=9876, min=1024, max=65535, update=U('port')
     )
 
     bpy.types.Scene.blendermcp_server_running = bpy.props.BoolProperty(
-        name="Server Running",
-        default=False
-    )
-
-    bpy.types.Scene.blendermcp_auto_start_server = bpy.props.BoolProperty(
-        name="Auto-Start Server",
-        description="Automatically start the MCP server when Blender loads",
-        default=True
+        name="Server Running", default=False
     )
 
     bpy.types.Scene.blendermcp_use_polyhaven = bpy.props.BoolProperty(
-        name="Use Poly Haven",
-        description="Enable Poly Haven asset integration",
-        default=False
+        name="Use Poly Haven", description="Enable Poly Haven asset integration",
+        default=False, update=U('use_polyhaven')
     )
 
     bpy.types.Scene.blendermcp_use_hyper3d = bpy.props.BoolProperty(
-        name="Use Hyper3D Rodin",
-        description="Enable Hyper3D Rodin generatino integration",
-        default=False
+        name="Use Hyper3D Rodin", description="Enable Hyper3D Rodin generation integration",
+        default=False, update=U('use_hyper3d')
     )
 
     bpy.types.Scene.blendermcp_hyper3d_mode = bpy.props.EnumProperty(
-        name="Rodin Mode",
-        description="Choose the platform used to call Rodin APIs",
-        items=[
-            ("MAIN_SITE", "hyper3d.ai", "hyper3d.ai"),
-            ("FAL_AI", "fal.ai", "fal.ai"),
-        ],
-        default="MAIN_SITE"
+        name="Rodin Mode", description="Choose the platform used to call Rodin APIs",
+        items=[("MAIN_SITE", "hyper3d.ai", "hyper3d.ai"), ("FAL_AI", "fal.ai", "fal.ai")],
+        default="MAIN_SITE", update=U('hyper3d_mode')
     )
 
     bpy.types.Scene.blendermcp_hyper3d_api_key = bpy.props.StringProperty(
-        name="Hyper3D API Key",
-        subtype="PASSWORD",
+        name="Hyper3D API Key", subtype="PASSWORD",
         description="API Key provided by Hyper3D",
-        default=""
+        default="", update=U('hyper3d_api_key')
     )
 
     bpy.types.Scene.blendermcp_use_hunyuan3d = bpy.props.BoolProperty(
-        name="Use Hunyuan 3D",
-        description="Enable Hunyuan asset integration",
-        default=False
+        name="Use Hunyuan 3D", description="Enable Hunyuan asset integration",
+        default=False, update=U('use_hunyuan3d')
     )
 
     bpy.types.Scene.blendermcp_hunyuan3d_mode = bpy.props.EnumProperty(
-        name="Hunyuan3D Mode",
-        description="Choose a local or official APIs",
-        items=[
-            ("LOCAL_API", "local api", "local api"),
-            ("OFFICIAL_API", "official api", "official api"),
-        ],
-        default="LOCAL_API"
+        name="Hunyuan3D Mode", description="Choose local or official API",
+        items=[("LOCAL_API", "local api", "local api"), ("OFFICIAL_API", "official api", "official api")],
+        default="LOCAL_API", update=U('hunyuan3d_mode')
     )
 
     bpy.types.Scene.blendermcp_hunyuan3d_secret_id = bpy.props.StringProperty(
-        name="Hunyuan 3D SecretId",
-        description="SecretId provided by Hunyuan 3D",
-        default=""
+        name="Hunyuan 3D SecretId", description="SecretId provided by Hunyuan 3D",
+        default="", update=U('hunyuan3d_secret_id')
     )
 
     bpy.types.Scene.blendermcp_hunyuan3d_secret_key = bpy.props.StringProperty(
-        name="Hunyuan 3D SecretKey",
-        subtype="PASSWORD",
+        name="Hunyuan 3D SecretKey", subtype="PASSWORD",
         description="SecretKey provided by Hunyuan 3D",
-        default=""
+        default="", update=U('hunyuan3d_secret_key')
     )
 
     bpy.types.Scene.blendermcp_hunyuan3d_api_url = bpy.props.StringProperty(
-        name="API URL",
-        description="URL of the Hunyuan 3D API service",
-        default="http://localhost:8081"
+        name="API URL", description="URL of the Hunyuan 3D API service",
+        default="http://localhost:8081", update=U('hunyuan3d_api_url')
     )
 
     bpy.types.Scene.blendermcp_hunyuan3d_octree_resolution = bpy.props.IntProperty(
-        name="Octree Resolution",
-        description="Octree resolution for the 3D generation",
-        default=256,
-        min=128,
-        max=512,
+        name="Octree Resolution", description="Octree resolution for 3D generation",
+        default=256, min=128, max=512, update=U('hunyuan3d_octree_resolution')
     )
 
     bpy.types.Scene.blendermcp_hunyuan3d_num_inference_steps = bpy.props.IntProperty(
-        name="Number of Inference Steps",
-        description="Number of inference steps for the 3D generation",
-        default=20,
-        min=20,
-        max=50,
+        name="Number of Inference Steps", description="Number of inference steps for 3D generation",
+        default=30, min=20, max=50, update=U('hunyuan3d_num_inference_steps')
     )
 
     bpy.types.Scene.blendermcp_hunyuan3d_guidance_scale = bpy.props.FloatProperty(
-        name="Guidance Scale",
-        description="Guidance scale for the 3D generation",
-        default=5.5,
-        min=1.0,
-        max=10.0,
+        name="Guidance Scale", description="Guidance scale for 3D generation",
+        default=5.5, min=1.0, max=10.0, update=U('hunyuan3d_guidance_scale')
     )
 
     bpy.types.Scene.blendermcp_hunyuan3d_texture = bpy.props.BoolProperty(
-        name="Generate Texture",
-        description="Whether to generate texture for the 3D model",
-        default=False,
+        name="Generate Texture", description="Whether to generate texture for the 3D model",
+        default=True, update=U('hunyuan3d_texture')
     )
-    
+
     bpy.types.Scene.blendermcp_use_sketchfab = bpy.props.BoolProperty(
-        name="Use Sketchfab",
-        description="Enable Sketchfab asset integration",
-        default=False
+        name="Use Sketchfab", description="Enable Sketchfab asset integration",
+        default=False, update=U('use_sketchfab')
     )
 
     bpy.types.Scene.blendermcp_sketchfab_api_key = bpy.props.StringProperty(
-        name="Sketchfab API Key",
-        subtype="PASSWORD",
+        name="Sketchfab API Key", subtype="PASSWORD",
         description="API Key provided by Sketchfab",
-        default=""
+        default="", update=U('sketchfab_api_key')
     )
 
-    # Register preferences class
+    # Register all classes
     bpy.utils.register_class(BLENDERMCP_AddonPreferences)
-
     bpy.utils.register_class(BLENDERMCP_PT_Panel)
     bpy.utils.register_class(BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey)
     bpy.utils.register_class(BLENDERMCP_OT_StartServer)
     bpy.utils.register_class(BLENDERMCP_OT_StopServer)
     bpy.utils.register_class(BLENDERMCP_OT_OpenTerms)
 
-    # Auto-start the server so the MCP client can connect without manual UI interaction
-    scene = getattr(bpy.context, 'scene', None)
-    if scene is not None:
-        port = scene.blendermcp_port
-        auto_start = scene.blendermcp_auto_start_server
-    else:
-        port = 9876
-        auto_start = True
+    # Register load_post handler for persistence + auto-connect
+    bpy.app.handlers.load_post.append(_load_post_handler)
 
-    if auto_start and (not hasattr(bpy.types, "blendermcp_server") or not bpy.types.blendermcp_server):
-        bpy.types.blendermcp_server = BlenderMCPServer(port=port)
-    if auto_start and not bpy.types.blendermcp_server.running:
-        bpy.types.blendermcp_server.start()
-        try:
-            bpy.context.scene.blendermcp_server_running = bpy.types.blendermcp_server.running
-        except AttributeError:
-            pass
+    # One-shot timer: sync prefs→scene and auto-connect on initial Blender startup
+    def _startup_sync():
+        sync_prefs_to_scene()
+        _auto_connect_if_enabled()
+    bpy.app.timers.register(_startup_sync, first_interval=0.5)
 
-    print("BlenderMCP addon registered")
+    print("BlenderMCP addon registered (auto-connect: " +
+          ("on" if bpy.context.preferences.addons[__name__].preferences.auto_connect else "off") + ")")
 
 def unregister():
+    # Remove load_post handler
+    if _load_post_handler in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_load_post_handler)
+
     # Stop the server if it's running
     if hasattr(bpy.types, "blendermcp_server") and bpy.types.blendermcp_server:
         bpy.types.blendermcp_server.stop()
@@ -2790,7 +2821,6 @@ def unregister():
 
     del bpy.types.Scene.blendermcp_port
     del bpy.types.Scene.blendermcp_server_running
-    del bpy.types.Scene.blendermcp_auto_start_server
     del bpy.types.Scene.blendermcp_use_polyhaven
     del bpy.types.Scene.blendermcp_use_hyper3d
     del bpy.types.Scene.blendermcp_hyper3d_mode
