@@ -170,7 +170,8 @@ function Invoke-CheckedCommand {
     param(
         [string]$FilePath,
         [string[]]$ArgumentList,
-        [string]$Description
+        [string]$Description,
+        [switch]$Quiet
     )
     $display = Format-CommandLine -FilePath $FilePath -ArgumentList $ArgumentList
     if ($script:DryRunEnabled) {
@@ -179,10 +180,39 @@ function Invoke-CheckedCommand {
     }
 
     Write-Info $Description
-    & $FilePath @ArgumentList
-    $exitCode = $LASTEXITCODE
+    $capturedOutput = @()
+    if ($Quiet) {
+        # Blender and enabled third-party extensions may print directly to both
+        # stdout and stderr even for a successful command. Keep the installer
+        # readable, but retain that output so failures remain diagnosable.
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $capturedOutput = @(& $FilePath @ArgumentList 2>&1)
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    }
+    else {
+        & $FilePath @ArgumentList
+        $exitCode = $LASTEXITCODE
+    }
     if ($null -ne $exitCode -and $exitCode -ne 0) {
-        throw "Command failed with exit code ${exitCode}: $display"
+        $message = "Command failed with exit code ${exitCode}: $display"
+        if ($Quiet -and $capturedOutput.Count -gt 0) {
+            $outputLimit = 80
+            $outputLines = @($capturedOutput | ForEach-Object { [string]$_ })
+            if ($outputLines.Count -gt $outputLimit) {
+                $omitted = $outputLines.Count - $outputLimit
+                $outputLines = @("... $omitted earlier output line(s) omitted ...") + @(
+                    $outputLines | Select-Object -Last $outputLimit
+                )
+            }
+            $message += "`nCaptured command output:`n$($outputLines -join "`n")"
+        }
+        throw $message
     }
 }
 
@@ -1287,7 +1317,7 @@ try {
             Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @(
                 (Join-Path $repoRoot "scripts\build_blender_extension.py"),
                 "--blender", $selectedBlenderPaths[0]
-            ) -Description "Building and validating the installable Blender Extension ZIP..."
+            ) -Description "Building and validating the installable Blender Extension ZIP..." -Quiet
         }
         if (-not $script:DryRunEnabled -and -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
             throw "The Blender Extension archive is unavailable: $archivePath"
@@ -1304,9 +1334,9 @@ try {
             # disabling startup-file script execution, then change only the
             # Extension installation/enabled state.
             Invoke-CheckedCommand -FilePath $blenderExecutable -ArgumentList @(
-                "--disable-autoexec", "--command", "extension", "install-file",
+                "--quiet", "--disable-autoexec", "--command", "extension", "install-file",
                 "-r", "user_default", "-e", $archivePath
-            ) -Description "Installing and enabling Blender MCP in Blender $blenderVersion..."
+            ) -Description "Installing and enabling Blender MCP in Blender $blenderVersion..." -Quiet
             $installedVersions += [string]$blenderVersion
         }
         if ($script:DryRunEnabled) {

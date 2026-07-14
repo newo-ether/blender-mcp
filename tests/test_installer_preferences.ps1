@@ -52,15 +52,23 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Could not seed isolated Blender preferences." }
 
     foreach ($attempt in 1..2) {
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $installer `
+        $installerOutput = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $installer `
             -NonInteractive `
             -BlenderPath $blender `
             -WorkspacePath $workspace `
             -SkipCodexRegistration `
             -SkipClaudeCodeRegistration `
-            -SkipClaudeDesktop
-        if ($LASTEXITCODE -ne 0) {
-            throw "The Blender MCP installer failed on attempt $attempt."
+            -SkipClaudeDesktop 2>&1)
+        $installerExitCode = $LASTEXITCODE
+        if ($installerExitCode -ne 0) {
+            throw "The Blender MCP installer failed on attempt $attempt.`n$($installerOutput -join "`n")"
+        }
+
+        $rawBlenderOutput = @($installerOutput | Where-Object {
+            [string]$_ -match '^(?:Blender \d|Blender quit|BlenderMCP(?: addon| server|:)|Read prefs:)'
+        })
+        if ($rawBlenderOutput.Count -gt 0) {
+            throw "The installer leaked Blender console output on attempt $attempt.`n$($rawBlenderOutput -join "`n")"
         }
     }
 
