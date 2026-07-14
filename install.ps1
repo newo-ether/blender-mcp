@@ -16,8 +16,9 @@
     are available. Claude Desktop uses the official MCPB package and keeps its
     required user confirmation.
 
-    It is safe to run repeatedly. Existing matching Codex configuration is
-    preserved, and Blender treats a repeated Extension install as a reinstall.
+    It is safe to run repeatedly. Matching Codex entries are retained, managed
+    user entries named blender_mcp are updated by default, and Blender treats
+    a repeated Extension install as a reinstall.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
@@ -64,7 +65,10 @@ param(
     # Do not add the MCP server to the Codex global user configuration.
     [switch]$SkipCodexRegistration,
 
-    # Replace an existing, non-matching Codex entry named blender_mcp.
+    # Keep an existing, non-matching blender_mcp entry instead of updating it.
+    [switch]$PreserveExistingMcpEntries,
+
+    # Deprecated compatibility switch. Replacement is now the default behavior.
     [switch]$ForceCodexRegistration,
 
     # Do not add the MCP server to Claude Code's user scope.
@@ -97,6 +101,10 @@ $script:SelectedCodexCli = $false
 $script:SelectedCodexDesktop = $false
 $script:SelectedClaudeCode = $false
 $script:SelectedClaudeDesktop = $false
+
+if ($PreserveExistingMcpEntries -and $ForceCodexRegistration) {
+    throw "-PreserveExistingMcpEntries and -ForceCodexRegistration cannot be used together."
+}
 
 function Write-Banner {
     Write-Host ""
@@ -450,7 +458,8 @@ function Find-DesktopApplication {
 }
 
 function Get-ClientDetection {
-    $codex = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue
+    $codex = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
     $codexCommand = if ($null -ne $codex) { [string]$codex.Source } else { $null }
     if (-not $codexCommand) {
         $bundledCodexCandidates = @(
@@ -465,7 +474,8 @@ function Get-ClientDetection {
             }
         }
     }
-    $claude = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue
+    $claude = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
     $claudeCommand = if ($null -ne $claude) { [string]$claude.Source } else { $null }
 
     $codexDesktop = Find-DesktopApplication -NamePattern '^ChatGPT$|^Codex$|OpenAI\.ChatGPT|OpenAI\.Codex|ChatGPT Desktop|Codex Desktop' -KnownPaths @(
@@ -895,7 +905,7 @@ function Register-CodexMcp {
         [string]$ServerExecutable,
         [string]$Workspace,
         [int]$Port,
-        [bool]$Force
+        [bool]$PreserveExisting
     )
 
     $existing = $null
@@ -931,13 +941,14 @@ function Register-CodexMcp {
         return
     }
 
-    if ($null -ne $existing -and -not $Force) {
+    if ($null -ne $existing -and $PreserveExisting) {
         Write-WarningLine "Codex already has a different blender_mcp entry; it was preserved."
-        Write-Info "Re-run with -ForceCodexRegistration to replace that entry."
+        Write-Info "Re-run without -PreserveExistingMcpEntries to update that entry."
         $script:CodexStatus = "existing different entry preserved"
         return
     }
 
+    $wasExisting = $null -ne $existing
     if ($null -ne $existing) {
         Invoke-CheckedCommand -FilePath $CodexExecutable -ArgumentList @(
             "mcp", "remove", "blender_mcp"
@@ -953,11 +964,17 @@ function Register-CodexMcp {
     ) -Description "Registering blender_mcp with Codex..."
 
     if ($script:DryRunEnabled) {
-        $script:CodexStatus = "would be configured"
+        $script:CodexStatus = if ($wasExisting) { "would be updated" } else { "would be configured" }
     }
     else {
-        Write-Ok "Codex global MCP entry blender_mcp is configured."
-        $script:CodexStatus = "configured"
+        if ($wasExisting) {
+            Write-Ok "Codex global MCP entry blender_mcp was updated."
+            $script:CodexStatus = "updated"
+        }
+        else {
+            Write-Ok "Codex global MCP entry blender_mcp is configured."
+            $script:CodexStatus = "configured"
+        }
     }
 }
 
@@ -966,14 +983,37 @@ function Register-ClaudeCodeMcp {
         [string]$ClaudeExecutable,
         [string]$ServerExecutable,
         [string]$Workspace,
-        [int]$Port
+        [int]$Port,
+        [bool]$PreserveExisting
     )
 
     & $ClaudeExecutable mcp get blender_mcp *> $null
-    if ($LASTEXITCODE -eq 0) {
+    $wasExisting = $LASTEXITCODE -eq 0
+    $removedUserEntry = $false
+    if ($wasExisting -and $PreserveExisting) {
         Write-Ok "Claude Code already has a blender_mcp entry; it was preserved."
-        $script:ClaudeCodeStatus = "already configured"
+        $script:ClaudeCodeStatus = "existing entry preserved"
         return
+    }
+
+    if ($wasExisting) {
+        if ($script:DryRunEnabled) {
+            Write-Info "Would remove the previous Claude Code user-scope blender_mcp entry."
+        }
+        else {
+            $removeOutput = & $ClaudeExecutable mcp remove blender_mcp --scope user 2>&1
+            $removeExitCode = $LASTEXITCODE
+            if ($removeExitCode -eq 0) {
+                $removedUserEntry = $true
+                Write-Info "Removed the previous Claude Code user-scope blender_mcp entry."
+            }
+            else {
+                Write-WarningLine "Claude Code found blender_mcp outside user scope; that entry was not modified."
+                if ($removeOutput) {
+                    Write-Info ([string]($removeOutput | Select-Object -Last 1))
+                }
+            }
+        }
     }
 
     Invoke-CheckedCommand -FilePath $ClaudeExecutable -ArgumentList @(
@@ -985,11 +1025,22 @@ function Register-ClaudeCodeMcp {
     ) -Description "Registering blender_mcp in Claude Code user scope..."
 
     if ($script:DryRunEnabled) {
-        $script:ClaudeCodeStatus = "would be configured"
+        $script:ClaudeCodeStatus = if ($wasExisting) { "would configure/update user scope" } else { "would be configured" }
     }
     else {
-        Write-Ok "Claude Code user-scope MCP entry is configured."
-        $script:ClaudeCodeStatus = "configured"
+        if ($removedUserEntry) {
+            Write-Ok "Claude Code user-scope MCP entry was updated."
+            $script:ClaudeCodeStatus = "updated"
+        }
+        else {
+            Write-Ok "Claude Code user-scope MCP entry is configured."
+            $script:ClaudeCodeStatus = if ($wasExisting) {
+                "configured; higher-priority entry retained"
+            }
+            else {
+                "configured"
+            }
+        }
     }
 }
 
@@ -1270,7 +1321,7 @@ try {
             $script:CodexStatus = "command unavailable"
         }
         else {
-            Register-CodexMcp -CodexExecutable $clientDetection.CodexCommand -ServerExecutable $serverExecutable -Workspace $workspace -Port $blenderPort -Force ([bool]$ForceCodexRegistration)
+            Register-CodexMcp -CodexExecutable $clientDetection.CodexCommand -ServerExecutable $serverExecutable -Workspace $workspace -Port $blenderPort -PreserveExisting ([bool]$PreserveExistingMcpEntries)
         }
     }
     elseif (-not $SkipCodexRegistration) {
@@ -1283,7 +1334,7 @@ try {
             $script:ClaudeCodeStatus = "command unavailable"
         }
         else {
-            Register-ClaudeCodeMcp -ClaudeExecutable $clientDetection.ClaudeCommand -ServerExecutable $serverExecutable -Workspace $workspace -Port $blenderPort
+            Register-ClaudeCodeMcp -ClaudeExecutable $clientDetection.ClaudeCommand -ServerExecutable $serverExecutable -Workspace $workspace -Port $blenderPort -PreserveExisting ([bool]$PreserveExistingMcpEntries)
         }
     }
     elseif (-not $SkipClaudeCodeRegistration) {
@@ -1323,7 +1374,7 @@ try {
     Write-Host "  Next steps" -ForegroundColor Cyan
     if ($selectedBlenderPaths.Count -gt 0) {
         Write-Info "1. Open a selected Blender version and find BlenderMCP in the 3D View sidebar (N)."
-        Write-Info "2. Click Connect to Claude to start the local bridge on port $blenderPort."
+        Write-Info "2. The local bridge starts automatically on port $blenderPort by default."
     }
     else {
         Write-Info "1. Install the Blender Extension later by running this installer again."

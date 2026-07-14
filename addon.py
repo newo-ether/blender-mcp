@@ -23,7 +23,7 @@ from contextlib import redirect_stdout, suppress
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 7, 0),
+    "version": (1, 7, 1),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > BlenderMCP",
     "description": "Connect Blender to Claude via MCP",
@@ -94,11 +94,15 @@ def _auto_connect_if_enabled():
         return
     if not addon_prefs.preferences.auto_connect:
         return
-    if hasattr(bpy.types, "blendermcp_server") and bpy.types.blendermcp_server:
-        return  # already running
-    bpy.types.blendermcp_server = BlenderMCPServer(port=addon_prefs.preferences.port)
-    bpy.types.blendermcp_server.start()
-    bpy.context.scene.blendermcp_server_running = True
+    existing_server = getattr(bpy.types, "blendermcp_server", None)
+    if existing_server and existing_server.running:
+        bpy.context.scene.blendermcp_server_running = True
+        return
+
+    server = BlenderMCPServer(port=addon_prefs.preferences.port)
+    bpy.types.blendermcp_server = server
+    server.start()
+    bpy.context.scene.blendermcp_server_running = server.running
 
 @bpy.app.handlers.persistent
 def _load_post_handler(_dummy):
@@ -4198,7 +4202,7 @@ class BLENDERMCP_AddonPreferences(bpy.types.AddonPreferences):
     auto_connect: BoolProperty(
         name="Auto-connect on startup",
         description="Automatically start MCP server when Blender opens or loads a file",
-        default=False
+        default=True
     )
     port: IntProperty(
         name="Default Port",

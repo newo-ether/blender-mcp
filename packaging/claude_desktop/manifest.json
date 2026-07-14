@@ -3,9 +3,9 @@
   "manifest_version": "0.4",
   "name": "blender_mcp",
   "display_name": "Blender MCP",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Control Blender and edit Geometry Nodes through a local MCP bridge.",
-  "long_description": "Launches the Blender MCP server installed by the official PowerShell bootstrap. Start the BlenderMCP bridge inside Blender before using its tools.",
+  "long_description": "Launches the Blender MCP server installed by the official PowerShell bootstrap. Open Blender before using its tools; the BlenderMCP bridge starts automatically by default.",
   "author": {
     "name": "BlenderMCP Contributors",
     "url": "https://github.com/newo-ether/blender-mcp"
