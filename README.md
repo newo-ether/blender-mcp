@@ -42,7 +42,7 @@ human-readable: [install.ps1](install.ps1). For a reproducible, version-pinned
 install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.7.1/install.ps1))) -ReleaseTag v1.7.1
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.7.2/install.ps1))) -ReleaseTag v1.7.2
 ```
 
 Before changing the machine, the installer:
@@ -52,7 +52,7 @@ Before changing the machine, the installer:
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
 4. verifies the wheel, Extension ZIP, and optional MCPB against `SHA256SUMS.txt`;
 5. creates or reuses `%LOCALAPPDATA%\BlenderMCP\venv`;
-6. installs the server and the Extension into each selected Blender version;
+6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients.
 
 Updates are idempotent: an exact matching Codex entry is left alone, while a
@@ -245,7 +245,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.7.1-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.7.2-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -253,7 +253,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.7.1-py3-none-any.whl
+python -m pip install ./blender_mcp-1.7.2-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -381,6 +381,13 @@ Run the schema tests:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+```
+
+Run the Blender preference-preservation installer test:
+
+```powershell
+.\tests\test_installer_preferences.ps1 `
+  -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
 ```
 
 Build the Blender Extension:
