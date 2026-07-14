@@ -68,6 +68,15 @@ def build_fixture():
     nested_node.node_tree = nested
     join = tree.nodes.new("GeometryNodeJoinGeometry")
     transform = tree.nodes.new("GeometryNodeTransform")
+    translation = transform.inputs["Translation"]
+    translation_index = next(
+        index for index, socket in enumerate(transform.inputs)
+        if socket == translation
+    )
+    translation_identifier = getattr(translation, "identifier", "") or translation.name
+    translation_socket_id = (
+        f"input:{translation_index}:{translation_identifier}"
+    )
 
     tree.links.new(group_input.outputs["Geometry"], nested_node.inputs["Geometry"])
     tree.links.new(cube.outputs["Mesh"], join.inputs["Geometry"])
@@ -84,6 +93,11 @@ def build_fixture():
             "GeometryNodeForeachGeometryElementOutput",
         ),
     ):
+        if (
+            getattr(bpy.types, input_type, None) is None
+            or getattr(bpy.types, output_type, None) is None
+        ):
+            continue
         output_node = tree.nodes.new(output_type)
         input_node = tree.nodes.new(input_type)
         input_node.pair_with_output(output_node)
@@ -105,6 +119,7 @@ def build_fixture():
         obj.name,
         modifier.name,
         scale_interface.identifier,
+        translation_socket_id,
     )
 
 
@@ -131,6 +146,7 @@ def run_test():
         object_name,
         modifier_name,
         scale_identifier,
+        translation_socket_id,
     ) = build_fixture()
 
     first = server.export_geometry_node_tree(tree.name, "semantic")
@@ -219,7 +235,7 @@ def run_test():
             {
                 "op": "set_socket_default",
                 "node": "new_transform",
-                "socket": "input:2:Translation",
+                "socket": translation_socket_id,
                 "value": [1.0, 2.0, 3.0],
             },
             {
@@ -520,7 +536,7 @@ def run_test():
             {
                 "op": "set_socket_default",
                 "node": nested_transform_name,
-                "socket": "input:2:Translation",
+                "socket": translation_socket_id,
                 "value": [3.0, 2.0, 1.0],
             },
         ],

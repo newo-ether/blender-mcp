@@ -36,6 +36,36 @@ $oldScripts = $env:BLENDER_USER_SCRIPTS
 $oldExtensions = $env:BLENDER_USER_EXTENSIONS
 $oldDataFiles = $env:BLENDER_USER_DATAFILES
 
+function Invoke-BlenderPreferenceFixture {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("seed", "verify")]
+        [string]$Mode
+    )
+
+    $stdout = Join-Path $caseRoot ("fixture-{0}.stdout.log" -f $Mode)
+    $stderr = Join-Path $caseRoot ("fixture-{0}.stderr.log" -f $Mode)
+    $arguments = @("--background")
+    if ($Mode -eq "seed") {
+        $arguments += "--factory-startup"
+    }
+    $arguments += @("--python", $fixture, "--", $Mode)
+    $process = Start-Process -FilePath $blender `
+        -ArgumentList $arguments `
+        -Wait `
+        -PassThru `
+        -NoNewWindow `
+        -RedirectStandardOutput $stdout `
+        -RedirectStandardError $stderr
+    if ($process.ExitCode -ne 0) {
+        $details = @(
+            Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue
+            Get-Content -LiteralPath $stderr -ErrorAction SilentlyContinue
+        )
+        throw "Blender preference fixture $Mode failed.`n$($details -join "`n")"
+    }
+}
+
 try {
     $env:BLENDER_USER_CONFIG = Join-Path $caseRoot "config"
     $env:BLENDER_USER_SCRIPTS = Join-Path $caseRoot "scripts"
@@ -48,8 +78,7 @@ try {
         $env:BLENDER_USER_DATAFILES
     ) | Out-Null
 
-    & $blender --factory-startup --background --python $fixture -- seed
-    if ($LASTEXITCODE -ne 0) { throw "Could not seed isolated Blender preferences." }
+    Invoke-BlenderPreferenceFixture -Mode seed
 
     foreach ($attempt in 1..2) {
         $installerOutput = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $installer `
@@ -72,8 +101,7 @@ try {
         }
     }
 
-    & $blender --background --python $fixture -- verify
-    if ($LASTEXITCODE -ne 0) { throw "Blender preferences changed during installation." }
+    Invoke-BlenderPreferenceFixture -Mode verify
 }
 finally {
     $env:BLENDER_USER_CONFIG = $oldConfig

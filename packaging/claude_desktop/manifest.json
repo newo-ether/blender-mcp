@@ -3,15 +3,15 @@
   "manifest_version": "0.4",
   "name": "blender_mcp",
   "display_name": "Blender MCP",
-  "version": "1.7.2",
-  "description": "Control Blender and edit Geometry Nodes through a local MCP bridge.",
-  "long_description": "Launches the Blender MCP server installed by the official PowerShell bootstrap. Open Blender before using its tools; the BlenderMCP bridge starts automatically by default.",
+  "version": "1.8.0",
+  "description": "Control Blender, edit Geometry Nodes, and query version-aware documentation.",
+  "long_description": "Launches the Blender MCP server installed by the PowerShell bootstrap. Open Blender before using scene or live runtime tools; official documentation searches can also use an explicit Blender version.",
   "author": {
     "name": "BlenderMCP Contributors",
     "url": "https://github.com/newo-ether/blender-mcp"
   },
   "homepage": "https://github.com/newo-ether/blender-mcp",
-  "documentation": "https://github.com/newo-ether/blender-mcp/blob/main/docs/geometry-nodes.md",
+  "documentation": "https://github.com/newo-ether/blender-mcp#readme",
   "support": "https://github.com/newo-ether/blender-mcp/issues",
   "server": {
     "type": "binary",

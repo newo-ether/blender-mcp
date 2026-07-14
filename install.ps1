@@ -1288,7 +1288,7 @@ try {
     Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $pipArguments -Description "Installing Blender MCP and Python dependencies..."
     Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @(
         "-c",
-        "import asyncio; from blender_mcp.server import mcp; tools = asyncio.run(mcp.list_tools()); print(f'Registered MCP tools: {len(tools)}'); assert len(tools) >= 28"
+        "import asyncio; from blender_mcp.server import mcp; tools = asyncio.run(mcp.list_tools()); names = {tool.name for tool in tools}; required = {'get_blender_documentation_context', 'search_blender_docs', 'get_blender_doc_page', 'search_geometry_node_types', 'search_blender_node_assets'}; missing = sorted(required - names); print(f'Registered MCP tools: {len(tools)}'); print(f'Missing required tools: {missing}' if missing else 'Knowledge tools: ready'); assert len(tools) >= 33 and not missing"
     ) -Description "Verifying MCP imports and tool registration..."
     if (-not $script:DryRunEnabled) {
         if (-not (Test-Path -LiteralPath $serverExecutable -PathType Leaf)) {

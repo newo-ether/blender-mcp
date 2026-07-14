@@ -1,13 +1,13 @@
 schema_version = "1.0.0"
 
 id = "blender_mcp"
-version = "1.7.2"
+version = "1.8.0"
 name = "Blender MCP"
 tagline = "Connect Blender to Model Context Protocol clients"
 maintainer = "BlenderMCP Contributors"
 type = "add-on"
 
-website = "https://github.com/ahujasid/blender-mcp"
+website = "https://github.com/newo-ether/blender-mcp"
 tags = ["User Interface"]
 
 blender_version_min = "4.2.0"

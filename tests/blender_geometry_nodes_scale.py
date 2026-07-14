@@ -105,6 +105,15 @@ def run_test():
         lambda: server.export_geometry_node_tree(tree.name, "all")
     )
     center = transforms[len(transforms) // 2].name
+    translation = tree.nodes[center].inputs["Translation"]
+    translation_index = next(
+        position for position, socket in enumerate(tree.nodes[center].inputs)
+        if socket == translation
+    )
+    translation_identifier = getattr(translation, "identifier", "") or translation.name
+    translation_socket_id = (
+        f"input:{translation_index}:{translation_identifier}"
+    )
     subgraph, subgraph_ms = timed(
         lambda: server.export_geometry_node_tree(
             tree.name,
@@ -125,7 +134,7 @@ def run_test():
             {
                 "op": "set_socket_default",
                 "node": center,
-                "socket": "input:2:Translation",
+                "socket": translation_socket_id,
                 "value": [9.0, 8.0, 7.0],
             },
             {

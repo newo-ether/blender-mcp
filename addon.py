@@ -23,7 +23,7 @@ from contextlib import redirect_stdout, suppress
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 7, 2),
+    "version": (1, 8, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > BlenderMCP",
     "description": "Connect Blender to Claude via MCP",
@@ -748,15 +748,23 @@ def _gn_geometry_node_type_catalog():
 def _gn_essentials_library_paths():
     """Find bundled official node asset libraries below Blender DATAFILES."""
     root = bpy.utils.system_resource("DATAFILES")
-    node_assets = os.path.join(root, "assets", "nodes") if root else ""
-    if not node_assets or not os.path.isdir(node_assets):
+    if not root:
         return []
-    return [
-        os.path.join(node_assets, name)
-        for name in sorted(os.listdir(node_assets))
-        if name.lower().endswith(".blend")
-        and os.path.isfile(os.path.join(node_assets, name))
-    ]
+    # Blender 4.2 stores Geometry Nodes Essentials below ``geometry_nodes``;
+    # newer builds consolidate node assets below ``nodes``. Both locations are
+    # fixed children of Blender's own DATAFILES resource, never user paths.
+    paths = []
+    for directory_name in ("nodes", "geometry_nodes"):
+        node_assets = os.path.join(root, "assets", directory_name)
+        if not os.path.isdir(node_assets):
+            continue
+        paths.extend(
+            os.path.join(node_assets, name)
+            for name in sorted(os.listdir(node_assets))
+            if name.lower().endswith(".blend")
+            and os.path.isfile(os.path.join(node_assets, name))
+        )
+    return paths
 
 
 def _gn_blend_data_ids():

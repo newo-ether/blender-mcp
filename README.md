@@ -13,6 +13,8 @@ It retains the upstream BlenderMCP scene, object, viewport, asset, and
 model-generation tools while adding:
 
 - first-class Geometry Nodes discovery, export, validation, and transactional edits;
+- version-aware official Manual, Python API, Release Notes, live node-schema,
+  and installed Essentials queries;
 - a checksummed GitHub Release containing the Blender Extension, Python wheel, and Claude Desktop MCPB;
 - a one-command Windows installer with automatic client and Blender detection;
 - terminal and graphical target selectors for multi-version installation.
@@ -44,7 +46,7 @@ human-readable: [install.ps1](install.ps1). For a reproducible, version-pinned
 install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.7.2/install.ps1))) -ReleaseTag v1.7.2
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.8.0/install.ps1))) -ReleaseTag v1.8.0
 ```
 
 Before changing the machine, the installer:
@@ -165,6 +167,31 @@ Blender Extension <-> Blender scene and node trees
 The MCP server is launched by the client. The Blender Extension hosts the local
 bridge. Start the bridge before asking the client to use Blender tools.
 
+## Blender knowledge
+
+The server can combine published explanations with the exact capabilities of
+the connected Blender build. The documentation tools return bounded,
+source-attributed JSON instead of loading an entire Manual into context.
+
+| Tool | Purpose | Blender required |
+| --- | --- | --- |
+| `get_blender_documentation_context` | Resolve the exact build, official source channels, language, and fallbacks without fetching a page. | Only for `version="auto"` |
+| `search_blender_docs` | Search official Manual, Python API, and Release Notes indexes with compact ranked results. | Only for `version="auto"` |
+| `get_blender_doc_page` | Read one sanitized page or exact heading section returned by search. | Only for `version="auto"` |
+| `search_geometry_node_types` | Find node types constructible in Geometry Nodes in the running build. | Yes |
+| `get_geometry_node_type_schema` | Read compact live sockets, node-owned properties, and dynamic items; inherited RNA is opt-in. | Yes |
+| `search_blender_node_assets` | Inspect installed official Essentials node assets without leaving data blocks in the project. | Yes |
+
+Use `version="auto"` for build-correct answers or an explicit version such as
+`"5.1"` while Blender is disconnected. Prerelease, channel, and English
+fallbacks are always reported. Documentation access is restricted to official
+Blender HTTPS origins and cached per user with visible freshness and stale
+fallback metadata.
+
+For query strategy, version/language behavior, cache locations, offline rules,
+and security boundaries, read
+[Blender Manual and runtime knowledge](docs/blender-knowledge.md).
+
 ## Geometry Nodes automation
 
 This fork treats a node tree as a normalized graph, not as recursive prose or a
@@ -178,7 +205,9 @@ semantic patches that can be validated before application.
 | `list_geometry_node_trees` | List groups, users, editability, graph size, and revisions. | No |
 | `get_geometry_node_tree_index` | Search and page a compact node index. | No |
 | `export_geometry_node_tree` | Return or write a full graph or targeted N-hop subgraph. | No |
-| `get_geometry_node_type_schema` | Probe sockets and editable properties from the running Blender version. | No |
+| `get_geometry_node_type_schema` | Probe compact sockets and editable properties from the running Blender version. | No |
+| `search_geometry_node_types` | Search the exact build's constructible Geometry Nodes catalog. | No |
+| `search_blender_node_assets` | Search installed official Essentials node assets in a disposable scope. | No |
 | `validate_geometry_node_patch` | Validate structure and run a patch against a disposable copy. | No |
 | `apply_geometry_node_patch` | Validate, copy, verify, remap users, and report the actual diff. | Yes |
 
@@ -209,7 +238,7 @@ Useful artifacts:
 
 ## Other capabilities
 
-The server currently exposes 28 MCP tools, including:
+The server currently exposes 33 MCP tools, including:
 
 - scene and object inspection;
 - viewport screenshots;
@@ -219,13 +248,16 @@ The server currently exposes 28 MCP tools, including:
 - Sketchfab search, preview, and model import;
 - Hyper3D Rodin text/image generation and import;
 - Hunyuan3D generation and import;
-- the six Geometry Nodes tools above.
+- the three official-documentation tools;
+- the eight Geometry Nodes read, discovery, validation, and application tools.
 
 Example requests:
 
 - “Inspect the scene and frame the camera around the selected object.”
 - “Create a low-poly dungeon scene with studio-quality lighting.”
 - “Find the Geometry Nodes group used by the selected object and list its inputs.”
+- “For this Blender build, search the official docs and live schema for the
+  XPBD Solver node.”
 - “Export the nodes around Join Geometry and validate a patch that inserts a
   Transform Geometry node.”
 - “Search Poly Haven for a concrete material and apply it to the floor.”
@@ -247,7 +279,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.7.2-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.8.0-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -255,7 +287,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.7.2-py3-none-any.whl
+python -m pip install ./blender_mcp-1.8.0-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -305,6 +337,7 @@ For Claude Desktop on Windows, open the published MCPB and approve it in
 | `BLENDER_HOST` | `localhost` | Host running the Blender bridge. |
 | `BLENDER_PORT` | `9876` | TCP port exposed by the Blender Extension. |
 | `BLENDER_MCP_WORKSPACE` | server working directory | Allowed root for Geometry Nodes JSON files. |
+| `BLENDER_MCP_CACHE_DIR` | platform user cache | Optional parent directory for versioned Blender documentation cache entries. |
 | `DISABLE_TELEMETRY` | unset | Set to `true` to disable MCP server telemetry. |
 
 `BLENDER_MCP_DISABLE_TELEMETRY` and
@@ -348,6 +381,8 @@ MCP server telemetry.
 | The Extension is absent from one Blender | Rerun and select that version, or pass its executable with `-BlenderPath`. |
 | A Geometry Nodes patch is stale | Re-index or re-export the tree and rebuild the patch with the new revision. |
 | A linked node group cannot be edited | Linked-library trees are intentionally read-only in Geometry Nodes v1. |
+| Documentation is unavailable offline | Warm the same source/version/language first. Only marked stale entries fall back during network or server failure; a 404 does not. |
+| A prerelease Manual page is missing | Check the structured fallback, then query live node types/schema and installed Essentials for the exact build. |
 
 Dry-run command:
 
@@ -361,13 +396,16 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm 
   the `.blend` file first and review high-impact operations.
 - Geometry Nodes v1 covers Geometry Nodes only. Shader, Compositor, Texture, and
   World node trees are outside this contract.
+- Published prerelease documentation and localized Manual pages can be
+  incomplete. Fallbacks are explicit; live runtime schema is authoritative for
+  the connected build.
 - Linked-library node trees are exportable but read-only.
 - Shared node groups are rejected by default unless the caller explicitly
   chooses a single-user copy or accepts shared mutation.
 - Claude Desktop always requires final MCPB approval.
 - Automatic installation is Windows-only.
-- Blender 5.1.2 and 5.2 LTS RC passed the local acceptance suite. Blender 4.2 is
-  the manifest minimum but was unavailable for a runtime acceptance test.
+- Blender 4.2.22 LTS, 5.1.2, and 5.2 LTS RC passed the local runtime,
+  transactional, linked-library, and scale acceptance suites.
 - Optional asset providers may transmit requests or files to their services.
 
 ## Development
@@ -412,6 +450,7 @@ Build all Release assets:
 | [src/blender_mcp/server.py](src/blender_mcp/server.py) | Python MCP server. |
 | [install.ps1](install.ps1) | Windows Release/bootstrap installer. |
 | [scripts/build_release.ps1](scripts/build_release.ps1) | Release asset builder. |
+| [docs/blender-knowledge.md](docs/blender-knowledge.md) | Official documentation and live runtime knowledge guide. |
 | [docs/geometry-nodes.md](docs/geometry-nodes.md) | Geometry Nodes protocol guide. |
 | [schemas](schemas) | Public JSON contracts. |
 | [tests](tests) | Pure-Python and Blender acceptance scripts. |
