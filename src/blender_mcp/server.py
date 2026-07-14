@@ -14,7 +14,14 @@ from pathlib import Path
 import base64
 from urllib.parse import urlparse
 
-from .geometry_nodes_schema import write_snapshot_json
+from .geometry_nodes_schema import (
+    GeometryNodesSchemaError,
+    PATCH_VALIDATION_SCHEMA,
+    assert_valid_patch,
+    read_patch_json,
+    validate_patch_structure,
+    write_snapshot_json,
+)
 
 # Import telemetry
 from .telemetry import record_startup, get_telemetry, EventType
@@ -393,6 +400,108 @@ def get_geometry_node_type_schema(
     except Exception as e:
         logger.error(f"Error inspecting Geometry Node type: {str(e)}")
         return f"Error inspecting Geometry Node type: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("validate_geometry_node_patch")
+def validate_geometry_node_patch(
+    ctx: Context,
+    patch: Dict[str, Any] = None,
+    patch_path: str = "",
+    user_prompt: str = "",
+) -> str:
+    """Dry-run a Geometry Nodes semantic patch without changing Blender data.
+
+    Provide exactly one of patch or patch_path. patch_path must point to a JSON
+    file below BLENDER_MCP_WORKSPACE (or the MCP server working directory), so a
+    client can create and incrementally edit it using its existing file tools.
+    Structural errors are returned before Blender runtime validation. A valid
+    result is an executable plan only; this tool never applies the patch.
+
+    Parameters:
+    - patch: Inline blender-geometry-nodes-patch/1 object
+    - patch_path: Workspace-relative path to a patch JSON file
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        has_inline_patch = patch is not None
+        has_patch_path = bool(patch_path)
+        if has_inline_patch == has_patch_path:
+            return json.dumps(
+                {
+                    "schema": PATCH_VALIDATION_SCHEMA,
+                    "valid": False,
+                    "stage": "structure",
+                    "will_mutate": False,
+                    "diagnostics": [{
+                        "severity": "error",
+                        "code": "patch_source_count",
+                        "path": "",
+                        "message": "Provide exactly one of patch or patch_path",
+                    }],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        patch_document = read_patch_json(patch_path) if patch_path else patch
+        diagnostics = validate_patch_structure(patch_document)
+        if diagnostics:
+            return json.dumps(
+                {
+                    "schema": PATCH_VALIDATION_SCHEMA,
+                    "valid": False,
+                    "stage": "structure",
+                    "will_mutate": False,
+                    "diagnostics": diagnostics,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        patch_document = assert_valid_patch(patch_document)
+
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "validate_geometry_node_patch",
+            {"patch": patch_document},
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except GeometryNodesSchemaError as e:
+        logger.error(f"Invalid Geometry Nodes patch file: {str(e)}")
+        return json.dumps(
+            {
+                "schema": PATCH_VALIDATION_SCHEMA,
+                "valid": False,
+                "stage": "structure",
+                "will_mutate": False,
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "patch_file_error",
+                    "path": "/patch_path",
+                    "message": str(e),
+                }],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as e:
+        logger.error(f"Error validating Geometry Nodes patch: {str(e)}")
+        return json.dumps(
+            {
+                "schema": PATCH_VALIDATION_SCHEMA,
+                "valid": False,
+                "stage": "transport",
+                "will_mutate": False,
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "validation_transport_error",
+                    "path": "",
+                    "message": str(e),
+                }],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
 @mcp.tool()
 def get_viewport_screenshot(ctx: Context, max_size: int = 1000, user_prompt: str = "") -> Image:

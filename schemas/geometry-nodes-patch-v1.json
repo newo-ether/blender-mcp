@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ahujasid/blender-mcp/schemas/geometry-nodes-patch-v1.json",
+  "title": "Blender MCP Geometry Nodes semantic patch v1",
+  "type": "object",
+  "required": ["schema", "tree_name", "base_revision", "operations"],
+  "properties": {
+    "schema": {"const": "blender-geometry-nodes-patch/1"},
+    "tree_name": {"type": "string", "minLength": 1},
+    "base_revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "shared_tree_policy": {
+      "enum": ["reject", "single_user_copy", "mutate_shared"],
+      "default": "reject"
+    },
+    "target_user": {"$ref": "#/$defs/targetUser"},
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {"$ref": "#/$defs/operation"}
+    }
+  },
+  "$defs": {
+    "targetUser": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "object", "modifier"],
+          "properties": {
+            "kind": {"const": "MODIFIER"},
+            "object": {"type": "string", "minLength": 1},
+            "modifier": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "tree", "node"],
+          "properties": {
+            "kind": {"const": "GROUP_NODE"},
+            "tree": {"type": "string", "minLength": 1},
+            "node": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "nodeRef": {"type": "string", "minLength": 1},
+    "inputSocketRef": {"type": "string", "pattern": "^input:[0-9]+:.+$"},
+    "outputSocketRef": {"type": "string", "pattern": "^output:[0-9]+:.+$"},
+    "layout": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "array",
+          "prefixItems": [{"type": "number"}, {"type": "number"}],
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "width": {"type": "number"},
+        "height": {"type": "number"},
+        "parent": {"type": ["string", "null"]}
+      },
+      "minProperties": 1,
+      "additionalProperties": false
+    },
+    "operation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["op", "id", "node_type"],
+          "properties": {
+            "op": {"const": "add_node"},
+            "id": {"type": "string", "minLength": 1},
+            "node_type": {"type": "string", "minLength": 1},
+            "name": {"type": "string", "minLength": 1},
+            "properties": {"type": "object"},
+            "layout": {"$ref": "#/$defs/layout"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "node"],
+          "properties": {"op": {"const": "remove_node"}, "node": {"$ref": "#/$defs/nodeRef"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "node", "name"],
+          "properties": {
+            "op": {"const": "rename_node"},
+            "node": {"$ref": "#/$defs/nodeRef"},
+            "name": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "node", "property", "value"],
+          "properties": {
+            "op": {"const": "set_node_property"},
+            "node": {"$ref": "#/$defs/nodeRef"},
+            "property": {"type": "string", "minLength": 1},
+            "value": true
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "node", "socket", "value"],
+          "properties": {
+            "op": {"const": "set_socket_default"},
+            "node": {"$ref": "#/$defs/nodeRef"},
+            "socket": {"$ref": "#/$defs/inputSocketRef"},
+            "value": true
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "from_node", "from_socket", "to_node", "to_socket"],
+          "properties": {
+            "op": {"enum": ["add_link", "remove_link"]},
+            "from_node": {"$ref": "#/$defs/nodeRef"},
+            "from_socket": {"$ref": "#/$defs/outputSocketRef"},
+            "to_node": {"$ref": "#/$defs/nodeRef"},
+            "to_socket": {"$ref": "#/$defs/inputSocketRef"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "node"],
+          "properties": {
+            "op": {"const": "set_node_layout"},
+            "node": {"$ref": "#/$defs/nodeRef"},
+            "location": {
+              "type": "array",
+              "prefixItems": [{"type": "number"}, {"type": "number"}],
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "width": {"type": "number"},
+            "height": {"type": "number"},
+            "parent": {"type": ["string", "null"]}
+          },
+          "minProperties": 3,
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "id", "name", "in_out", "socket_type"],
+          "properties": {
+            "op": {"const": "add_interface_socket"},
+            "id": {"type": "string", "minLength": 1},
+            "name": {"type": "string", "minLength": 1},
+            "in_out": {"enum": ["INPUT", "OUTPUT"]},
+            "socket_type": {"type": "string", "minLength": 1},
+            "parent": {"type": ["string", "null"]},
+            "default": true
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "identifier"],
+          "properties": {
+            "op": {"const": "remove_interface_socket"},
+            "identifier": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "object", "modifier", "socket", "value"],
+          "properties": {
+            "op": {"const": "set_modifier_input"},
+            "object": {"type": "string", "minLength": 1},
+            "modifier": {"type": "string", "minLength": 1},
+            "socket": {"type": "string", "minLength": 1},
+            "value": true
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"shared_tree_policy": {"const": "single_user_copy"}},
+        "required": ["shared_tree_policy"]
+      },
+      "then": {"required": ["target_user"]}
+    }
+  ],
+  "additionalProperties": false
+}

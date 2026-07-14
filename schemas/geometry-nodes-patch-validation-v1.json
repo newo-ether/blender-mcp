@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ahujasid/blender-mcp/schemas/geometry-nodes-patch-validation-v1.json",
+  "title": "Blender MCP Geometry Nodes patch validation result v1",
+  "type": "object",
+  "required": ["schema", "valid", "stage", "will_mutate", "diagnostics"],
+  "properties": {
+    "schema": {"const": "blender-geometry-nodes-patch-validation/1"},
+    "valid": {"type": "boolean"},
+    "stage": {"enum": ["structure", "runtime", "transport"]},
+    "will_mutate": {"const": false},
+    "tree_name": {"type": ["string", "null"]},
+    "base_revision": {"type": ["string", "null"]},
+    "current_revision": {"type": "string"},
+    "shared_tree_policy": {
+      "enum": ["reject", "single_user_copy", "mutate_shared"]
+    },
+    "users": {"type": "array", "items": {"type": "object"}},
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "code", "path", "message"],
+        "properties": {
+          "severity": {"enum": ["error", "warning"]},
+          "code": {"type": "string", "minLength": 1},
+          "path": {"type": "string"},
+          "message": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "op", "status", "summary"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "op": {"type": "string"},
+          "status": {"enum": ["ready", "invalid"]},
+          "summary": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "semantic_diff": {
+      "type": "object",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    }
+  },
+  "additionalProperties": false
+}

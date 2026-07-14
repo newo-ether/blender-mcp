@@ -112,6 +112,8 @@ def _load_post_handler(_dummy):
 # ---------------------------------------------------------------------------
 
 GEOMETRY_NODES_SNAPSHOT_SCHEMA = "blender-geometry-nodes/1"
+GEOMETRY_NODES_PATCH_SCHEMA = "blender-geometry-nodes-patch/1"
+GEOMETRY_NODES_PATCH_VALIDATION_SCHEMA = "blender-geometry-nodes-patch-validation/1"
 GEOMETRY_NODES_VIEWS = {"semantic", "layout", "all"}
 
 _GN_NODE_PROPERTY_EXCLUDES = {
@@ -373,25 +375,25 @@ def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
     if not 0 <= neighbor_depth <= 5:
         raise ValueError("neighbor_depth must be an integer from 0 to 5")
 
-    all_nodes = {
+    ordered_nodes = sorted(tree.nodes, key=lambda item: item.name)
+    view_nodes = {
         node.name: _gn_node_record(node, view)
-        for node in sorted(tree.nodes, key=lambda item: item.name)
+        for node in ordered_nodes
     }
-    all_links = (
-        sorted(
-            (_gn_link_record(link) for link in tree.links),
-            key=lambda link: (
-                link["from_node"], link["from_socket"],
-                link["to_node"], link["to_socket"],
-                link.get("multi_input_sort_id", -1),
-            ),
-        )
-        if include_semantic else []
+    graph_links = sorted(
+        (_gn_link_record(link) for link in tree.links),
+        key=lambda link: (
+            link["from_node"], link["from_socket"],
+            link["to_node"], link["to_socket"],
+            link.get("multi_input_sort_id", -1),
+        ),
     )
-    interface = _gn_tree_interface(tree, include_semantic)
+    view_links = graph_links if include_semantic else []
+    full_interface = _gn_tree_interface(tree, True)
+    view_interface = full_interface if include_semantic else []
 
     requested_nodes = sorted(set(node_names or ()))
-    missing_nodes = [name for name in requested_nodes if name not in all_nodes]
+    missing_nodes = [name for name in requested_nodes if name not in view_nodes]
     if missing_nodes:
         raise ValueError(f"Nodes not found in {tree.name!r}: {', '.join(missing_nodes)}")
 
@@ -399,17 +401,17 @@ def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
         included_nodes = set(requested_nodes)
         for _iteration in range(neighbor_depth):
             expanded = set(included_nodes)
-            for link in all_links:
+            for link in graph_links:
                 if link["from_node"] in included_nodes or link["to_node"] in included_nodes:
                     expanded.add(link["from_node"])
                     expanded.add(link["to_node"])
             included_nodes = expanded
         nodes = {
-            name: all_nodes[name]
+            name: view_nodes[name]
             for name in sorted(included_nodes)
         }
         links = [
-            link for link in all_links
+            link for link in view_links
             if link["from_node"] in included_nodes and link["to_node"] in included_nodes
         ]
         scope = {
@@ -419,31 +421,29 @@ def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
             "included_nodes": sorted(included_nodes),
         }
     else:
-        nodes = all_nodes
-        links = all_links
+        nodes = view_nodes
+        links = view_links
         scope = {
             "kind": "full",
             "requested_nodes": [],
             "neighbor_depth": 0,
-            "included_nodes": sorted(all_nodes),
+            "included_nodes": sorted(view_nodes),
         }
 
-    full_tree = {
+    editable = bool(getattr(tree, "is_editable", library is None))
+    tree_identity = {
         "name": tree.name,
         "bl_idname": tree.bl_idname,
-        "editable": bool(getattr(tree, "is_editable", library is None)),
+        "editable": editable,
         "library": library.filepath if library else None,
-        "interface": interface,
-        "nodes": all_nodes,
-        "links": all_links,
     }
     snapshot = {
         "schema": GEOMETRY_NODES_SNAPSHOT_SCHEMA,
         "blender_version": list(bpy.app.version[:3]),
         "view": view,
         "tree": {
-            **{key: full_tree[key] for key in ("name", "bl_idname", "editable", "library")},
-            "interface": interface,
+            **tree_identity,
+            "interface": view_interface,
             "nodes": nodes,
             "links": links,
         },
@@ -452,14 +452,28 @@ def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
         "stats": {
             "node_count": len(nodes),
             "link_count": len(links),
-            "interface_item_count": len(interface),
-            "total_node_count": len(all_nodes),
-            "total_link_count": len(all_links),
+            "interface_item_count": len(view_interface),
+            "total_node_count": len(view_nodes),
+            "total_link_count": len(graph_links),
             "json_bytes": 0,
         },
     }
-    full_snapshot = {**snapshot, "tree": full_tree}
-    snapshot["revision"] = _gn_snapshot_revision(full_snapshot)
+    revision_nodes = (
+        view_nodes
+        if view == "all"
+        else {node.name: _gn_node_record(node, "all") for node in ordered_nodes}
+    )
+    revision_snapshot = {
+        "schema": GEOMETRY_NODES_SNAPSHOT_SCHEMA,
+        "view": "all",
+        "tree": {
+            **tree_identity,
+            "interface": full_interface,
+            "nodes": revision_nodes,
+            "links": graph_links,
+        },
+    }
+    snapshot["revision"] = _gn_snapshot_revision(revision_snapshot)
     scope["content_revision"] = _gn_snapshot_revision(snapshot)
     for _iteration in range(3):
         size = len(json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode("utf-8"))
@@ -505,6 +519,637 @@ def _gn_property_schema(owner, prop):
         except (AttributeError, TypeError, RuntimeError):
             pass
     return record
+
+
+def _gn_patch_diagnostic(severity, code, path, message):
+    return {
+        "severity": severity,
+        "code": code,
+        "path": path,
+        "message": message,
+    }
+
+
+def _gn_rna_property(owner, identifier):
+    try:
+        return owner.bl_rna.properties.get(identifier)
+    except (AttributeError, KeyError, TypeError):
+        return None
+
+
+def _gn_resolve_id_reference(value):
+    if not isinstance(value, dict) or value.get("$type") != "ID":
+        return None
+    id_type = value.get("id_type")
+    name = value.get("name")
+    collections = {
+        "Object": bpy.data.objects,
+        "Collection": bpy.data.collections,
+        "Material": bpy.data.materials,
+        "Image": bpy.data.images,
+        "Texture": bpy.data.textures,
+        "GeometryNodeTree": bpy.data.node_groups,
+        "ShaderNodeTree": bpy.data.node_groups,
+        "NodeTree": bpy.data.node_groups,
+    }
+    collection = collections.get(id_type)
+    return collection.get(name) if collection is not None and isinstance(name, str) else None
+
+
+def _gn_decode_patch_value(value, node_refs=None):
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, list):
+        return [_gn_decode_patch_value(item, node_refs) for item in value]
+    if isinstance(value, dict):
+        value_type = value.get("$type")
+        if value_type == "ID":
+            resolved = _gn_resolve_id_reference(value)
+            if resolved is None:
+                raise ValueError(f"Blender ID not found: {value.get('id_type')}/{value.get('name')}")
+            return resolved
+        if value_type == "NodeRef" and node_refs is not None:
+            reference = node_refs.get(value.get("name"))
+            if reference and not reference["removed"]:
+                return reference["node"]
+            raise ValueError(f"Node reference not found: {value.get('name')}")
+    raise ValueError(f"Unsupported typed patch value: {value!r}")
+
+
+def _gn_validate_value(
+    owner, property_name, value, path, diagnostics, node_refs=None, property_path=None,
+):
+    property_path = property_path or path
+    prop = _gn_rna_property(owner, property_name)
+    if prop is None:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "unknown_rna_property", property_path,
+            f"RNA property {property_name!r} does not exist on {owner.bl_rna.identifier}",
+        ))
+        return False
+    if getattr(prop, "is_readonly", False):
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "readonly_rna_property", property_path,
+            f"RNA property {property_name!r} is read-only",
+        ))
+        return False
+    if prop.type == "COLLECTION":
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "unsupported_rna_collection", property_path,
+            f"RNA collection property {property_name!r} is not patchable",
+        ))
+        return False
+
+    array_length = int(getattr(prop, "array_length", 0))
+    if array_length:
+        if not isinstance(value, list) or len(value) != array_length:
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "invalid_array_value", path,
+                f"Expected an array with {array_length} values",
+            ))
+            return False
+        scalar_type = "FLOAT" if prop.type == "FLOAT" else "INT"
+        valid = all(
+            isinstance(item, (int, float)) and not isinstance(item, bool)
+            if scalar_type == "FLOAT"
+            else isinstance(item, int) and not isinstance(item, bool)
+            for item in value
+        )
+        if not valid:
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "invalid_array_item", path,
+                f"Expected {scalar_type.lower()} array values",
+            ))
+            return False
+        hard_min = getattr(prop, "hard_min", None)
+        hard_max = getattr(prop, "hard_max", None)
+        if hard_min is not None and hard_max is not None and any(
+            item < hard_min or item > hard_max for item in value
+        ):
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "rna_value_out_of_range", path,
+                f"Array values must be between {hard_min} and {hard_max}",
+            ))
+            return False
+        return True
+
+    valid = True
+    if prop.type == "BOOLEAN":
+        valid = isinstance(value, bool)
+    elif prop.type == "INT":
+        valid = isinstance(value, int) and not isinstance(value, bool)
+    elif prop.type == "FLOAT":
+        valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+    elif prop.type == "STRING":
+        valid = isinstance(value, str)
+    elif prop.type == "ENUM":
+        try:
+            identifiers = {item.identifier for item in prop.enum_items}
+            valid = isinstance(value, str) and value in identifiers
+            if not valid:
+                diagnostics.append(_gn_patch_diagnostic(
+                    "error", "invalid_enum_value", path,
+                    f"Expected one of: {', '.join(sorted(identifiers))}",
+                ))
+                return False
+        except (AttributeError, RuntimeError, TypeError):
+            valid = isinstance(value, str)
+    elif prop.type == "POINTER":
+        try:
+            _gn_decode_patch_value(value, node_refs)
+        except ValueError as exc:
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "invalid_pointer_value", path, str(exc),
+            ))
+            return False
+
+    if valid and prop.type in {"INT", "FLOAT"}:
+        hard_min = getattr(prop, "hard_min", None)
+        hard_max = getattr(prop, "hard_max", None)
+        if hard_min is not None and value < hard_min:
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "rna_value_out_of_range", path,
+                f"Value must be at least {hard_min}",
+            ))
+            return False
+        if hard_max is not None and value > hard_max:
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "rna_value_out_of_range", path,
+                f"Value must be at most {hard_max}",
+            ))
+            return False
+
+    if not valid:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "invalid_rna_value", path,
+            f"Value is incompatible with RNA type {prop.type}",
+        ))
+    return valid
+
+
+def _gn_resolve_patch_node(node_refs, reference, path, diagnostics):
+    item = node_refs.get(reference)
+    if item is None:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "node_not_found", path, f"Node reference not found: {reference}",
+        ))
+        return None
+    if item["removed"]:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "node_already_removed", path, f"Node was already removed: {reference}",
+        ))
+        return None
+    return item
+
+
+def _gn_resolve_patch_socket(node, socket_id, expected_direction, path, diagnostics):
+    try:
+        direction, index_text, identifier = socket_id.split(":", 2)
+        index = int(index_text)
+    except (AttributeError, TypeError, ValueError):
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "invalid_socket_id", path, f"Invalid socket id: {socket_id!r}",
+        ))
+        return None
+    if direction != expected_direction:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "wrong_socket_direction", path,
+            f"Expected a {expected_direction} socket, got {direction}",
+        ))
+        return None
+    sockets = node.outputs if direction == "output" else node.inputs
+    if not 0 <= index < len(sockets):
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "socket_index_out_of_range", path,
+            f"Socket index {index} is out of range for node {node.name!r}",
+        ))
+        return None
+    socket = sockets[index]
+    actual_identifier = getattr(socket, "identifier", "") or socket.name
+    if identifier != actual_identifier:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "stale_socket_id", path,
+            f"Socket index {index} now identifies {actual_identifier!r}, not {identifier!r}",
+        ))
+        return None
+    return socket
+
+
+def _gn_validate_patch_runtime(tree, patch):
+    diagnostics = []
+    plan = []
+    diff = {
+        "nodes_added": 0,
+        "nodes_removed": 0,
+        "nodes_renamed": 0,
+        "node_properties_changed": 0,
+        "socket_defaults_changed": 0,
+        "links_added": 0,
+        "links_removed": 0,
+        "layouts_changed": 0,
+        "interface_sockets_added": 0,
+        "interface_sockets_removed": 0,
+        "modifier_inputs_changed": 0,
+    }
+    current_revision = _gn_export_tree(tree, "semantic")["revision"]
+    if patch.get("base_revision") != current_revision:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "stale_revision", "/base_revision",
+            f"Patch revision {patch.get('base_revision')!r} does not match current {current_revision!r}",
+        ))
+    if not bool(getattr(tree, "is_editable", tree.library is None)):
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "tree_not_editable", "/tree_name",
+            f"Geometry Node tree {tree.name!r} is linked or otherwise read-only",
+        ))
+
+    users = _gn_tree_users(tree)
+    policy = patch.get("shared_tree_policy", "reject")
+    if len(users) > 1 and policy == "reject":
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "shared_tree_rejected", "/shared_tree_policy",
+            f"Tree has {len(users)} users; select single_user_copy or mutate_shared explicitly",
+        ))
+    elif len(users) > 1 and policy == "mutate_shared":
+        diagnostics.append(_gn_patch_diagnostic(
+            "warning", "shared_tree_mutation", "/shared_tree_policy",
+            f"Patch would affect all {len(users)} users of this tree",
+        ))
+    if policy == "single_user_copy":
+        target_user = patch.get("target_user")
+        if not isinstance(target_user, dict) or not any(
+            all(user.get(key) == value for key, value in target_user.items())
+            for user in users
+        ):
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "target_user_not_found", "/target_user",
+                "target_user does not identify a current modifier or group-node user of this tree",
+            ))
+
+    node_refs = {
+        node.name: {
+            "node": node,
+            "existing": True,
+            "removed": False,
+            "projected_name": node.name,
+        }
+        for node in tree.nodes
+    }
+    projected_names = {node.name for node in tree.nodes}
+    projected_links = {
+        (
+            link.from_node.name,
+            _gn_socket_id(link.from_socket, "OUTPUT", _gn_find_socket_index(link.from_node, link.from_socket, "OUTPUT")),
+            link.to_node.name,
+            _gn_socket_id(link.to_socket, "INPUT", _gn_find_socket_index(link.to_node, link.to_socket, "INPUT")),
+        )
+        for link in tree.links
+    }
+    interface_items = {
+        (getattr(item, "identifier", "") or item.name): {
+            "item": item,
+            "removed": False,
+            "in_out": getattr(item, "in_out", None),
+            "item_type": item.item_type,
+        }
+        for item in tree.interface.items_tree
+    }
+
+    temp_tree = bpy.data.node_groups.new(".BlenderMCP_PatchValidation", "GeometryNodeTree")
+    try:
+        for index, operation in enumerate(patch.get("operations", ())):
+            path = f"/operations/{index}"
+            errors_before = sum(item["severity"] == "error" for item in diagnostics)
+            op = operation["op"]
+            summary = op
+
+            if op == "add_node":
+                reference = operation["id"]
+                if reference in node_refs:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "duplicate_node_reference", f"{path}/id",
+                        f"Node reference already exists: {reference}",
+                    ))
+                else:
+                    try:
+                        node = temp_tree.nodes.new(operation["node_type"])
+                    except RuntimeError as exc:
+                        diagnostics.append(_gn_patch_diagnostic(
+                            "error", "unsupported_node_type", f"{path}/node_type", str(exc),
+                        ))
+                        node = None
+                    if node is not None:
+                        projected_name = operation.get("name") or node.name
+                        if projected_name in projected_names:
+                            diagnostics.append(_gn_patch_diagnostic(
+                                "error", "duplicate_node_name", f"{path}/name",
+                                f"Projected node name already exists: {projected_name}",
+                            ))
+                        node_refs[reference] = {
+                            "node": node,
+                            "existing": False,
+                            "removed": False,
+                            "projected_name": projected_name,
+                        }
+                        projected_names.add(projected_name)
+                        layout = operation.get("layout", {})
+                        if "parent" in layout and layout["parent"] is not None:
+                            parent = _gn_resolve_patch_node(
+                                node_refs, layout["parent"], f"{path}/layout/parent", diagnostics,
+                            )
+                            if parent and parent["node"].bl_idname != "NodeFrame":
+                                diagnostics.append(_gn_patch_diagnostic(
+                                    "error", "layout_parent_not_frame", f"{path}/layout/parent",
+                                    "Node parent must reference a Frame node",
+                                ))
+                        for layout_field in ("location", "width", "height"):
+                            if layout_field in layout:
+                                try:
+                                    setattr(node, layout_field, layout[layout_field])
+                                except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                                    diagnostics.append(_gn_patch_diagnostic(
+                                        "error", "layout_assignment_rejected",
+                                        f"{path}/layout/{layout_field}", str(exc),
+                                    ))
+                        for property_name, value in operation.get("properties", {}).items():
+                            value_path = f"{path}/properties/{property_name}"
+                            if _gn_validate_value(node, property_name, value, value_path, diagnostics, node_refs):
+                                try:
+                                    setattr(node, property_name, _gn_decode_patch_value(value, node_refs))
+                                except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                                    diagnostics.append(_gn_patch_diagnostic(
+                                        "error", "rna_assignment_rejected", value_path, str(exc),
+                                    ))
+                        diff["nodes_added"] += 1
+                        summary = f"Add {operation['node_type']} as {reference}"
+
+            elif op == "remove_node":
+                item = _gn_resolve_patch_node(node_refs, operation["node"], f"{path}/node", diagnostics)
+                if item:
+                    item["removed"] = True
+                    projected_names.discard(item["projected_name"])
+                    projected_links = {
+                        link for link in projected_links
+                        if link[0] != operation["node"] and link[2] != operation["node"]
+                    }
+                    diff["nodes_removed"] += 1
+                    summary = f"Remove node {operation['node']}"
+
+            elif op == "rename_node":
+                item = _gn_resolve_patch_node(node_refs, operation["node"], f"{path}/node", diagnostics)
+                new_name = operation["name"]
+                if item:
+                    if new_name != item["projected_name"] and new_name in projected_names:
+                        diagnostics.append(_gn_patch_diagnostic(
+                            "error", "duplicate_node_name", f"{path}/name",
+                            f"Projected node name already exists: {new_name}",
+                        ))
+                    else:
+                        projected_names.discard(item["projected_name"])
+                        projected_names.add(new_name)
+                        item["projected_name"] = new_name
+                        if not item["existing"]:
+                            item["node"].name = new_name
+                        diff["nodes_renamed"] += 1
+                        summary = f"Rename {operation['node']} to {new_name}"
+
+            elif op == "set_node_property":
+                item = _gn_resolve_patch_node(node_refs, operation["node"], f"{path}/node", diagnostics)
+                if item and _gn_validate_value(
+                    item["node"], operation["property"], operation["value"],
+                    f"{path}/value", diagnostics, node_refs,
+                    property_path=f"{path}/property",
+                ):
+                    if not item["existing"]:
+                        try:
+                            setattr(
+                                item["node"], operation["property"],
+                                _gn_decode_patch_value(operation["value"], node_refs),
+                            )
+                        except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                            diagnostics.append(_gn_patch_diagnostic(
+                                "error", "rna_assignment_rejected", f"{path}/value", str(exc),
+                            ))
+                    diff["node_properties_changed"] += 1
+                    summary = f"Set {operation['node']}.{operation['property']}"
+
+            elif op == "set_socket_default":
+                item = _gn_resolve_patch_node(node_refs, operation["node"], f"{path}/node", diagnostics)
+                if item:
+                    socket = _gn_resolve_patch_socket(
+                        item["node"], operation["socket"], "input", f"{path}/socket", diagnostics,
+                    )
+                    if socket and _gn_validate_value(
+                        socket, "default_value", operation["value"], f"{path}/value", diagnostics, node_refs,
+                    ):
+                        if socket.is_linked and item["existing"]:
+                            diagnostics.append(_gn_patch_diagnostic(
+                                "warning", "linked_socket_default", f"{path}/socket",
+                                "Default is stored but has no effect while the socket is linked",
+                            ))
+                        if not item["existing"]:
+                            try:
+                                socket.default_value = _gn_decode_patch_value(operation["value"], node_refs)
+                            except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                                diagnostics.append(_gn_patch_diagnostic(
+                                    "error", "rna_assignment_rejected", f"{path}/value", str(exc),
+                                ))
+                        diff["socket_defaults_changed"] += 1
+                        summary = f"Set default {operation['node']}:{operation['socket']}"
+
+            elif op in {"add_link", "remove_link"}:
+                from_item = _gn_resolve_patch_node(
+                    node_refs, operation["from_node"], f"{path}/from_node", diagnostics,
+                )
+                to_item = _gn_resolve_patch_node(
+                    node_refs, operation["to_node"], f"{path}/to_node", diagnostics,
+                )
+                from_socket = _gn_resolve_patch_socket(
+                    from_item["node"], operation["from_socket"], "output", f"{path}/from_socket", diagnostics,
+                ) if from_item else None
+                to_socket = _gn_resolve_patch_socket(
+                    to_item["node"], operation["to_socket"], "input", f"{path}/to_socket", diagnostics,
+                ) if to_item else None
+                link_key = (
+                    operation["from_node"], operation["from_socket"],
+                    operation["to_node"], operation["to_socket"],
+                )
+                if from_socket and to_socket:
+                    if op == "add_link":
+                        if link_key in projected_links:
+                            diagnostics.append(_gn_patch_diagnostic(
+                                "error", "duplicate_link", path, "Link already exists",
+                            ))
+                        elif not getattr(to_socket, "is_multi_input", False) and any(
+                            link[2:] == link_key[2:] for link in projected_links
+                        ):
+                            diagnostics.append(_gn_patch_diagnostic(
+                                "error", "input_socket_occupied", f"{path}/to_socket",
+                                "Remove the existing link before linking a non-multi-input socket",
+                            ))
+                        else:
+                            projected_links.add(link_key)
+                            if from_socket.type != to_socket.type:
+                                diagnostics.append(_gn_patch_diagnostic(
+                                    "warning", "implicit_socket_conversion", path,
+                                    f"Blender must convert {from_socket.type} to {to_socket.type}",
+                                ))
+                            diff["links_added"] += 1
+                            summary = f"Link {operation['from_node']} to {operation['to_node']}"
+                    elif link_key not in projected_links:
+                        diagnostics.append(_gn_patch_diagnostic(
+                            "error", "link_not_found", path, "Link does not exist in projected graph",
+                        ))
+                    else:
+                        projected_links.remove(link_key)
+                        diff["links_removed"] += 1
+                        summary = f"Unlink {operation['from_node']} from {operation['to_node']}"
+
+            elif op == "set_node_layout":
+                item = _gn_resolve_patch_node(node_refs, operation["node"], f"{path}/node", diagnostics)
+                parent_ref = operation.get("parent")
+                if item and parent_ref is not None:
+                    parent = _gn_resolve_patch_node(
+                        node_refs, parent_ref, f"{path}/parent", diagnostics,
+                    )
+                    if parent and parent["node"].bl_idname != "NodeFrame":
+                        diagnostics.append(_gn_patch_diagnostic(
+                            "error", "layout_parent_not_frame", f"{path}/parent",
+                            "Node parent must reference a Frame node",
+                        ))
+                    if parent is item:
+                        diagnostics.append(_gn_patch_diagnostic(
+                            "error", "layout_parent_cycle", f"{path}/parent",
+                            "A node cannot be its own parent",
+                        ))
+                if item:
+                    for layout_field in ("width", "height"):
+                        if layout_field in operation:
+                            _gn_validate_value(
+                                item["node"], layout_field, operation[layout_field],
+                                f"{path}/{layout_field}", diagnostics, node_refs,
+                            )
+                    diff["layouts_changed"] += 1
+                    summary = f"Update layout for {operation['node']}"
+
+            elif op == "add_interface_socket":
+                reference = operation["id"]
+                if reference in interface_items and not interface_items[reference]["removed"]:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "duplicate_interface_reference", f"{path}/id",
+                        f"Interface reference already exists: {reference}",
+                    ))
+                try:
+                    probe_socket = temp_tree.interface.new_socket(
+                        name=operation["name"],
+                        in_out=operation["in_out"],
+                        socket_type=operation["socket_type"],
+                    )
+                    socket_type_valid = True
+                except (TypeError, ValueError, RuntimeError):
+                    socket_type_valid = False
+                if not socket_type_valid:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "unsupported_interface_socket", f"{path}/socket_type",
+                        f"Socket type is not valid for Geometry Nodes: {operation['socket_type']}",
+                    ))
+                elif "default" in operation and hasattr(probe_socket, "default_value"):
+                    if _gn_validate_value(
+                        probe_socket, "default_value", operation["default"],
+                        f"{path}/default", diagnostics, node_refs,
+                    ):
+                        try:
+                            probe_socket.default_value = _gn_decode_patch_value(
+                                operation["default"], node_refs,
+                            )
+                        except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                            diagnostics.append(_gn_patch_diagnostic(
+                                "error", "rna_assignment_rejected", f"{path}/default", str(exc),
+                            ))
+                parent_ref = operation.get("parent")
+                if parent_ref:
+                    parent = interface_items.get(parent_ref)
+                    if not parent or parent["removed"] or parent["item_type"] != "PANEL":
+                        diagnostics.append(_gn_patch_diagnostic(
+                            "error", "interface_parent_not_found", f"{path}/parent",
+                            f"Interface panel not found: {parent_ref}",
+                        ))
+                interface_items[reference] = {
+                    "item": probe_socket if socket_type_valid else None, "removed": False,
+                    "in_out": operation["in_out"], "item_type": "SOCKET",
+                }
+                diff["interface_sockets_added"] += 1
+                summary = f"Add {operation['in_out']} interface socket {reference}"
+
+            elif op == "remove_interface_socket":
+                reference = operation["identifier"]
+                item = interface_items.get(reference)
+                if not item or item["removed"] or item["item_type"] != "SOCKET":
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "interface_socket_not_found", f"{path}/identifier",
+                        f"Interface socket not found: {reference}",
+                    ))
+                else:
+                    item["removed"] = True
+                    diff["interface_sockets_removed"] += 1
+                    summary = f"Remove interface socket {reference}"
+
+            elif op == "set_modifier_input":
+                obj = bpy.data.objects.get(operation["object"])
+                modifier = obj.modifiers.get(operation["modifier"]) if obj else None
+                interface = interface_items.get(operation["socket"])
+                if obj is None:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "object_not_found", f"{path}/object",
+                        f"Object not found: {operation['object']}",
+                    ))
+                elif modifier is None or modifier.type != "NODES":
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "modifier_not_found", f"{path}/modifier",
+                        f"Geometry Nodes modifier not found: {operation['modifier']}",
+                    ))
+                elif modifier.node_group != tree:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "modifier_tree_mismatch", f"{path}/modifier",
+                        "Modifier does not use the patched node tree",
+                    ))
+                if not interface or interface["removed"] or interface["in_out"] != "INPUT":
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "modifier_input_not_found", f"{path}/socket",
+                        f"Input interface socket not found: {operation['socket']}",
+                    ))
+                elif interface["item"] is not None and hasattr(interface["item"], "default_value"):
+                    _gn_validate_value(
+                        interface["item"], "default_value", operation["value"],
+                        f"{path}/value", diagnostics, node_refs,
+                    )
+                diff["modifier_inputs_changed"] += 1
+                summary = f"Set modifier input {operation['object']}/{operation['modifier']}"
+
+            errors_after = sum(item["severity"] == "error" for item in diagnostics)
+            plan.append({
+                "index": index,
+                "op": op,
+                "status": "ready" if errors_after == errors_before else "invalid",
+                "summary": summary,
+            })
+    finally:
+        bpy.data.node_groups.remove(temp_tree)
+
+    return {
+        "schema": GEOMETRY_NODES_PATCH_VALIDATION_SCHEMA,
+        "valid": not any(item["severity"] == "error" for item in diagnostics),
+        "stage": "runtime",
+        "will_mutate": False,
+        "tree_name": tree.name,
+        "base_revision": patch.get("base_revision"),
+        "current_revision": current_revision,
+        "shared_tree_policy": policy,
+        "users": users,
+        "diagnostics": diagnostics,
+        "plan": plan,
+        "semantic_diff": diff,
+    }
 
 class BlenderMCPServer:
     def __init__(self, host='localhost', port=9876):
@@ -742,6 +1387,7 @@ class BlenderMCPServer:
             "list_geometry_node_trees": self.list_geometry_node_trees,
             "export_geometry_node_tree": self.export_geometry_node_tree,
             "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
+            "validate_geometry_node_patch": self.validate_geometry_node_patch,
             "get_viewport_screenshot": self.get_viewport_screenshot,
             "execute_code": self.execute_code,
             "get_telemetry_consent": self.get_telemetry_consent,
@@ -906,6 +1552,30 @@ class BlenderMCPServer:
             }
         finally:
             bpy.data.node_groups.remove(tree)
+
+    def validate_geometry_node_patch(self, patch):
+        """Build a runtime-resolved patch plan without mutating live Blender data."""
+        if not isinstance(patch, dict):
+            raise ValueError("Geometry Nodes patch must be a JSON object")
+        if patch.get("schema") != GEOMETRY_NODES_PATCH_SCHEMA:
+            raise ValueError(f"Expected patch schema {GEOMETRY_NODES_PATCH_SCHEMA!r}")
+        tree_name = patch.get("tree_name")
+        tree = bpy.data.node_groups.get(tree_name) if isinstance(tree_name, str) else None
+        if tree is None or tree.bl_idname != "GeometryNodeTree":
+            return {
+                "schema": GEOMETRY_NODES_PATCH_VALIDATION_SCHEMA,
+                "valid": False,
+                "stage": "runtime",
+                "will_mutate": False,
+                "tree_name": tree_name,
+                "diagnostics": [_gn_patch_diagnostic(
+                    "error", "tree_not_found", "/tree_name",
+                    f"Geometry Node tree not found: {tree_name}",
+                )],
+                "plan": [],
+                "semantic_diff": {},
+            }
+        return _gn_validate_patch_runtime(tree, patch)
 
     @staticmethod
     def _get_aabb(obj):

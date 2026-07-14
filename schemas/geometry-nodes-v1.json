@@ -17,7 +17,11 @@
       "maxItems": 3
     },
     "view": {"enum": ["semantic", "layout", "all"]},
-    "revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "revision": {
+      "description": "Full all-view source revision, independent of export view and subgraph scope",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
     "tree": {"$ref": "#/$defs/tree"},
     "scope": {
       "type": "object",

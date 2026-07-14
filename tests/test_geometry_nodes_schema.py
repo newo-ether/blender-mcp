@@ -23,7 +23,7 @@ def sample_snapshot() -> dict:
     return {
         "schema": schema.SNAPSHOT_SCHEMA,
         "blender_version": [5, 1, 2],
-        "view": "semantic",
+        "view": "all",
         "scope": {
             "kind": "full",
             "requested_nodes": [],
@@ -60,6 +60,28 @@ def sample_snapshot() -> dict:
     }
 
 
+def sample_patch() -> dict:
+    return {
+        "schema": schema.PATCH_SCHEMA,
+        "tree_name": "Example",
+        "base_revision": "sha256:" + "a" * 64,
+        "operations": [
+            {
+                "op": "add_node",
+                "id": "new_cube",
+                "node_type": "GeometryNodeMeshCube",
+                "layout": {"location": [10.0, 20.0]},
+            },
+            {
+                "op": "set_socket_default",
+                "node": "new_cube",
+                "socket": "input:0:Size",
+                "value": [1.0, 2.0, 3.0],
+            },
+        ],
+    }
+
+
 class GeometryNodesSchemaTests(unittest.TestCase):
     def test_canonical_json_is_order_independent(self):
         left = {"b": [2, 1], "a": {"z": True, "x": None}}
@@ -76,6 +98,16 @@ class GeometryNodesSchemaTests(unittest.TestCase):
 
         second["tree"]["nodes"]["Cube"]["properties"]["domain"] = "POINT"
         self.assertNotEqual(first["revision"], schema.snapshot_revision(second))
+
+    def test_filtered_snapshot_cannot_invent_source_revision(self):
+        snapshot = sample_snapshot()
+        snapshot["view"] = "semantic"
+        snapshot["scope"]["kind"] = "subgraph"
+        snapshot["scope"]["included_nodes"] = ["Cube"]
+        with self.assertRaises(schema.GeometryNodesSchemaError):
+            schema.snapshot_revision(snapshot)
+        with self.assertRaises(schema.GeometryNodesSchemaError):
+            schema.finalize_snapshot(snapshot)
 
     def test_invalid_view_and_structure_are_rejected(self):
         snapshot = sample_snapshot()
@@ -112,6 +144,69 @@ class GeometryNodesSchemaTests(unittest.TestCase):
                 loaded = json.load(handle)
             self.assertEqual(loaded, finalized)
             self.assertTrue(destination.read_bytes().endswith(b"\n"))
+
+    def test_valid_patch_has_no_structural_diagnostics(self):
+        patch = sample_patch()
+        self.assertEqual(schema.validate_patch_structure(patch), [])
+        self.assertEqual(schema.assert_valid_patch(patch), patch)
+
+    def test_patch_diagnostics_are_path_addressed(self):
+        patch = sample_patch()
+        patch["base_revision"] = "stale"
+        patch["operations"].append({
+            "op": "add_link",
+            "from_node": "new_cube",
+            "from_socket": "input:0:wrong-direction",
+            "to_node": "Cube",
+            "to_socket": "output:0:wrong-direction",
+            "unexpected": True,
+        })
+        diagnostics = schema.validate_patch_structure(patch)
+        keyed = {(item["code"], item["path"]) for item in diagnostics}
+        self.assertIn(("invalid_revision", "/base_revision"), keyed)
+        self.assertIn(("invalid_socket_id", "/operations/2/from_socket"), keyed)
+        self.assertIn(("invalid_socket_id", "/operations/2/to_socket"), keyed)
+        self.assertIn(("unknown_field", "/operations/2/unexpected"), keyed)
+
+        patch = sample_patch()
+        patch["operations"][0]["layout"]["mystery"] = 1
+        diagnostics = schema.validate_patch_structure(patch)
+        self.assertIn(
+            ("unknown_field", "/operations/0/layout/mystery"),
+            {(item["code"], item["path"]) for item in diagnostics},
+        )
+
+    def test_patch_file_read_is_workspace_bound_and_validated(self):
+        patch = sample_patch()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            path = root / "patches" / "valid.json"
+            path.parent.mkdir()
+            path.write_text(json.dumps(patch), encoding="utf-8")
+            self.assertEqual(schema.read_patch_json("patches/valid.json", root), patch)
+
+            path.write_text("{not-json", encoding="utf-8")
+            with self.assertRaises(schema.GeometryNodesSchemaError):
+                schema.read_patch_json("patches/valid.json", root)
+
+            path.write_text(json.dumps({"schema": "bad"}), encoding="utf-8")
+            self.assertEqual(
+                schema.read_patch_json("patches/valid.json", root),
+                {"schema": "bad"},
+            )
+
+    def test_single_user_copy_requires_explicit_target(self):
+        patch = sample_patch()
+        patch["shared_tree_policy"] = "single_user_copy"
+        diagnostics = schema.validate_patch_structure(patch)
+        self.assertIn("missing_target_user", {item["code"] for item in diagnostics})
+
+        patch["target_user"] = {
+            "kind": "MODIFIER",
+            "object": "Cube",
+            "modifier": "GeometryNodes",
+        }
+        self.assertEqual(schema.validate_patch_structure(patch), [])
 
 
 if __name__ == "__main__":
