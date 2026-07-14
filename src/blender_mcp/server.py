@@ -596,6 +596,52 @@ def search_geometry_node_types(
 
 
 @mcp.tool()
+@telemetry_tool("search_blender_node_assets")
+def search_blender_node_assets(
+    ctx: Context,
+    query: str = "",
+    library: str = "",
+    tree_type: str = "",
+    detail: str = "summary",
+    offset: int = 0,
+    limit: int = 20,
+    user_prompt: str = "",
+) -> str:
+    """Search installed official Blender Essentials node assets.
+
+    Blender loads assets only into a disposable inspection scope and removes all
+    appended datablocks before returning. Summary is compact; full includes the
+    complete interface for up to 20 assets.
+
+    Parameters:
+    - query: Text across asset name, description, author, tags, and library
+    - library: Optional library filename substring
+    - tree_type: Optional exact GeometryNodeTree/ShaderNodeTree/CompositorNodeTree
+    - detail: summary or full
+    - offset: Zero-based result offset
+    - limit: 1-100 for summary, 1-20 for full
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "search_blender_node_assets",
+            {
+                "query": query,
+                "library": library,
+                "tree_type": tree_type,
+                "detail": detail,
+                "offset": offset,
+                "limit": limit,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error searching Blender node assets: {str(e)}")
+        return f"Error searching Blender node assets: {str(e)}"
+
+
+@mcp.tool()
 @telemetry_tool("get_geometry_node_tree_index")
 def get_geometry_node_tree_index(
     ctx: Context,

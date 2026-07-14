@@ -67,6 +67,26 @@ class RuntimeKnowledgeToolTests(unittest.TestCase):
             "limit": 25,
         })
 
+    def test_node_asset_search_forwards_filters_and_detail(self):
+        response = json.loads(server.search_blender_node_assets(
+            None,
+            query="Cloth",
+            library="dynamics",
+            tree_type="GeometryNodeTree",
+            detail="full",
+            offset=2,
+            limit=10,
+        ))
+        self.assertEqual(response["command"], "search_blender_node_assets")
+        self.assertEqual(response["params"], {
+            "query": "Cloth",
+            "library": "dynamics",
+            "tree_type": "GeometryNodeTree",
+            "detail": "full",
+            "offset": 2,
+            "limit": 10,
+        })
+
 
 if __name__ == "__main__":
     unittest.main()

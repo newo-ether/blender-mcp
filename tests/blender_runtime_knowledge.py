@@ -78,6 +78,47 @@ def main() -> None:
     )
     assert len(bpy.data.node_groups) == before_groups
 
+    before_ids = set(addon._gn_blend_data_ids())
+    if bpy.app.version >= (5, 2, 0):
+        assets = server.search_blender_node_assets(
+            library="geometry_nodes_dynamics_assets.blend",
+            detail="summary",
+            limit=20,
+        )
+        expected_assets = {
+            "Set Effector",
+            "Hair Dynamics",
+            "Custom Force",
+            "Custom Effector",
+            "Collider",
+            "Cloth Dynamics (Experimental)",
+        }
+        assert {item["name"] for item in assets["assets"]} == expected_assets
+        assert assets["total_matches"] == 6
+        full_asset = server.search_blender_node_assets(
+            query="Cloth Dynamics",
+            library="geometry_nodes_dynamics_assets.blend",
+            detail="full",
+            limit=1,
+        )
+        assert full_asset["assets"][0]["interface"]
+        assert full_asset["assets"][0]["node_count"] > 20
+    else:
+        assets = server.search_blender_node_assets(
+            tree_type="GeometryNodeTree",
+            detail="summary",
+            limit=1,
+        )
+        assert assets["total_assets"] > 0
+        assert assets["total_matches"] > 0
+    cached_assets = server.search_blender_node_assets(
+        tree_type="GeometryNodeTree",
+        detail="summary",
+        limit=1,
+    )
+    assert cached_assets["errors"] == []
+    assert set(addon._gn_blend_data_ids()) == before_ids
+
     result = {
         "blender_version": bpy.app.version_string,
         "node_type": node_type,
@@ -87,6 +128,8 @@ def main() -> None:
         "catalog_total": first_catalog["total_types"],
         "query_matches": first_catalog["total_matches"],
         "repeat_item_count": repeat_items["count"],
+        "node_asset_total": assets["total_assets"],
+        "node_asset_libraries": assets["library_count"],
     }
     print("BLENDER_RUNTIME_KNOWLEDGE=" + json.dumps(result, ensure_ascii=False, sort_keys=True))
 

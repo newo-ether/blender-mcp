@@ -121,8 +121,14 @@ GEOMETRY_NODES_PATCH_VALIDATION_SCHEMA = "blender-geometry-nodes-patch-validatio
 GEOMETRY_NODES_VIEWS = {"semantic", "layout", "all"}
 GEOMETRY_NODE_TYPE_SCHEMA_DETAILS = {"compact", "full"}
 GEOMETRY_NODE_TYPE_CATALOG_SCHEMA = "blender-geometry-node-type-catalog/1"
+BLENDER_NODE_ASSET_CATALOG_SCHEMA = "blender-node-asset-catalog/1"
 
 _GN_NODE_TYPE_CATALOG_CACHE = {}
+_GN_ESSENTIALS_CATALOG_CACHE = {}
+
+
+class _GNAssetCleanupError(RuntimeError):
+    """Raised when disposable official-asset inspection cannot cleanly unwind."""
 
 BLENDER_VERSION_CONTEXT_SCHEMA = "blender-version-context/1"
 
@@ -737,6 +743,179 @@ def _gn_geometry_node_type_catalog():
     _GN_NODE_TYPE_CATALOG_CACHE.clear()
     _GN_NODE_TYPE_CATALOG_CACHE[key] = records
     return records
+
+
+def _gn_essentials_library_paths():
+    """Find bundled official node asset libraries below Blender DATAFILES."""
+    root = bpy.utils.system_resource("DATAFILES")
+    node_assets = os.path.join(root, "assets", "nodes") if root else ""
+    if not node_assets or not os.path.isdir(node_assets):
+        return []
+    return [
+        os.path.join(node_assets, name)
+        for name in sorted(os.listdir(node_assets))
+        if name.lower().endswith(".blend")
+        and os.path.isfile(os.path.join(node_assets, name))
+    ]
+
+
+def _gn_blend_data_ids():
+    """Snapshot every currently loaded Blender ID by pointer."""
+    result = {}
+    for prop in bpy.data.bl_rna.properties:
+        if prop.identifier == "rna_type" or prop.type != "COLLECTION":
+            continue
+        try:
+            collection = getattr(bpy.data, prop.identifier)
+            for item in collection:
+                if isinstance(item, bpy.types.ID):
+                    result[item.as_pointer()] = item
+        except (AttributeError, TypeError, RuntimeError):
+            continue
+    return result
+
+
+def _gn_node_group_dependencies(tree):
+    dependencies = set()
+    pending = [tree]
+    visited = {tree.as_pointer()}
+    while pending:
+        current = pending.pop()
+        for node in current.nodes:
+            nested = getattr(node, "node_tree", None)
+            if nested is None or not isinstance(nested, bpy.types.NodeTree):
+                continue
+            pointer = nested.as_pointer()
+            if pointer in visited:
+                continue
+            visited.add(pointer)
+            dependencies.add((nested.name, nested.bl_idname))
+            pending.append(nested)
+    return [
+        {"name": name, "tree_type": tree_type}
+        for name, tree_type in sorted(dependencies)
+    ]
+
+
+def _gn_node_asset_record(tree, library_path):
+    metadata = tree.asset_data
+    interface = _gn_tree_interface(tree, True)
+    return {
+        "name": tree.name,
+        "description": getattr(metadata, "description", "") or "",
+        "author": getattr(metadata, "author", "") or "",
+        "catalog_id": str(getattr(metadata, "catalog_id", "") or ""),
+        "tags": sorted(tag.name for tag in getattr(metadata, "tags", [])),
+        "tree_type": tree.bl_idname,
+        "source_library": os.path.basename(library_path),
+        "source_path": os.path.normpath(library_path),
+        "interface": interface,
+        "node_count": len(tree.nodes),
+        "link_count": len(tree.links),
+        "interface_item_count": len(interface),
+        "dependencies": _gn_node_group_dependencies(tree),
+    }
+
+
+def _gn_load_official_node_asset_library(library_path):
+    """Inspect one library and remove every ID appended during inspection."""
+    before = _gn_blend_data_ids()
+    records = []
+    cleanup_error = None
+    try:
+        try:
+            loader = bpy.data.libraries.load(library_path, link=False, assets_only=True)
+        except TypeError:
+            loader = bpy.data.libraries.load(library_path, link=False)
+        with loader as (data_from, data_to):
+            data_to.node_groups = list(data_from.node_groups)
+        for tree in data_to.node_groups:
+            if tree is None or tree.asset_data is None:
+                continue
+            records.append(_gn_node_asset_record(tree, library_path))
+    finally:
+        after = _gn_blend_data_ids()
+        appended = [item for pointer, item in after.items() if pointer not in before]
+        if appended:
+            try:
+                bpy.data.batch_remove(ids=appended)
+            except Exception as exc:
+                cleanup_error = exc
+        remaining = [
+            item for pointer, item in _gn_blend_data_ids().items()
+            if pointer not in before
+        ]
+        if remaining:
+            names = ", ".join(
+                f"{item.bl_rna.identifier}/{item.name}" for item in remaining[:10]
+            )
+            raise _GNAssetCleanupError(
+                f"Official asset inspection leaked {len(remaining)} datablocks: {names}"
+            ) from cleanup_error
+        if cleanup_error is not None:
+            raise _GNAssetCleanupError(
+                f"Official asset inspection cleanup failed: {cleanup_error}"
+            ) from cleanup_error
+    return records
+
+
+def _gn_official_node_asset_catalog():
+    paths = _gn_essentials_library_paths()
+    key = (
+        _gn_node_catalog_cache_key(),
+        tuple(
+            (path, os.path.getsize(path), int(os.path.getmtime(path)))
+            for path in paths
+        ),
+    )
+    cached = _GN_ESSENTIALS_CATALOG_CACHE.get(key)
+    if cached is not None:
+        return cached
+    records = []
+    errors = []
+    for path in paths:
+        try:
+            records.extend(_gn_load_official_node_asset_library(path))
+        except _GNAssetCleanupError:
+            raise
+        except Exception as exc:
+            errors.append({
+                "library": os.path.basename(path),
+                "path": os.path.normpath(path),
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+    records.sort(key=lambda item: (item["name"].casefold(), item["source_library"]))
+    result = {"records": records, "errors": errors, "library_paths": paths}
+    _GN_ESSENTIALS_CATALOG_CACHE.clear()
+    _GN_ESSENTIALS_CATALOG_CACHE[key] = result
+    return result
+
+
+def _gn_node_asset_summary(record):
+    inputs = []
+    outputs = []
+    panels = []
+    for item in record["interface"]:
+        if item["item_type"] == "PANEL":
+            panels.append(item["name"])
+        elif item.get("in_out") == "INPUT":
+            inputs.append(item["name"])
+        elif item.get("in_out") == "OUTPUT":
+            outputs.append(item["name"])
+    return {
+        key: record[key]
+        for key in (
+            "name", "description", "author", "catalog_id", "tags",
+            "tree_type", "source_library", "source_path", "node_count",
+            "link_count", "interface_item_count", "dependencies",
+        )
+    } | {
+        "interface_summary": {
+            "inputs": inputs,
+            "outputs": outputs,
+            "panels": panels,
+        },
+    }
 
 
 def _gn_patch_diagnostic(severity, code, path, message):
@@ -1410,6 +1589,7 @@ def _gn_validate_patch_runtime(tree, patch):
 
 
 def _gn_modifier_input_value(modifier, identifier):
+    """Read one modifier input through the active Blender-version adapter."""
     properties = getattr(modifier, "properties", None)
     if properties is not None:
         try:
@@ -1424,6 +1604,83 @@ def _gn_modifier_input_value(modifier, identifier):
     except (AttributeError, KeyError, TypeError, RuntimeError):
         pass
     raise KeyError(f"Modifier input has no restorable value: {identifier}")
+
+
+def _gn_modifier_input_record(modifier, identifier):
+    """Capture value/attribute state and animation paths for one input."""
+    properties = getattr(modifier, "properties", None)
+    if properties is not None:
+        try:
+            socket_value = getattr(properties.inputs, identifier)
+            fields = {}
+            data_paths = {}
+            for field in ("type", "attribute_name", "value"):
+                if not hasattr(socket_value, field):
+                    continue
+                try:
+                    fields[field] = getattr(socket_value, field)
+                except (AttributeError, KeyError, TypeError, RuntimeError):
+                    continue
+                try:
+                    data_paths[field] = socket_value.path_from_id(field)
+                except (AttributeError, TypeError, ValueError, RuntimeError):
+                    pass
+            return {
+                "adapter": "geometry_nodes_modifier_interface",
+                "fields": fields,
+                "data_paths": data_paths,
+            }
+        except (AttributeError, KeyError, TypeError, RuntimeError):
+            pass
+
+    fields = {}
+    data_paths = {}
+    candidate_keys = (
+        identifier,
+        f"{identifier}_use_attribute",
+        f"{identifier}_attribute_name",
+    )
+    try:
+        keys = set(modifier.keys())
+    except (AttributeError, TypeError, RuntimeError):
+        keys = set()
+    for key in candidate_keys:
+        if key not in keys:
+            continue
+        fields[key] = modifier[key]
+        data_paths[key] = f'["{key}"]'
+    if identifier not in fields:
+        raise KeyError(f"Modifier input has no restorable value: {identifier}")
+    return {
+        "adapter": "legacy_id_property",
+        "fields": fields,
+        "data_paths": data_paths,
+    }
+
+
+def _gn_restore_modifier_input_record(modifier, identifier, record):
+    adapter = record.get("adapter") if isinstance(record, dict) else None
+    fields = record.get("fields", {}) if isinstance(record, dict) else {}
+    if adapter == "geometry_nodes_modifier_interface":
+        properties = getattr(modifier, "properties", None)
+        if properties is None:
+            raise RuntimeError("Geometry Nodes modifier interface is unavailable")
+        socket_value = getattr(properties.inputs, identifier)
+        for field in ("type", "attribute_name", "value"):
+            if field not in fields or not hasattr(socket_value, field):
+                continue
+            prop = _gn_rna_property(socket_value, field)
+            if prop is not None and getattr(prop, "is_readonly", False):
+                continue
+            setattr(socket_value, field, fields[field])
+        return adapter
+    if adapter == "legacy_id_property":
+        for key, value in fields.items():
+            modifier[key] = value
+        return adapter
+    # Compatibility for pre-adapter in-memory state records.
+    _gn_set_modifier_input_value(modifier, identifier, record)
+    return "legacy_state_value"
 
 
 def _gn_set_modifier_input_value(modifier, identifier, value):
@@ -1446,7 +1703,7 @@ def _gn_modifier_state(modifier, tree):
             continue
         identifier = getattr(item, "identifier", "") or item.name
         try:
-            state[identifier] = _gn_modifier_input_value(modifier, identifier)
+            state[identifier] = _gn_modifier_input_record(modifier, identifier)
         except (AttributeError, KeyError, TypeError, RuntimeError):
             continue
     return state
@@ -1456,7 +1713,7 @@ def _gn_restore_modifier_state(modifier, state):
     errors = []
     for identifier, value in state.items():
         try:
-            _gn_set_modifier_input_value(modifier, identifier, value)
+            _gn_restore_modifier_input_record(modifier, identifier, value)
         except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
             errors.append(f"{identifier}: {type(exc).__name__}: {exc}")
     return errors
@@ -2065,6 +2322,7 @@ class BlenderMCPServer:
             "export_geometry_node_tree": self.export_geometry_node_tree,
             "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
             "search_geometry_node_types": self.search_geometry_node_types,
+            "search_blender_node_assets": self.search_blender_node_assets,
             "get_geometry_node_tree_index": self.get_geometry_node_tree_index,
             "validate_geometry_node_patch": self.validate_geometry_node_patch,
             "apply_geometry_node_patch": self.apply_geometry_node_patch,
@@ -2295,6 +2553,68 @@ class BlenderMCPServer:
             "total_matches": len(matches),
             "next_offset": next_offset if next_offset < len(matches) else None,
             "node_types": page,
+        }
+
+    def search_blender_node_assets(
+        self, query="", library="", tree_type="", detail="summary", offset=0, limit=20,
+    ):
+        """Search installed official Essentials node assets without retaining IDs."""
+        try:
+            offset = int(offset)
+            limit = int(limit)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("offset and limit must be integers") from exc
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be from 1 to 100")
+        detail = str(detail or "summary").strip().lower()
+        if detail not in {"summary", "full"}:
+            raise ValueError("detail must be 'summary' or 'full'")
+        if detail == "full" and limit > 20:
+            raise ValueError("full detail limit must not exceed 20")
+        query_value = "" if query is None else str(query)
+        library_value = "" if library is None else str(library)
+        tree_type_value = "" if tree_type is None else str(tree_type)
+        query_text = query_value.strip().casefold()
+        library_text = library_value.strip().casefold()
+        tree_type_text = tree_type_value.strip().casefold()
+        catalog = _gn_official_node_asset_catalog()
+        matches = []
+        for item in catalog["records"]:
+            if library_text and library_text not in item["source_library"].casefold():
+                continue
+            if tree_type_text and tree_type_text != item["tree_type"].casefold():
+                continue
+            haystack = " ".join((
+                item["name"], item["description"], item["author"],
+                item["source_library"], item["tree_type"], " ".join(item["tags"]),
+            )).casefold()
+            if query_text and query_text not in haystack:
+                continue
+            matches.append(item)
+        page = matches[offset:offset + limit]
+        next_offset = offset + len(page)
+        return {
+            "schema": BLENDER_NODE_ASSET_CATALOG_SCHEMA,
+            "blender_version": list(bpy.app.version[:3]),
+            "blender_version_string": bpy.app.version_string,
+            "build_hash": _blender_app_text("build_hash"),
+            "query": query_value,
+            "library": library_value,
+            "tree_type": tree_type_value,
+            "detail": detail,
+            "offset": offset,
+            "limit": limit,
+            "library_count": len(catalog["library_paths"]),
+            "total_assets": len(catalog["records"]),
+            "total_matches": len(matches),
+            "next_offset": next_offset if next_offset < len(matches) else None,
+            "assets": [
+                dict(item) if detail == "full" else _gn_node_asset_summary(item)
+                for item in page
+            ],
+            "errors": catalog["errors"],
         }
 
     def get_geometry_node_tree_index(self, tree_name, query="", offset=0, limit=100):

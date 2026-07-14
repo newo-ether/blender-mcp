@@ -408,6 +408,37 @@ def run_test():
         application["modifier_input_adapters"][0]["adapter"] == expected_adapter,
         "Wrong modifier input runtime adapter",
     )
+    modifier_input_record = namespace["_gn_modifier_input_record"](
+        modifier,
+        scale_identifier,
+    )
+    assert_true(
+        modifier_input_record["adapter"] == expected_adapter,
+        "Modifier state snapshot selected the wrong adapter",
+    )
+    if expected_adapter == "geometry_nodes_modifier_interface":
+        assert_true(
+            abs(modifier_input_record["fields"]["value"] - 2.0) < 1e-6,
+            "5.2 modifier record lost its value",
+        )
+        assert_true(
+            scale_identifier in modifier_input_record["data_paths"]["value"],
+            "5.2 modifier record lost its animation path",
+        )
+        assert_true(
+            "type" in modifier_input_record["fields"],
+            "5.2 modifier record lost its value/attribute mode",
+        )
+    else:
+        assert_true(
+            abs(modifier_input_record["fields"][scale_identifier] - 2.0) < 1e-6,
+            "Legacy modifier record lost its value",
+        )
+        assert_true(
+            modifier_input_record["data_paths"][scale_identifier]
+            == f'["{scale_identifier}"]',
+            "Legacy modifier record has the wrong animation path",
+        )
 
     committed_before_stale = server.export_geometry_node_tree(committed_tree.name, "all")
     stale_application = server.apply_geometry_node_patch(patch, keep_backup=True)
