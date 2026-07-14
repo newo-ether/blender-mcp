@@ -233,17 +233,54 @@ _Prerequisites_: Make sure you have [Visual Studio Code](https://code.visualstud
 
 #### Windows one-command installer
 
-From a cloned or downloaded repository, open PowerShell in the repository root
-and run:
+Open Windows PowerShell and run this single command; cloning the repository is
+not required:
+
+```powershell
+irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1 | iex
+```
+
+The human-readable installer opens a terminal checkbox selector before changing
+the machine: use Up/Down to move, Space to toggle, Enter to install, and Esc to
+cancel. Pass `-Gui` if a WinForms checkbox window is preferred. Both selectors
+detect every installed Blender version and these four client surfaces:
+
+| Selector label | Installation behavior |
+| --- | --- |
+| Codex CLI | Registers the per-user `blender_mcp` stdio server. |
+| Codex Desktop (ChatGPT) | Uses the same Codex MCP configuration as the CLI. |
+| Claude Code CLI | Registers `blender_mcp` in Claude Code user scope. |
+| Claude Desktop | Opens the checksummed MCPB and leaves final confirmation to Claude Desktop. |
+
+Blender 4.2+ entries are selectable individually; unsupported older versions
+remain visible but disabled, and the newest supported version is selected by
+default. Multiple Blender versions can be selected in one run.
+
+The script downloads the latest stable GitHub Release, verifies the SHA-256 of
+the Python wheel, Blender Extension ZIP, and optional MCPB, creates or reuses
+`%LOCALAPPDATA%\BlenderMCP\venv`, installs the server, installs the same validated
+Extension into every selected Blender, and configures the selected clients. It
+is safe to run again for updates. Python 3.10+ and Blender 4.2+ are required for
+the full installation; the MCP server can still be installed when Blender is
+not currently present.
+
+For CI, SSH, or other sessions without a graphical desktop, the installer
+automatically uses detected defaults. You can request that behavior explicitly:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1))) -NonInteractive
+```
+
+To inspect the script before executing it, open the Raw URL above or download
+it first. A tag-specific Raw URL and `-ReleaseTag v1.7.0` can be used when a
+fully pinned installation is preferred.
+
+From a cloned repository, the same installer uses and validates local source by
+default:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
-
-The human-readable installer detects Blender 4.2+, creates or reuses `.venv`,
-installs the MCP server, builds and validates the Extension ZIP, installs and
-enables it in Blender, and registers `blender_mcp` with Codex when the Codex CLI
-is available. It is safe to run again when updating the repository.
 
 Useful options:
 
@@ -251,27 +288,35 @@ Useful options:
 # Preview every step without changing the machine
 .\install.ps1 -DryRun
 
-# Select a specific Blender installation
+# Use the graphical selector instead of the default terminal UI
+.\install.ps1 -Gui
+
+# Limit selection to one or more explicit Blender installations
 .\install.ps1 -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
 
-# Install without changing Codex configuration
+# Install without changing Codex or Claude client configuration
 .\install.ps1 -SkipCodexRegistration
+.\install.ps1 -SkipClaudeCodeRegistration -SkipClaudeDesktop
 
 # Install only the Python MCP server
 .\install.ps1 -SkipBlenderExtension
 
 # Replace an existing non-matching Codex entry named blender_mcp
 .\install.ps1 -ForceCodexRegistration
+
+# Exercise GitHub Release installation from a cloned checkout
+.\install.ps1 -UseRelease -ReleaseTag v1.7.0
 ```
 
 After installation, open Blender, start the bridge from the **BlenderMCP**
-sidebar panel, then restart Codex or open a new session.
+sidebar panel, then restart the selected clients. Claude Desktop users must also
+approve the opened MCPB inside Claude Desktop.
 
 #### Manual Extension installation
 
 For Blender 4.2 or newer, use the packaged Extension ZIP:
 
-1. Download `blender_mcp-1.6.0.zip` from the release artifacts.
+1. Download `blender_mcp-1.7.0.zip` from the release artifacts.
 2. Open Blender and go to Edit > Preferences > Add-ons.
 3. Open the drop-down menu and choose **Install from Disk...**.
 4. Select the ZIP without extracting it, then enable **Blender MCP**.
@@ -279,7 +324,13 @@ For Blender 4.2 or newer, use the packaged Extension ZIP:
 The legacy `addon.py` installation remains available for Blender 3.x: choose
 **Install...** in Preferences > Add-ons and select the Python file directly.
 
-Maintainers can reproduce the Extension package with:
+Maintainers can reproduce all GitHub Release assets with:
+
+```powershell
+.\scripts\build_release.ps1 -BlenderPath "C:\path\to\blender.exe"
+```
+
+Or build only the Extension package with:
 
 ```bash
 python scripts/build_blender_extension.py --blender /path/to/blender
