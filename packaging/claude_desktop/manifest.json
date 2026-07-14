@@ -1,0 +1,55 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "blender_mcp",
+  "display_name": "Blender MCP",
+  "version": "1.7.0",
+  "description": "Control Blender and edit Geometry Nodes through a local MCP bridge.",
+  "long_description": "Launches the Blender MCP server installed by the official PowerShell bootstrap. Start the BlenderMCP bridge inside Blender before using its tools.",
+  "author": {
+    "name": "BlenderMCP Contributors",
+    "url": "https://github.com/newo-ether/blender-mcp"
+  },
+  "homepage": "https://github.com/newo-ether/blender-mcp",
+  "documentation": "https://github.com/newo-ether/blender-mcp/blob/main/docs/geometry-nodes.md",
+  "support": "https://github.com/newo-ether/blender-mcp/issues",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/run.cmd",
+    "mcp_config": {
+      "command": "cmd",
+      "args": [
+        "/d",
+        "/s",
+        "/c",
+        "${__dirname}/server/run.cmd"
+      ],
+      "env": {
+        "BLENDER_HOST": "localhost",
+        "BLENDER_PORT": "9876",
+        "BLENDER_MCP_WORKSPACE": "${user_config.workspace}"
+      }
+    }
+  },
+  "user_config": {
+    "workspace": {
+      "type": "directory",
+      "title": "Blender MCP workspace",
+      "description": "Directory allowed for Geometry Nodes snapshot and patch JSON files.",
+      "default": "${HOME}/Documents/BlenderMCP",
+      "required": true
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": [
+      "win32"
+    ]
+  },
+  "keywords": [
+    "blender",
+    "geometry-nodes",
+    "3d"
+  ],
+  "license": "MIT"
+}
