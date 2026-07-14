@@ -1,0 +1,116 @@
+{
+  "schema": "blender-node-tree/1",
+  "blender_version": [5, 2, 0],
+  "view": "all",
+  "tree_ref": {
+    "tree_type": "ShaderNodeTree",
+    "owner": {"kind": "MATERIAL", "name": "Hero Paint"}
+  },
+  "owner": {
+    "kind": "MATERIAL",
+    "name": "Hero Paint",
+    "id_type": "Material",
+    "library": null,
+    "editable": true,
+    "user_count": 2
+  },
+  "capabilities": {
+    "read": true,
+    "index": true,
+    "export": true,
+    "schema": true,
+    "validate": true,
+    "apply": true,
+    "editable": true,
+    "mutation_reason": "available",
+    "transaction_adapter": "embedded_shader_owner",
+    "interface": true,
+    "limits": {
+      "max_full_response_bytes": 8388608,
+      "max_mutation_nodes": 10000,
+      "max_validation_seconds": 30.0,
+      "max_neighbor_depth": 5,
+      "max_index_page": 500,
+      "max_patch_operations": 500,
+      "max_patch_bytes": 2097152
+    }
+  },
+  "tree": {
+    "name": "Shader Nodetree",
+    "bl_idname": "ShaderNodeTree",
+    "editable": true,
+    "library": null,
+    "interface": [],
+    "nodes": {
+      "Principled BSDF": {
+        "id": "Principled BSDF",
+        "name": "Principled BSDF",
+        "label": "Surface",
+        "bl_idname": "ShaderNodeBsdfPrincipled",
+        "properties": {},
+        "inputs": [
+          {
+            "id": "input:2:Roughness",
+            "index": 2,
+            "name": "Roughness",
+            "identifier": "Roughness",
+            "direction": "INPUT",
+            "bl_idname": "NodeSocketFloat",
+            "enabled": true,
+            "linked": false,
+            "multi_input": false,
+            "default": 0.5
+          }
+        ],
+        "outputs": [
+          {
+            "id": "output:0:BSDF",
+            "index": 0,
+            "name": "BSDF",
+            "identifier": "BSDF",
+            "direction": "OUTPUT",
+            "bl_idname": "NodeSocketShader",
+            "enabled": true,
+            "linked": true,
+            "multi_input": false
+          }
+        ],
+        "layout": {"location": [0.0, 0.0], "width": 240.0, "height": 100.0, "parent": null}
+      },
+      "Look Development Notes": {
+        "id": "Look Development Notes",
+        "name": "Look Development Notes",
+        "label": "Look Development Notes",
+        "bl_idname": "NodeFrame",
+        "properties": {},
+        "inputs": [],
+        "outputs": [],
+        "layout": {"location": [-360.0, 220.0], "width": 420.0, "height": 180.0, "parent": null},
+        "annotation": {
+          "text": "Keep artistic controls together and explain their intended range.",
+          "truncated": false
+        }
+      }
+    },
+    "links": []
+  },
+  "scope": {
+    "kind": "subgraph",
+    "requested_nodes": ["Principled BSDF", "Look Development Notes"],
+    "neighbor_depth": 0,
+    "included_nodes": ["Look Development Notes", "Principled BSDF"],
+    "content_revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "users": [
+    {"kind": "ID", "id_type": "Mesh", "name": "Hero Body", "library": null}
+  ],
+  "stats": {
+    "node_count": 2,
+    "link_count": 0,
+    "interface_item_count": 0,
+    "total_node_count": 2,
+    "total_link_count": 0,
+    "json_bytes": 0
+  }
+}

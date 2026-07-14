@@ -1,0 +1,93 @@
+{
+  "schema": "blender-node-tree/1",
+  "blender_version": [5, 2, 0],
+  "view": "all",
+  "tree_ref": {
+    "tree_type": "CompositorNodeTree",
+    "owner": {"kind": "SCENE", "name": "Shot 010"}
+  },
+  "owner": {
+    "kind": "SCENE",
+    "name": "Shot 010",
+    "id_type": "Scene",
+    "library": null,
+    "editable": true,
+    "user_count": 1
+  },
+  "capabilities": {
+    "read": true,
+    "index": true,
+    "export": true,
+    "schema": true,
+    "validate": true,
+    "apply": true,
+    "editable": true,
+    "mutation_reason": "available",
+    "transaction_adapter": "scene_compositing_node_group",
+    "interface": true,
+    "limits": {
+      "max_full_response_bytes": 8388608,
+      "max_mutation_nodes": 10000,
+      "max_validation_seconds": 30.0,
+      "max_neighbor_depth": 5,
+      "max_index_page": 500,
+      "max_patch_operations": 500,
+      "max_patch_bytes": 2097152
+    }
+  },
+  "tree": {
+    "name": "Shot 010 Compositor",
+    "bl_idname": "CompositorNodeTree",
+    "editable": true,
+    "library": null,
+    "interface": [
+      {"item_type": "SOCKET", "identifier": "Image", "name": "Image", "parent": null, "in_out": "OUTPUT", "socket_type": "NodeSocketColor", "description": "", "hide_value": false}
+    ],
+    "nodes": {
+      "Render Layers Source": {
+        "id": "Render Layers Source",
+        "name": "Render Layers Source",
+        "label": "Source",
+        "bl_idname": "CompositorNodeRLayers",
+        "properties": {},
+        "inputs": [],
+        "outputs": [
+          {"id": "output:0:Image", "index": 0, "name": "Image", "identifier": "Image", "direction": "OUTPUT", "bl_idname": "NodeSocketColor", "enabled": true, "linked": true, "multi_input": false}
+        ],
+        "layout": {"location": [-400.0, 0.0], "width": 180.0, "height": 100.0, "parent": null}
+      },
+      "Final Render Result": {
+        "id": "Final Render Result",
+        "name": "Final Render Result",
+        "label": "Final output",
+        "bl_idname": "NodeGroupOutput",
+        "properties": {},
+        "inputs": [
+          {"id": "input:0:Image", "index": 0, "name": "Image", "identifier": "Image", "direction": "INPUT", "bl_idname": "NodeSocketColor", "enabled": true, "linked": true, "multi_input": false}
+        ],
+        "outputs": [],
+        "layout": {"location": [420.0, 0.0], "width": 180.0, "height": 100.0, "parent": null}
+      }
+    },
+    "links": [
+      {"from_node": "Render Layers Source", "from_socket": "output:0:Image", "to_node": "Final Render Result", "to_socket": "input:0:Image", "is_muted": false, "is_valid": true}
+    ]
+  },
+  "scope": {
+    "kind": "full",
+    "requested_nodes": [],
+    "neighbor_depth": 0,
+    "included_nodes": ["Final Render Result", "Render Layers Source"],
+    "content_revision": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "users": [],
+  "stats": {
+    "node_count": 2,
+    "link_count": 1,
+    "interface_item_count": 1,
+    "total_node_count": 2,
+    "total_link_count": 1,
+    "json_bytes": 0
+  }
+}

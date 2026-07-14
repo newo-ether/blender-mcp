@@ -52,14 +52,34 @@ Write-Host "[2/4] Building Python wheel..." -ForegroundColor Cyan
 if ($LASTEXITCODE -ne 0) { throw "Python wheel build failed." }
 
 Write-Host "[3/4] Validating and packing Claude Desktop MCPB..." -ForegroundColor Cyan
-& npx --yes '@anthropic-ai/mcpb' validate $manifestPath
-if ($LASTEXITCODE -ne 0) { throw "MCPB manifest validation failed." }
 $mcpbPath = Join-Path $output ("blender_mcp-{0}.mcpb" -f $version)
 if (Test-Path -LiteralPath $mcpbPath) {
     Remove-Item -LiteralPath $mcpbPath -Force
 }
-& npx --yes '@anthropic-ai/mcpb' pack (Join-Path $root "packaging\claude_desktop") $mcpbPath
-if ($LASTEXITCODE -ne 0) { throw "MCPB packing failed." }
+$mcpbStage = Join-Path ([System.IO.Path]::GetTempPath()) (
+    "blender-mcp-mcpb-{0}" -f [System.Guid]::NewGuid().ToString("N")
+)
+try {
+    New-Item -ItemType Directory -Path $mcpbStage -Force | Out-Null
+    Copy-Item -Path (Join-Path $root "packaging\claude_desktop\*") -Destination $mcpbStage -Recurse -Force
+    $pythonStage = Join-Path $mcpbStage "server\python\blender_mcp"
+    $schemaStage = Join-Path $mcpbStage "server\schemas"
+    New-Item -ItemType Directory -Path $pythonStage -Force | Out-Null
+    New-Item -ItemType Directory -Path $schemaStage -Force | Out-Null
+    Copy-Item -Path (Join-Path $root "src\blender_mcp\*.py") -Destination $pythonStage -Force
+    Copy-Item -Path (Join-Path $root "schemas\*.json") -Destination $schemaStage -Force
+
+    $stagedManifest = Join-Path $mcpbStage "manifest.json"
+    & npx --yes '@anthropic-ai/mcpb' validate $stagedManifest
+    if ($LASTEXITCODE -ne 0) { throw "MCPB manifest validation failed." }
+    & npx --yes '@anthropic-ai/mcpb' pack $mcpbStage $mcpbPath
+    if ($LASTEXITCODE -ne 0) { throw "MCPB packing failed." }
+}
+finally {
+    if (Test-Path -LiteralPath $mcpbStage) {
+        Remove-Item -LiteralPath $mcpbStage -Recurse -Force
+    }
+}
 
 Write-Host "[4/4] Writing SHA256SUMS.txt..." -ForegroundColor Cyan
 $assets = @(
@@ -79,6 +99,10 @@ $checksumLines = foreach ($asset in $assets) {
 }
 $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllLines($checksumPath, $checksumLines, $utf8WithoutBom)
+
+Write-Host "Verifying release contents and checksums..." -ForegroundColor Cyan
+& $python (Join-Path $root "scripts\verify_release_assets.py") --dist $output --version $version
+if ($LASTEXITCODE -ne 0) { throw "Release asset verification failed." }
 
 Write-Host "Release assets ready:" -ForegroundColor Green
 foreach ($asset in $assets + @($checksumPath)) {

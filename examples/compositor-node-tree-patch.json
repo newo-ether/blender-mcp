@@ -1,0 +1,62 @@
+{
+  "schema": "blender-node-tree-patch/1",
+  "tree_ref": {
+    "tree_type": "CompositorNodeTree",
+    "owner": {"kind": "SCENE", "name": "Shot 010"}
+  },
+  "base_revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "capabilities": ["graph", "layout", "annotation", "dynamic"],
+  "operations": [
+    {
+      "op": "add_node",
+      "id": "grade_frame",
+      "node_type": "NodeFrame",
+      "name": "Stage 1 - Color Correction",
+      "layout": {"location": [-180.0, 240.0], "width": 520.0}
+    },
+    {
+      "op": "set_annotation",
+      "node": "grade_frame",
+      "text": "Shape contrast before denoise and glare; keep the final output connected."
+    },
+    {
+      "op": "add_node",
+      "id": "curves",
+      "node_type": "CompositorNodeCurveRGB",
+      "name": "RGB Curves",
+      "layout": {"location": [0.0, 0.0], "parent": "grade_frame"}
+    },
+    {
+      "op": "set_curve_mapping",
+      "node": "curves",
+      "use_clip": true,
+      "curves": [
+        {"points": [{"location": [0.0, 0.0]}, {"location": [1.0, 1.0]}]},
+        {"points": [{"location": [0.0, 0.0]}, {"location": [1.0, 1.0]}]},
+        {"points": [{"location": [0.0, 0.0]}, {"location": [1.0, 1.0]}]},
+        {"points": [{"location": [0.0, 0.0]}, {"location": [1.0, 1.0]}]}
+      ]
+    },
+    {
+      "op": "remove_link",
+      "from_node": "Render Layers Source",
+      "from_socket": "output:0:Image",
+      "to_node": "Final Render Result",
+      "to_socket": "input:0:Image"
+    },
+    {
+      "op": "add_link",
+      "from_node": "Render Layers Source",
+      "from_socket": "output:0:Image",
+      "to_node": "curves",
+      "to_socket": "input:0:Image"
+    },
+    {
+      "op": "add_link",
+      "from_node": "curves",
+      "from_socket": "output:0:Image",
+      "to_node": "Final Render Result",
+      "to_socket": "input:0:Image"
+    }
+  ]
+}

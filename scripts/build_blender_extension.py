@@ -18,6 +18,7 @@ ADDON_SOURCE = ROOT / "addon.py"
 MANIFEST_SOURCE = ROOT / "packaging" / "blender_extension" / "blender_manifest.toml"
 LICENSE_SOURCE = ROOT / "LICENSE"
 PROJECT_SOURCE = ROOT / "pyproject.toml"
+SCHEMA_SOURCE = ROOT / "schemas"
 
 
 def find_blender(explicit_path: str | None) -> Path:
@@ -66,9 +67,14 @@ def run_blender(blender: Path, *arguments: str) -> None:
 
 def verify_archive(archive_path: Path) -> None:
     """Reject accidental extra files or nested archive roots."""
-    expected = {"__init__.py", "blender_manifest.toml", "LICENSE"}
+    expected = {"__init__.py", "blender_manifest.toml", "LICENSE"} | {
+        f"schemas/{path.name}" for path in SCHEMA_SOURCE.glob("*.json")
+    }
     with zipfile.ZipFile(archive_path) as archive:
-        actual = {name.rstrip("/") for name in archive.namelist() if name.rstrip("/")}
+        actual = {
+            name for name in archive.namelist()
+            if name and not name.endswith("/")
+        }
         if actual != expected:
             raise RuntimeError(
                 f"Unexpected archive contents: expected {sorted(expected)}, got {sorted(actual)}"
@@ -96,6 +102,7 @@ def build(blender: Path, output_dir: Path) -> Path:
         shutil.copy2(ADDON_SOURCE, staging / "__init__.py")
         shutil.copy2(MANIFEST_SOURCE, staging / "blender_manifest.toml")
         shutil.copy2(LICENSE_SOURCE, staging / "LICENSE")
+        shutil.copytree(SCHEMA_SOURCE, staging / "schemas")
 
         run_blender(
             blender,

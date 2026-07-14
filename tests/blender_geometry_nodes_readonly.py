@@ -357,7 +357,9 @@ def run_test():
         "operations": [{
             "op": "add_node",
             "id": "wrong_domain",
-            "node_type": "ShaderNodeValue",
+            # Value is a shared function node and is accepted by Geometry trees
+            # in Blender 4.2. Use a genuinely Shader-only node here.
+            "node_type": "ShaderNodeBsdfPrincipled",
         }],
     })
     wrong_domain_diagnostic = next(

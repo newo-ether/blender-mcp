@@ -44,7 +44,7 @@ param(
     # Optional Python 3.10+ executable used only when .venv does not exist.
     [string]$PythonPath = "",
 
-    # Directory allowed for Geometry Nodes snapshot and patch JSON files.
+    # Directory allowed for structured node snapshot and patch JSON files.
     [string]$WorkspacePath = "",
 
     # GitHub repository used for release discovery.
@@ -1392,7 +1392,7 @@ try {
     }
     Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @(
         "-c",
-        "import asyncio; from blender_mcp.server import mcp; tools = asyncio.run(mcp.list_tools()); names = {tool.name for tool in tools}; required = {'get_blender_documentation_context', 'search_blender_docs', 'get_blender_doc_page', 'search_geometry_node_types', 'search_blender_node_assets'}; missing = sorted(required - names); print(f'Registered MCP tools: {len(tools)}'); print(f'Missing required tools: {missing}' if missing else 'Knowledge tools: ready'); assert len(tools) >= 33 and not missing"
+        "import asyncio; from blender_mcp.server import mcp; tools = asyncio.run(mcp.list_tools()); names = {tool.name for tool in tools}; required = {'get_blender_documentation_context', 'search_blender_docs', 'get_blender_doc_page', 'search_geometry_node_types', 'search_blender_node_assets', 'list_node_trees', 'get_node_tree_index', 'export_node_tree', 'get_node_type_schema', 'validate_node_tree_patch', 'apply_node_tree_patch'}; missing = sorted(required - names); print(f'Registered MCP tools: {len(tools)}'); print(f'Missing required tools: {missing}' if missing else 'Knowledge and structured-node tools: ready'); assert len(tools) >= 39 and not missing"
     ) -Description "Verifying MCP imports and tool registration..."
     if (-not $script:DryRunEnabled) {
         if (-not (Test-Path -LiteralPath $serverExecutable -PathType Leaf)) {

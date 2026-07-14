@@ -82,7 +82,20 @@
         "editable": {"type": "boolean"},
         "mutation_reason": {"type": "string"},
         "transaction_adapter": {"type": "string"},
-        "interface": {"type": "boolean"}
+        "interface": {"type": "boolean"},
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_full_response_bytes": {"type": "integer", "minimum": 1},
+            "max_mutation_nodes": {"type": "integer", "minimum": 1},
+            "max_validation_seconds": {"type": "number", "exclusiveMinimum": 0},
+            "max_neighbor_depth": {"type": "integer", "minimum": 0},
+            "max_index_page": {"type": "integer", "minimum": 1},
+            "max_patch_operations": {"type": "integer", "minimum": 1},
+            "max_patch_bytes": {"type": "integer", "minimum": 1}
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },

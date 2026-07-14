@@ -1,6 +1,6 @@
 [project]
 name = "blender-mcp"
-version = "1.8.2"
+version = "1.9.0"
 description = "Blender integration through the Model Context Protocol"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,6 +27,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.data-files]
+"blender_mcp/schemas" = ["schemas/*.json"]
 
 [project.urls]
 "Homepage" = "https://github.com/newo-ether/blender-mcp"

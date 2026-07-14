@@ -165,13 +165,15 @@ Blender 5.1 uses legacy modifier ID properties, while Blender 5.2 exposes the
 Geometry Nodes modifier interface. Node type schemas are also probed at runtime
 instead of relying on a hard-coded cross-version catalog.
 
-## Known exclusions
+## Scope alongside the generic protocol
 
-Version 1 is Geometry Nodes only. Shader, Compositor, Texture, and World trees,
+These eight compatibility tools remain Geometry Nodes only. Blender MCP 1.9's
+generic owner-addressed tools add transactional Shader and Compositor editing;
+see [Structured node automation](structured-node-automation.md). Texture trees,
 animation/drivers, simulation bake state, lossless cross-version migration,
-linked-tree mutation, and arbitrary node-specific operators are not part of the
-contract. Unsupported work may use `execute_blender_code`, but doing so bypasses
-the revision, schema, dry-run, copy-on-write, and actual-diff guarantees above.
+linked-tree mutation, and arbitrary node-specific operators remain outside the
+contracts. Unsupported work may use `execute_blender_code`, but doing so bypasses
+revision, schema, dry-run, copy-on-write, and actual-diff guarantees.
 
 ## Build and install the ZIP
 

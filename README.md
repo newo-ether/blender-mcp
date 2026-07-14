@@ -1,4 +1,4 @@
-# Blender MCP — Geometry Nodes Automation Fork
+# Blender MCP — Structured Node Automation Fork
 
 [![Release](https://img.shields.io/github/v/release/newo-ether/blender-mcp)](https://github.com/newo-ether/blender-mcp/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -7,12 +7,14 @@
 **English** | [中文](README_CN.md)
 
 This community fork connects MCP clients to Blender and adds a structured,
-revision-safe workflow for reading and editing Geometry Nodes.
+revision-safe workflow for reading and editing Geometry, Shader, and
+Compositor node trees.
 
 It retains the upstream BlenderMCP scene, object, viewport, asset, and
 model-generation tools while adding:
 
-- first-class Geometry Nodes discovery, export, validation, and transactional edits;
+- owner-aware Geometry, Shader, and Compositor discovery, export, validation,
+  and transactional edits;
 - version-aware official Manual, Python API, Release Notes, live node-schema,
   and installed Essentials queries;
 - a checksummed GitHub Release containing the Blender Extension, Python wheel, and Claude Desktop MCPB;
@@ -46,7 +48,7 @@ human-readable: [install.ps1](install.ps1). For a reproducible, version-pinned
 install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.8.2/install.ps1))) -ReleaseTag v1.8.2
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.9.0/install.ps1))) -ReleaseTag v1.9.0
 ```
 
 Before changing the machine, the installer:
@@ -56,7 +58,7 @@ Before changing the machine, the installer:
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
 4. verifies the wheel, Extension ZIP, and optional MCPB against `SHA256SUMS.txt`;
 5. installs into a versioned environment such as
-   `%LOCALAPPDATA%\BlenderMCP\venv-1.8.2`;
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.9.0`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients.
 
@@ -124,7 +126,7 @@ exercise the published Release path instead.
 | `-NonInteractive` | Skip both selectors and use detected defaults. |
 | `-BlenderPath <path[]>` | Limit Blender targets to explicit executable paths. |
 | `-PythonPath <path>` | Choose the Python 3.10+ interpreter used to create the venv. |
-| `-WorkspacePath <path>` | Set the Geometry Nodes JSON workspace. |
+| `-WorkspacePath <path>` | Set the structured node-tree JSON workspace. |
 | `-ReleaseTag <tag>` | Install an exact Release instead of the latest stable release. |
 | `-InstallRoot <path>` | Override the per-user Release installation directory. |
 | `-UseRelease` | Use Release assets even when the script is run from a clone. |
@@ -186,6 +188,7 @@ source-attributed JSON instead of loading an entire Manual into context.
 | `get_blender_doc_page` | Read one sanitized page or exact heading section returned by search. | Only for `version="auto"` |
 | `search_geometry_node_types` | Find node types constructible in Geometry Nodes in the running build. | Yes |
 | `get_geometry_node_type_schema` | Read compact live sockets, node-owned properties, and dynamic items; inherited RNA is opt-in. | Yes |
+| `get_node_type_schema` | Inspect a Geometry, Shader, or Compositor node in its exact owner context. | Yes |
 | `search_blender_node_assets` | Inspect installed official Essentials node assets without leaving data blocks in the project. | Yes |
 
 Use `version="auto"` for build-correct answers or an explicit version such as
@@ -198,53 +201,73 @@ For query strategy, version/language behavior, cache locations, offline rules,
 and security boundaries, read
 [Blender Manual and runtime knowledge](docs/blender-knowledge.md).
 
-## Geometry Nodes automation
+## Structured node automation
 
-This fork treats a node tree as a normalized graph, not as recursive prose or a
-single generated `bpy` script. Reads are revisioned; edits are small
-semantic patches that can be validated before application.
+Node trees are represented as a flat normalized graph (`nodes{}`, `links[]`,
+and interface records), never as a recursively nested connectivity tree or an
+opaque generated Python script. Every full and targeted read carries the same
+graph revision. A stale patch is rejected before mutation.
 
-### Dedicated tools
+Supported generic owners:
+
+| Domain | Owner references | Transaction |
+| --- | --- | --- |
+| Shader | Material, World, Light, Shader node group | Owner copy/remap or NodeTree copy/remap |
+| Compositor | Scene, Compositor node group | Blender 4.2 Scene copy/remap; Blender 5.1+ selected-Scene tree swap; group copy/remap |
+| Geometry | Geometry node group | Read/index/schema through the generic tools; mutation remains on the compatible Geometry v1 tools |
+
+### Generic tools
 
 | Tool | Purpose | Mutates Blender |
 | --- | --- | --- |
-| `list_geometry_node_trees` | List groups, users, editability, graph size, and revisions. | No |
-| `get_geometry_node_tree_index` | Search and page a compact node index. | No |
-| `export_geometry_node_tree` | Return or write a full graph or targeted N-hop subgraph. | No |
-| `get_geometry_node_type_schema` | Probe compact sockets and editable properties from the running Blender version. | No |
-| `search_geometry_node_types` | Search the exact build's constructible Geometry Nodes catalog. | No |
-| `search_blender_node_assets` | Search installed official Essentials node assets in a disposable scope. | No |
-| `validate_geometry_node_patch` | Validate structure and run a patch against a disposable copy. | No |
-| `apply_geometry_node_patch` | Validate, copy, verify, remap users, and report the actual diff. | Yes |
+| `list_node_trees` | List owner-addressed Geometry, Shader, and Compositor trees, users, capabilities, limits, and revisions. | No |
+| `get_node_tree_index` | Search and page a compact index without putting the full graph in model context. | No |
+| `export_node_tree` | Return or write a full flat graph or targeted N-hop subgraph. | No |
+| `get_node_type_schema` | Probe exact runtime sockets, properties, dynamic structures, and owner restrictions. | No |
+| `validate_node_tree_patch` | Check structure, stale state, typed references, runtime semantics, and limits on a disposable copy. | No |
+| `apply_node_tree_patch` | Revalidate, commit through the owner adapter, re-export, and roll back exactly on failure. | Yes |
+
+The eight `*_geometry_node_*` tools remain available as the Geometry Nodes v1
+compatibility contract, including modifier inputs, explicit shared-tree policy,
+and official Essentials asset search.
 
 ### Recommended workflow
 
-1. Call `list_geometry_node_trees`.
-2. Search large graphs with `get_geometry_node_tree_index`.
+1. Call `list_node_trees` and retain the exact `tree_ref`.
+2. Search large graphs with `get_node_tree_index`.
 3. Export only the relevant nodes and neighbors.
-4. Put the returned `revision` into a small patch JSON file.
+4. Put the returned `revision` and `tree_ref` into a small patch JSON file.
 5. Edit that file with the client's normal file-edit tool.
-6. Call `validate_geometry_node_patch`.
-7. Apply only a valid patch, then inspect `actual_diff` and
-   `new_revision`.
+6. Call `validate_node_tree_patch`.
+7. Apply only a valid patch, then inspect `actual_diff`, `new_revision`, users,
+   and backup disposition.
 
-The workspace boundary is controlled by `BLENDER_MCP_WORKSPACE`.
-Patch files outside it, non-JSON files, and patch files larger than 4 MiB are
-rejected.
+The generic protocol supports common graph/layout operations, Frame
+annotations, group interfaces, Color Ramps, Curve Mappings, and typed Blender
+IDs and View Layers. The workspace boundary is controlled by
+`BLENDER_MCP_WORKSPACE`; files outside it, non-JSON files, files over 2 MiB, and
+patches over 500 operations are rejected. A public full response is capped at
+8 MiB and redirects callers to index plus targeted export.
 
-For the operation catalog, shared-tree policies, rollback behavior, performance
-measurements, and compatibility details, read
+Read [Structured node automation](docs/structured-node-automation.md) for the
+operation model, transaction adapters, safety rules, version differences,
+performance measurements, and compatibility details. Geometry-specific modifier
+and asset behavior remains documented in
 [Geometry Nodes automation](docs/geometry-nodes.md).
 
-Useful artifacts:
+Examples and contracts:
 
-- [Example snapshot](examples/geometry-nodes-snapshot.json)
-- [Example patch](examples/geometry-nodes-patch.json)
+- [Shader snapshot](examples/shader-node-tree-snapshot.json) and
+  [patch](examples/shader-node-tree-patch.json)
+- [Compositor snapshot](examples/compositor-node-tree-snapshot.json) and
+  [patch](examples/compositor-node-tree-patch.json)
+- [Geometry snapshot](examples/geometry-nodes-snapshot.json) and
+  [patch](examples/geometry-nodes-patch.json)
 - [Public JSON schemas](schemas)
 
 ## Other capabilities
 
-The server currently exposes 33 MCP tools, including:
+The server currently exposes 39 MCP tools, including:
 
 - scene and object inspection;
 - viewport screenshots;
@@ -255,7 +278,7 @@ The server currently exposes 33 MCP tools, including:
 - Hyper3D Rodin text/image generation and import;
 - Hunyuan3D generation and import;
 - the three official-documentation tools;
-- the eight Geometry Nodes read, discovery, validation, and application tools.
+- six owner-aware structured-node tools and the eight Geometry Nodes v1 tools.
 
 Example requests:
 
@@ -266,6 +289,10 @@ Example requests:
   XPBD Solver node.”
 - “Export the nodes around Join Geometry and validate a patch that inserts a
   Transform Geometry node.”
+- “Index the material node tree, export the neighborhood around Principled
+  BSDF, then validate a patch that adds a readable look-development Frame.”
+- “Insert RGB Curves, Denoise, and Glare before this Scene's final compositor
+  output without rendering or configuring File Output.”
 - “Search Poly Haven for a concrete material and apply it to the floor.”
 
 ## Manual and cross-platform installation
@@ -285,7 +312,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.8.2-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.9.0-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -293,7 +320,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.8.2-py3-none-any.whl
+python -m pip install ./blender_mcp-1.9.0-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -342,7 +369,7 @@ For Claude Desktop on Windows, open the published MCPB and approve it in
 | --- | --- | --- |
 | `BLENDER_HOST` | `localhost` | Host running the Blender bridge. |
 | `BLENDER_PORT` | `9876` | TCP port exposed by the Blender Extension. |
-| `BLENDER_MCP_WORKSPACE` | server working directory | Allowed root for Geometry Nodes JSON files. |
+| `BLENDER_MCP_WORKSPACE` | server working directory | Allowed root for structured node-tree JSON files. |
 | `BLENDER_MCP_CACHE_DIR` | platform user cache | Optional parent directory for versioned Blender documentation cache entries. |
 | `DISABLE_TELEMETRY` | unset | Set to `true` to disable MCP server telemetry. |
 
@@ -386,7 +413,9 @@ MCP server telemetry.
 | The client cannot reach Blender | Open Blender and confirm auto-connect is enabled, or click **Connect to Claude** manually; both sides must use the same host and port. |
 | The Extension is absent from one Blender | Rerun and select that version, or pass its executable with `-BlenderPath`. |
 | A Geometry Nodes patch is stale | Re-index or re-export the tree and rebuild the patch with the new revision. |
-| A linked node group cannot be edited | Linked-library trees are intentionally read-only in Geometry Nodes v1. |
+| A Shader or Compositor patch is stale | Re-index or re-export the exact owner-addressed `tree_ref`; do not reuse a patch for another owner with the same display tree name. |
+| A linked or override node tree cannot be edited | Linked data is read-only. Local library overrides can be inspected and dry-run, but apply is intentionally disabled. |
+| A full graph exceeds the response limit | Use `get_node_tree_index`, then call `export_node_tree` with `node_names` and a small `neighbor_depth`. |
 | Documentation is unavailable offline | Warm the same source/version/language first. Only marked stale entries fall back during network or server failure; a 404 does not. |
 | A prerelease Manual page is missing | Check the structured fallback, then query live node types/schema and installed Essentials for the exact build. |
 | Old versioned environments remain | Close all MCP clients, then remove obsolete `%LOCALAPPDATA%\BlenderMCP\venv-<old-version>` directories. Keep the path named in `current-server.txt`. |
@@ -401,18 +430,23 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm 
 
 - `execute_blender_code` can run arbitrary Python inside Blender. Save
   the `.blend` file first and review high-impact operations.
-- Geometry Nodes v1 covers Geometry Nodes only. Shader, Compositor, Texture, and
-  World node trees are outside this contract.
+- The generic mutation protocol covers local Shader and Compositor owners.
+  Texture Nodes and unknown add-on/custom nodes are read-only.
 - Published prerelease documentation and localized Manual pages can be
   incomplete. Fallbacks are explicit; live runtime schema is authoritative for
   the connected build.
-- Linked-library node trees are exportable but read-only.
-- Shared node groups are rejected by default unless the caller explicitly
-  chooses a single-user copy or accepts shared mutation.
+- Linked-library trees are exportable but read-only. Local library overrides
+  are not apply targets.
+- `ShaderNodeScript`, `CompositorNodeOutputFile`, script/path/slot settings,
+  render, composite, bake, simulation, and image-save execution are outside the
+  generic mutation protocol.
+- Shader owner and node-group transactions remap their existing users.
+  Blender 5.1+ Scene compositor edits switch only the selected Scene; unrelated
+  Scenes sharing the original tree stay unchanged.
 - Claude Desktop always requires final MCPB approval.
 - Automatic installation is Windows-only.
 - Blender 4.2.22 LTS, 5.1.2, and 5.2 LTS RC passed the local runtime,
-  transactional, linked-library, and scale acceptance suites.
+  transactional, linked/override, 2,048-node efficiency, and corner-case suites.
 - Optional asset providers may transmit requests or files to their services.
 
 ## Development
@@ -459,6 +493,7 @@ Build all Release assets:
 | [scripts/build_release.ps1](scripts/build_release.ps1) | Release asset builder. |
 | [docs/blender-knowledge.md](docs/blender-knowledge.md) | Official documentation and live runtime knowledge guide. |
 | [docs/geometry-nodes.md](docs/geometry-nodes.md) | Geometry Nodes protocol guide. |
+| [docs/structured-node-automation.md](docs/structured-node-automation.md) | Generic Shader/Compositor protocol and safety guide. |
 | [schemas](schemas) | Public JSON contracts. |
 | [tests](tests) | Pure-Python and Blender acceptance scripts. |
 

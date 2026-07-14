@@ -753,10 +753,10 @@ def apply_node_tree_patch(
 ) -> str:
     """Apply an owner-addressed patch through a verified transaction.
 
-    N3 enables local Material, World, Light, and Shader node-group owners.
-    Compositor apply remains unavailable until its versioned transaction phase.
-    Validation is repeated immediately before the owner copy/remap commit. On
-    failure, owner users, names, fake-user state, and graph identity are restored.
+    Supports local Material, World, Light, Scene, Shader node-group, and
+    Compositor node-group owners. Validation is repeated immediately before the
+    version-aware owner copy/remap or selected-Scene tree swap. On failure,
+    owner users, names, fake-user state, and graph identity are restored.
 
     Parameters:
     - patch: Inline blender-node-tree-patch/1 object

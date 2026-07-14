@@ -1,0 +1,29 @@
+{
+  "schema": "blender-node-tree-patch/1",
+  "tree_ref": {
+    "tree_type": "ShaderNodeTree",
+    "owner": {"kind": "MATERIAL", "name": "Hero Paint"}
+  },
+  "base_revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "capabilities": ["graph", "layout", "annotation"],
+  "operations": [
+    {
+      "op": "set_socket_default",
+      "node": "Principled BSDF",
+      "socket": "input:2:Roughness",
+      "value": 0.28
+    },
+    {
+      "op": "add_node",
+      "id": "coat_notes",
+      "node_type": "NodeFrame",
+      "name": "Clear Coat Controls",
+      "layout": {"location": [-420.0, -220.0], "width": 380.0}
+    },
+    {
+      "op": "set_annotation",
+      "node": "coat_notes",
+      "text": "Adjust roughness first; add coat controls only after the base response is approved."
+    }
+  ]
+}
