@@ -7,6 +7,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import tempfile
 
 import bpy
 
@@ -29,6 +30,16 @@ def main() -> None:
     addon = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(addon)
     server = object.__new__(addon.BlenderMCPServer)
+
+    before_scenes = len(bpy.data.scenes)
+    automation = server.get_runtime_automation_context()
+    assert automation["schema"] == "blender-runtime-automation-context/1"
+    assert automation["render"]["available_engines"]
+    assert len(bpy.data.scenes) == before_scenes
+    if bpy.app.version >= (5, 1, 0):
+        assert automation["render"]["preferred"]["eevee"] == "BLENDER_EEVEE"
+        assert automation["animation"]["has_layers"]
+        assert automation["compositor"]["scene_property"] == "compositing_node_group"
 
     before_groups = len(bpy.data.node_groups)
     node_type = (
@@ -119,6 +130,92 @@ def main() -> None:
     assert cached_assets["errors"] == []
     assert set(addon._gn_blend_data_ids()) == before_ids
 
+    fixture_library = None
+    fixture_tree = None
+    fixture_import_before = None
+    with tempfile.TemporaryDirectory(prefix="blender-mcp-user-assets-") as temp_root:
+        try:
+            fixture_tree = bpy.data.node_groups.new(
+                "Index Field Fixture", "GeometryNodeTree"
+            )
+            fixture_tree.interface.new_socket(
+                name="Value", in_out="OUTPUT", socket_type="NodeSocketFloat"
+            )
+            fixture_tree.asset_mark()
+            fixture_tree.asset_data.description = "Configured user-library fixture"
+            fixture_path = Path(temp_root) / "Index Field Fixture.blend"
+            bpy.data.libraries.write(str(fixture_path), {fixture_tree})
+            bpy.data.node_groups.remove(fixture_tree, do_unlink=True)
+            fixture_tree = None
+
+            libraries = bpy.context.preferences.filepaths.asset_libraries
+            fixture_library = libraries.new(
+                name="Blender MCP Test Library",
+                directory=temp_root,
+            )
+            before_user_search = set(addon._gn_blend_data_ids())
+            user_assets = server.search_blender_node_assets(
+                query="Index Field Fixture",
+                library="Blender MCP Test Library",
+                tree_type="GeometryNodeTree",
+                detail="full",
+                scope="USER",
+                limit=5,
+            )
+            assert user_assets["scope"] == "USER"
+            assert user_assets["configured_library_count"] == 1
+            assert user_assets["total_matches"] == 1
+            record = user_assets["assets"][0]
+            assert record["name"] == "Index Field Fixture"
+            assert record["source_scope"] == "USER"
+            assert record["configured_library"]["name"] == "Blender MCP Test Library"
+            assert Path(record["source_path"]).resolve() == fixture_path.resolve()
+            assert record["interface"][0]["name"] == "Value"
+            assert set(addon._gn_blend_data_ids()) == before_user_search
+
+            fixture_import_before = addon._gn_blend_data_ids()
+            imported_asset = server.import_blender_node_asset(
+                source_path=record["source_path"],
+                asset_name=record["name"],
+                tree_type=record["tree_type"],
+                scope="USER",
+                library="Blender MCP Test Library",
+                conflict_policy="REJECT",
+            )
+            assert imported_asset["status"] == "imported"
+            assert imported_asset["node_group"]["name"] == "Index Field Fixture"
+            imported_tree = bpy.data.node_groups[imported_asset["node_group"]["name"]]
+            assert imported_tree["blender_mcp_asset_name"] == "Index Field Fixture"
+            conflict = server.import_blender_node_asset(
+                source_path=record["source_path"],
+                asset_name=record["name"],
+                tree_type=record["tree_type"],
+                scope="USER",
+                library="Blender MCP Test Library",
+                conflict_policy="REJECT",
+            )
+            assert conflict["status"] == "rejected"
+            imported_ids = [
+                item for pointer, item in addon._gn_blend_data_ids().items()
+                if pointer not in fixture_import_before
+            ]
+            bpy.data.batch_remove(ids=imported_ids)
+            assert addon._gn_blend_data_ids() == fixture_import_before
+            fixture_import_before = None
+        finally:
+            if fixture_import_before is not None:
+                appended = [
+                    item for pointer, item in addon._gn_blend_data_ids().items()
+                    if pointer not in fixture_import_before
+                ]
+                if appended:
+                    bpy.data.batch_remove(ids=appended)
+            if fixture_library is not None:
+                bpy.context.preferences.filepaths.asset_libraries.remove(fixture_library)
+            if fixture_tree is not None and fixture_tree.name in bpy.data.node_groups:
+                bpy.data.node_groups.remove(fixture_tree, do_unlink=True)
+            addon._GN_USER_ASSET_CATALOG_CACHE.clear()
+
     result = {
         "blender_version": bpy.app.version_string,
         "node_type": node_type,
@@ -130,6 +227,10 @@ def main() -> None:
         "repeat_item_count": repeat_items["count"],
         "node_asset_total": assets["total_assets"],
         "node_asset_libraries": assets["library_count"],
+        "user_asset_match": user_assets["assets"][0]["name"],
+        "user_asset_import": imported_asset["status"],
+        "runtime_action_model": automation["animation"]["model"],
+        "runtime_engines": automation["render"]["available_engines"],
     }
     print("BLENDER_RUNTIME_KNOWLEDGE=" + json.dumps(result, ensure_ascii=False, sort_keys=True))
 

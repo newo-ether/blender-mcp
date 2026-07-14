@@ -118,10 +118,13 @@ def _load_post_handler(_dummy):
 GEOMETRY_NODES_SNAPSHOT_SCHEMA = "blender-geometry-nodes/1"
 GEOMETRY_NODES_PATCH_SCHEMA = "blender-geometry-nodes-patch/1"
 GEOMETRY_NODES_PATCH_VALIDATION_SCHEMA = "blender-geometry-nodes-patch-validation/1"
-GEOMETRY_NODES_VIEWS = {"semantic", "layout", "all"}
+GEOMETRY_NODES_VIEWS = {"semantic", "operations", "layout", "all"}
 GEOMETRY_NODE_TYPE_SCHEMA_DETAILS = {"compact", "full"}
 GEOMETRY_NODE_TYPE_CATALOG_SCHEMA = "blender-geometry-node-type-catalog/1"
 BLENDER_NODE_ASSET_CATALOG_SCHEMA = "blender-node-asset-catalog/1"
+BLENDER_NODE_ASSET_IMPORT_SCHEMA = "blender-node-asset-import/1"
+BLENDER_RUNTIME_AUTOMATION_CONTEXT_SCHEMA = "blender-runtime-automation-context/1"
+SCENE_COMPOSITOR_TREE_SCHEMA = "blender-scene-compositor-tree/1"
 NODE_TREE_SNAPSHOT_SCHEMA = "blender-node-tree/1"
 NODE_TREE_INDEX_SCHEMA = "blender-node-tree-index/1"
 NODE_TYPE_SCHEMA = "blender-node-type-schema/1"
@@ -133,12 +136,183 @@ NODE_TREE_MAX_VALIDATION_SECONDS = 30.0
 
 _GN_NODE_TYPE_CATALOG_CACHE = {}
 _GN_ESSENTIALS_CATALOG_CACHE = {}
+_GN_USER_ASSET_CATALOG_CACHE = {}
+_GN_ASSET_SCOPES = {"ESSENTIALS", "USER", "ALL"}
+_GN_MAX_CONFIGURED_LIBRARY_BLEND_FILES = 500
 
 
 class _GNAssetCleanupError(RuntimeError):
-    """Raised when disposable official-asset inspection cannot cleanly unwind."""
+    """Raised when disposable asset inspection cannot cleanly unwind."""
 
 BLENDER_VERSION_CONTEXT_SCHEMA = "blender-version-context/1"
+
+
+def _iter_action_fcurves(action, owner=None):
+    """Yield F-Curves from legacy and Blender 5.1+ layered Actions."""
+    if action is None:
+        return
+    layered = bool(getattr(action, "is_action_layered", False))
+    legacy_curves = getattr(action, "fcurves", None)
+    if legacy_curves is not None and not layered:
+        yield from legacy_curves
+        return
+
+    slot_handle = None
+    if owner is not None:
+        animation_data = getattr(owner, "animation_data", None)
+        action_slot = getattr(animation_data, "action_slot", None)
+        slot_handle = getattr(action_slot, "handle", None)
+
+    seen = set()
+    for layer in getattr(action, "layers", ()):
+        for strip in getattr(layer, "strips", ()):
+            for channelbag in getattr(strip, "channelbags", ()):
+                if (
+                    slot_handle is not None
+                    and getattr(channelbag, "slot_handle", None) != slot_handle
+                ):
+                    continue
+                for fcurve in getattr(channelbag, "fcurves", ()):
+                    pointer = fcurve.as_pointer()
+                    if pointer in seen:
+                        continue
+                    seen.add(pointer)
+                    yield fcurve
+
+
+def _runtime_render_automation_context():
+    """Probe render identifiers on a disposable Scene, never the live Scene."""
+    probe = bpy.data.scenes.new(".BlenderMCP_RuntimeAutomation")
+    candidates = (
+        "BLENDER_EEVEE",
+        "BLENDER_EEVEE_NEXT",
+        "CYCLES",
+        "BLENDER_WORKBENCH",
+    )
+    engines = []
+    output_formats = {}
+    errors = []
+    try:
+        for identifier in candidates:
+            try:
+                probe.render.engine = identifier
+            except (TypeError, ValueError, RuntimeError) as exc:
+                errors.append({
+                    "engine": identifier,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+                continue
+            engines.append(identifier)
+            image_settings = probe.render.image_settings
+            declared = []
+            try:
+                declared = [
+                    item.identifier
+                    for item in image_settings.bl_rna.properties["file_format"].enum_items
+                ]
+            except (AttributeError, KeyError, TypeError, RuntimeError):
+                pass
+            original_format = image_settings.file_format
+            ffmpeg_supported = False
+            try:
+                image_settings.file_format = "FFMPEG"
+                ffmpeg_supported = image_settings.file_format == "FFMPEG"
+            except (TypeError, ValueError, RuntimeError):
+                ffmpeg_supported = False
+            finally:
+                try:
+                    image_settings.file_format = original_format
+                except (TypeError, ValueError, RuntimeError):
+                    pass
+            output_formats[identifier] = {
+                "declared": declared,
+                "ffmpeg_supported": ffmpeg_supported,
+                "has_ffmpeg_settings": hasattr(probe.render, "ffmpeg"),
+            }
+    finally:
+        bpy.data.scenes.remove(probe, do_unlink=True)
+
+    preferred_eevee = next(
+        (item for item in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT") if item in engines),
+        None,
+    )
+    return {
+        "available_engines": engines,
+        "preferred": {
+            "eevee": preferred_eevee,
+            "cycles": "CYCLES" if "CYCLES" in engines else None,
+            "workbench": "BLENDER_WORKBENCH" if "BLENDER_WORKBENCH" in engines else None,
+        },
+        "output_formats_by_engine": output_formats,
+        "probe_errors": errors,
+    }
+
+
+def _runtime_action_automation_context():
+    action = bpy.data.actions.new(".BlenderMCP Runtime Action Probe")
+    keyframe_strip = getattr(bpy.types, "ActionKeyframeStrip", None)
+    try:
+        layered = hasattr(action, "layers")
+        legacy = hasattr(action, "fcurves")
+        has_slots = hasattr(action, "slots")
+        strip_properties = (
+            getattr(getattr(keyframe_strip, "bl_rna", None), "properties", None)
+            if keyframe_strip is not None else None
+        )
+        has_channelbags = bool(
+            strip_properties is not None
+            and strip_properties.get("channelbags") is not None
+        )
+        return {
+            "model": "layered" if layered and not legacy else "legacy_or_hybrid",
+            "has_legacy_fcurves": legacy,
+            "has_layers": layered,
+            "has_slots": has_slots,
+            "keyframe_strip_has_channelbags": has_channelbags,
+            "fcurve_access": (
+                "Action.layers[].strips[].channelbags[].fcurves"
+                if layered and not legacy
+                else "Action.fcurves or the layered compatibility iterator"
+            ),
+        }
+    finally:
+        bpy.data.actions.remove(action, do_unlink=True)
+
+
+def _runtime_automation_context():
+    scene = bpy.context.scene
+    scene_tree, scene_adapter = _node_scene_tree(scene)
+    compositor_group = hasattr(scene, "compositing_node_group")
+    return {
+        "schema": BLENDER_RUNTIME_AUTOMATION_CONTEXT_SCHEMA,
+        "blender_version": list(bpy.app.version[:3]),
+        "blender_version_string": bpy.app.version_string,
+        "build_hash": _blender_app_text("build_hash"),
+        "render": _runtime_render_automation_context(),
+        "animation": _runtime_action_automation_context(),
+        "compositor": {
+            "adapter": scene_adapter,
+            "tree_exists": scene_tree is not None,
+            "requires_explicit_group": compositor_group and scene_tree is None,
+            "scene_property": (
+                "compositing_node_group" if compositor_group else "node_tree"
+            ),
+        },
+        "geometry_nodes": {
+            "hidden_object_info_instance_risk": True,
+            "safe_source_strategies": [
+                "keep the source render-visible outside the camera",
+                "disable Object Info As Instance and instance the returned geometry",
+                "realize or author the prototype inside the node tree",
+            ],
+        },
+        "execution_order": [
+            "resolve the render engine before destructive scene edits",
+            "configure output formats after the final engine is active",
+            "create a Scene compositor group explicitly when required",
+            "verify evaluated instances and a viewport screenshot before rendering",
+        ],
+    }
 
 
 def _blender_app_text(attribute):
@@ -263,6 +437,69 @@ def _gn_socket_record(socket, direction, index, include_default=True):
     return record
 
 
+def _gn_operation_socket_record(socket, direction, index):
+    record = {"id": _gn_socket_id(socket, direction, index)}
+    if not bool(socket.enabled):
+        record["enabled"] = False
+    if bool(getattr(socket, "is_multi_input", False)):
+        record["multi_input"] = True
+    if hasattr(socket, "default_value"):
+        try:
+            record["default"] = _gn_json_value(socket.default_value)
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return record
+
+
+def _gn_operation_properties(node):
+    """Keep operation-defining enums and non-default writable scalar values."""
+    result = {}
+    for prop in node.bl_rna.properties:
+        identifier = prop.identifier
+        if identifier in _GN_NODE_PROPERTY_EXCLUDES or identifier == "rna_type":
+            continue
+        if getattr(prop, "type", None) == "COLLECTION":
+            continue
+        if getattr(prop, "is_hidden", False) or getattr(prop, "is_skip_save", False):
+            continue
+        if getattr(prop, "is_readonly", False):
+            continue
+        try:
+            value = _gn_json_value(getattr(node, identifier))
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            continue
+        include = getattr(prop, "type", None) == "ENUM"
+        if not include:
+            try:
+                default = _gn_json_value(prop.default)
+                include = value != default
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                include = False
+        if include:
+            result[identifier] = value
+    return result
+
+
+def _gn_operation_node_record(node):
+    return {
+        "id": node.name,
+        "name": node.name,
+        "label": node.label,
+        "bl_idname": node.bl_idname,
+        "properties": _gn_operation_properties(node),
+        "inputs": [
+            _gn_operation_socket_record(socket, "INPUT", index)
+            for index, socket in enumerate(node.inputs)
+            if socket.enabled or socket.is_linked
+        ],
+        "outputs": [
+            _gn_operation_socket_record(socket, "OUTPUT", index)
+            for index, socket in enumerate(node.outputs)
+            if socket.enabled or socket.is_linked
+        ],
+    }
+
+
 def _gn_rna_properties(value, excludes=None, include_readonly=None):
     excludes = set(excludes or ())
     include_readonly = set(include_readonly or ())
@@ -285,6 +522,8 @@ def _gn_rna_properties(value, excludes=None, include_readonly=None):
 
 
 def _gn_node_record(node, view):
+    if view == "operations":
+        return _gn_operation_node_record(node)
     include_semantic = view in {"semantic", "all"}
     include_layout = view in {"layout", "all"}
     record = {
@@ -369,6 +608,15 @@ def _gn_tree_interface(tree, include_semantic=True):
             "Geometry Nodes snapshots require Blender 4.2 or newer"
         )
     return [_gn_interface_record(item) for item in interface.items_tree]
+
+
+def _gn_operation_interface_record(item):
+    full = _gn_interface_record(item)
+    keys = {
+        "item_type", "identifier", "name", "parent", "in_out", "socket_type",
+        "default", "default_input", "structure_type",
+    }
+    return {key: value for key, value in full.items() if key in keys}
 
 
 def _gn_find_socket_index(node, socket, direction):
@@ -458,7 +706,7 @@ def _node_export_tree(
     """Serialize any supported NodeTree through the shared flat graph core."""
     view = normalizer(view)
     record_factory = record_factory or _node_graph_record
-    include_semantic = view in {"semantic", "all"}
+    include_semantic = view in {"semantic", "operations", "all"}
     library = getattr(tree, "library", None)
     try:
         neighbor_depth = int(neighbor_depth)
@@ -482,7 +730,10 @@ def _node_export_tree(
     )
     view_links = graph_links if include_semantic else []
     full_interface = _gn_tree_interface(tree, True)
-    view_interface = full_interface if include_semantic else []
+    if view == "operations":
+        view_interface = [_gn_operation_interface_record(item) for item in tree.interface.items_tree]
+    else:
+        view_interface = full_interface if include_semantic else []
 
     requested_nodes = sorted(set(node_names or ()))
     missing_nodes = [name for name in requested_nodes if name not in view_nodes]
@@ -674,6 +925,8 @@ def _node_normalize_tree_ref(tree_ref):
 def _node_scene_tree(scene):
     if hasattr(scene, "compositing_node_group"):
         return scene.compositing_node_group, "scene_compositing_node_group"
+    if not bool(getattr(scene, "use_nodes", False)):
+        return None, "scene_embedded_node_tree"
     return getattr(scene, "node_tree", None), "scene_embedded_node_tree"
 
 
@@ -855,7 +1108,7 @@ def _node_target_capabilities(target):
 
 
 def _node_export_target(target, view="semantic", node_names=None, neighbor_depth=0):
-    return _node_export_tree(
+    snapshot = _node_export_tree(
         target["tree"],
         view,
         node_names,
@@ -866,6 +1119,273 @@ def _node_export_target(target, view="semantic", node_names=None, neighbor_depth
         owner=target["owner"],
         capabilities=_node_target_capabilities(target),
     )
+    snapshot["diagnostics"] = _node_graph_diagnostics(target["tree"])
+    for _iteration in range(3):
+        size = len(
+            json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        )
+        if snapshot["stats"]["json_bytes"] == size:
+            break
+        snapshot["stats"]["json_bytes"] = size
+    return snapshot
+
+
+def _node_json_pointer_token(value):
+    return str(value).replace("~", "~0").replace("/", "~1")
+
+
+def _node_named_socket(sockets, name):
+    socket = sockets.get(name)
+    if socket is not None:
+        return socket
+    folded = name.casefold()
+    for candidate in sockets:
+        if (
+            str(getattr(candidate, "name", "")).casefold() == folded
+            or str(getattr(candidate, "identifier", "")).casefold() == folded
+        ):
+            return candidate
+    return None
+
+
+def _node_reaches_group_output(tree, source_node):
+    outputs = {
+        node.name for node in tree.nodes if node.bl_idname == "NodeGroupOutput"
+    }
+    if not outputs:
+        return False
+    adjacency = {}
+    for link in tree.links:
+        if not bool(getattr(link, "is_valid", True)):
+            continue
+        adjacency.setdefault(link.from_node.name, set()).add(link.to_node.name)
+    pending = list(adjacency.get(source_node.name, ()))
+    visited = {source_node.name}
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        if name in outputs:
+            return True
+        visited.add(name)
+        pending.extend(adjacency.get(name, ()))
+    return False
+
+
+def _node_graph_diagnostics(tree):
+    diagnostics = []
+    if tree.bl_idname != "GeometryNodeTree":
+        return diagnostics
+    for node in sorted(tree.nodes, key=lambda item: item.name):
+        if node.bl_idname != "GeometryNodeObjectInfo":
+            continue
+        object_socket = _node_named_socket(node.inputs, "Object")
+        instance_socket = _node_named_socket(node.inputs, "As Instance")
+        if object_socket is None or instance_socket is None:
+            continue
+        source = getattr(object_socket, "default_value", None)
+        if not isinstance(source, bpy.types.Object):
+            continue
+        if getattr(source, "library", None) is not None:
+            continue
+        if object_socket.is_linked or instance_socket.is_linked:
+            continue
+        if not bool(getattr(instance_socket, "default_value", False)):
+            continue
+        if not bool(getattr(source, "hide_render", False)):
+            continue
+        if not _node_reaches_group_output(tree, node):
+            continue
+        path = f"/tree/nodes/{_node_json_pointer_token(node.name)}"
+        diagnostics.append(_gn_patch_diagnostic(
+            "warning",
+            "hidden_object_info_instance_source",
+            path,
+            f"Object Info node {node.name!r} instances local object "
+            f"{source.name!r}, which is hidden from render; generated instances "
+            "may also be invisible. Keep the prototype render-visible outside "
+            "the camera, disable As Instance, or realize/author the geometry "
+            "inside the node tree.",
+        ))
+    return diagnostics
+
+
+def _node_ensure_scene_compositor_tree(
+    scene_name, create_if_missing=False, _commit_guard=None,
+):
+    if not isinstance(scene_name, str) or not scene_name.strip():
+        raise ValueError("scene_name must be a non-empty string")
+    scene_name = scene_name.strip()
+    if len(scene_name) > 1024:
+        raise ValueError("scene_name must not exceed 1024 characters")
+    scene = bpy.data.scenes.get(scene_name)
+    if scene is None:
+        raise ValueError(f"Scene not found: {scene_name}")
+
+    tree_ref = _node_tree_ref("CompositorNodeTree", "SCENE", scene.name)
+    original_tree, adapter = _node_scene_tree(scene)
+    if original_tree is not None:
+        target = _node_resolve_tree_ref(tree_ref)
+        snapshot = _node_export_target(target, "operations")
+        return {
+            "schema": SCENE_COMPOSITOR_TREE_SCHEMA,
+            "status": "ready",
+            "created": False,
+            "mutated": False,
+            "scene": target["owner"],
+            "tree_ref": tree_ref,
+            "adapter": adapter,
+            "revision": snapshot["revision"],
+            "diagnostics": snapshot["diagnostics"],
+        }
+    if not bool(create_if_missing):
+        return {
+            "schema": SCENE_COMPOSITOR_TREE_SCHEMA,
+            "status": "missing",
+            "created": False,
+            "mutated": False,
+            "scene": _node_owner_record("SCENE", scene),
+            "tree_ref": tree_ref,
+            "adapter": adapter,
+            "revision": None,
+            "diagnostics": [_gn_patch_diagnostic(
+                "warning",
+                "compositor_tree_missing",
+                "/create_if_missing",
+                "The Scene has no enabled compositor tree. Set create_if_missing "
+                "to true to create one transactionally.",
+            )],
+        }
+
+    editable = _node_id_editable(scene)
+    is_override = getattr(scene, "override_library", None) is not None
+    if not editable or is_override:
+        reason = (
+            "library overrides are not supported"
+            if is_override else "the Scene is linked or read-only"
+        )
+        return {
+            "schema": SCENE_COMPOSITOR_TREE_SCHEMA,
+            "status": "rejected",
+            "created": False,
+            "mutated": False,
+            "scene": _node_owner_record("SCENE", scene),
+            "tree_ref": tree_ref,
+            "adapter": adapter,
+            "revision": None,
+            "diagnostics": [_gn_patch_diagnostic(
+                "error", "scene_not_editable", "/scene_name", reason,
+            )],
+        }
+
+    original_use_nodes = bool(getattr(scene, "use_nodes", False))
+    created_tree = None
+    pointer_assigned = False
+    committed = False
+
+    def guard(stage):
+        if _commit_guard is not None:
+            _commit_guard(stage, scene, created_tree)
+
+    try:
+        if hasattr(scene, "compositing_node_group"):
+            created_tree = bpy.data.node_groups.new(
+                f"{scene.name} Compositor", "CompositorNodeTree"
+            )
+            created_tree.interface.new_socket(
+                name="Image", in_out="OUTPUT", socket_type="NodeSocketColor"
+            )
+            output = created_tree.nodes.new("NodeGroupOutput")
+            output.name = "Final Render Result"
+            guard("after_tree_created")
+            if scene.compositing_node_group is not None:
+                raise RuntimeError("The Scene compositor pointer changed before commit")
+            scene.compositing_node_group = created_tree
+            pointer_assigned = True
+        else:
+            guard("before_use_nodes_enabled")
+            scene.use_nodes = True
+            pointer_assigned = True
+        guard("after_scene_tree_enabled")
+
+        target = _node_resolve_tree_ref(tree_ref)
+        if target["owner_id"] != scene:
+            raise RuntimeError("The compositor tree resolved to another Scene")
+        if created_tree is not None and target["tree"] != created_tree:
+            raise RuntimeError("The Scene compositor pointer did not retain the created tree")
+        snapshot = _node_export_target(target, "operations")
+        guard("after_tree_verified")
+        committed = True
+        return {
+            "schema": SCENE_COMPOSITOR_TREE_SCHEMA,
+            "status": "created",
+            "created": True,
+            "mutated": True,
+            "scene": target["owner"],
+            "tree_ref": tree_ref,
+            "adapter": target["adapter"],
+            "revision": snapshot["revision"],
+            "tree": {
+                "name": target["tree"].name,
+                "node_count": snapshot["stats"]["node_count"],
+                "interface_item_count": snapshot["stats"]["interface_item_count"],
+            },
+            "diagnostics": snapshot["diagnostics"],
+        }
+    except Exception as exc:
+        rollback_errors = []
+        if pointer_assigned:
+            try:
+                if hasattr(scene, "compositing_node_group"):
+                    scene.compositing_node_group = original_tree
+                else:
+                    scene.use_nodes = original_use_nodes
+            except (AttributeError, RuntimeError) as rollback_exc:
+                rollback_errors.append(
+                    f"restore Scene compositor state: "
+                    f"{type(rollback_exc).__name__}: {rollback_exc}"
+                )
+        if created_tree is not None:
+            try:
+                if created_tree.name in bpy.data.node_groups:
+                    bpy.data.node_groups.remove(created_tree, do_unlink=True)
+                created_tree = None
+            except (AttributeError, RuntimeError) as rollback_exc:
+                rollback_errors.append(
+                    f"remove created compositor tree: "
+                    f"{type(rollback_exc).__name__}: {rollback_exc}"
+                )
+        restored_tree, _restored_adapter = _node_scene_tree(scene)
+        if restored_tree != original_tree:
+            rollback_errors.append("the Scene compositor state was not restored")
+        diagnostics = [_gn_patch_diagnostic(
+            "error",
+            "compositor_creation_rolled_back",
+            "",
+            f"{type(exc).__name__}: {exc}",
+        )]
+        diagnostics.extend(
+            _gn_patch_diagnostic("error", "rollback_incomplete", "", message)
+            for message in rollback_errors
+        )
+        return {
+            "schema": SCENE_COMPOSITOR_TREE_SCHEMA,
+            "status": "rollback_failed" if rollback_errors else "rolled_back",
+            "created": False,
+            "mutated": bool(rollback_errors),
+            "scene": _node_owner_record("SCENE", scene),
+            "tree_ref": tree_ref,
+            "adapter": adapter,
+            "revision": None,
+            "diagnostics": diagnostics,
+        }
+    finally:
+        if not committed and created_tree is not None:
+            try:
+                if created_tree.name in bpy.data.node_groups:
+                    bpy.data.node_groups.remove(created_tree, do_unlink=True)
+            except (AttributeError, RuntimeError):
+                pass
 
 
 def _node_tree_index(target, query="", offset=0, limit=100):
@@ -1130,7 +1650,7 @@ def _node_special_structure_schema(node):
 def _node_graph_record(node, view):
     """Extend the compatibility node record with generic dynamic structures."""
     record = _gn_node_record(node, view)
-    if view in {"semantic", "all"}:
+    if view in {"semantic", "operations", "all"}:
         structures = _node_special_structure_schema(node)
         if structures:
             record["special_structures"] = structures
@@ -1375,9 +1895,16 @@ def _gn_node_group_dependencies(tree):
     ]
 
 
-def _gn_node_asset_record(tree, library_path):
+def _gn_node_asset_record(
+    tree,
+    library_path,
+    *,
+    source_scope="ESSENTIALS",
+    configured_library=None,
+):
     metadata = tree.asset_data
     interface = _gn_tree_interface(tree, True)
+    configured_library = dict(configured_library or {})
     return {
         "name": tree.name,
         "description": getattr(metadata, "description", "") or "",
@@ -1385,8 +1912,10 @@ def _gn_node_asset_record(tree, library_path):
         "catalog_id": str(getattr(metadata, "catalog_id", "") or ""),
         "tags": sorted(tag.name for tag in getattr(metadata, "tags", [])),
         "tree_type": tree.bl_idname,
+        "source_scope": source_scope,
         "source_library": os.path.basename(library_path),
         "source_path": os.path.normpath(library_path),
+        "configured_library": configured_library,
         "interface": interface,
         "node_count": len(tree.nodes),
         "link_count": len(tree.links),
@@ -1395,7 +1924,12 @@ def _gn_node_asset_record(tree, library_path):
     }
 
 
-def _gn_load_official_node_asset_library(library_path):
+def _gn_load_node_asset_library(
+    library_path,
+    *,
+    source_scope="ESSENTIALS",
+    configured_library=None,
+):
     """Inspect one library and remove every ID appended during inspection."""
     before = _gn_blend_data_ids()
     records = []
@@ -1410,7 +1944,12 @@ def _gn_load_official_node_asset_library(library_path):
         for tree in data_to.node_groups:
             if tree is None or tree.asset_data is None:
                 continue
-            records.append(_gn_node_asset_record(tree, library_path))
+            records.append(_gn_node_asset_record(
+                tree,
+                library_path,
+                source_scope=source_scope,
+                configured_library=configured_library,
+            ))
     finally:
         after = _gn_blend_data_ids()
         appended = [item for pointer, item in after.items() if pointer not in before]
@@ -1428,11 +1967,11 @@ def _gn_load_official_node_asset_library(library_path):
                 f"{item.bl_rna.identifier}/{item.name}" for item in remaining[:10]
             )
             raise _GNAssetCleanupError(
-                f"Official asset inspection leaked {len(remaining)} datablocks: {names}"
+                f"Asset inspection leaked {len(remaining)} datablocks: {names}"
             ) from cleanup_error
         if cleanup_error is not None:
             raise _GNAssetCleanupError(
-                f"Official asset inspection cleanup failed: {cleanup_error}"
+                f"Asset inspection cleanup failed: {cleanup_error}"
             ) from cleanup_error
     return records
 
@@ -1453,7 +1992,15 @@ def _gn_official_node_asset_catalog():
     errors = []
     for path in paths:
         try:
-            records.extend(_gn_load_official_node_asset_library(path))
+            records.extend(_gn_load_node_asset_library(
+                path,
+                source_scope="ESSENTIALS",
+                configured_library={
+                    "name": "Blender Essentials",
+                    "path": os.path.normpath(os.path.dirname(path)),
+                    "import_method": "BUNDLED",
+                },
+            ))
         except _GNAssetCleanupError:
             raise
         except Exception as exc:
@@ -1466,6 +2013,149 @@ def _gn_official_node_asset_catalog():
     result = {"records": records, "errors": errors, "library_paths": paths}
     _GN_ESSENTIALS_CATALOG_CACHE.clear()
     _GN_ESSENTIALS_CATALOG_CACHE[key] = result
+    return result
+
+
+def _gn_configured_asset_libraries():
+    """Return normalized user-configured asset-library roots."""
+    libraries = []
+    filepaths = getattr(bpy.context.preferences, "filepaths", None)
+    configured = getattr(filepaths, "asset_libraries", ())
+    for library in configured:
+        raw_path = str(getattr(library, "path", "") or "").strip()
+        if not raw_path:
+            continue
+        try:
+            expanded = bpy.path.abspath(raw_path)
+        except (AttributeError, TypeError, ValueError):
+            expanded = raw_path
+        normalized = os.path.normpath(os.path.abspath(expanded))
+        libraries.append({
+            "name": str(getattr(library, "name", "") or os.path.basename(normalized)),
+            "path": normalized,
+            "real_path": os.path.realpath(normalized),
+            "import_method": str(getattr(library, "import_method", "") or ""),
+        })
+    return sorted(libraries, key=lambda item: (item["name"].casefold(), item["path"]))
+
+
+def _gn_path_within_root(path, root):
+    try:
+        return os.path.commonpath((os.path.realpath(path), os.path.realpath(root))) == os.path.realpath(root)
+    except (OSError, ValueError):
+        return False
+
+
+def _gn_configured_library_blend_paths(library):
+    """Enumerate a bounded set of .blend files below one configured root."""
+    root = library["path"]
+    if not os.path.isdir(root):
+        return [], [{
+            "library": library["name"],
+            "path": root,
+            "error": "Configured asset-library path is not a directory",
+        }]
+    paths = []
+    errors = []
+    for directory, directory_names, file_names in os.walk(root, followlinks=False):
+        directory_names[:] = sorted(
+            name for name in directory_names if not name.startswith(".")
+        )
+        for file_name in sorted(file_names):
+            if not file_name.lower().endswith(".blend"):
+                continue
+            path = os.path.normpath(os.path.join(directory, file_name))
+            if not _gn_path_within_root(path, library["real_path"]):
+                errors.append({
+                    "library": library["name"],
+                    "path": path,
+                    "error": "Skipped asset path outside the configured library root",
+                })
+                continue
+            paths.append(path)
+            if len(paths) >= _GN_MAX_CONFIGURED_LIBRARY_BLEND_FILES:
+                errors.append({
+                    "library": library["name"],
+                    "path": root,
+                    "error": (
+                        "Configured library scan was truncated at "
+                        f"{_GN_MAX_CONFIGURED_LIBRARY_BLEND_FILES} .blend files"
+                    ),
+                })
+                return paths, errors
+    return paths, errors
+
+
+def _gn_user_node_asset_catalog(library_filter=""):
+    """Inspect configured user asset libraries with bounded disposable loads."""
+    filter_text = str(library_filter or "").strip().casefold()
+    all_libraries = _gn_configured_asset_libraries()
+    identity_matches = [
+        item for item in all_libraries
+        if filter_text and filter_text in " ".join((item["name"], item["path"])).casefold()
+    ]
+    libraries = identity_matches if identity_matches else all_libraries
+    path_records = []
+    errors = []
+    for library in libraries:
+        paths, path_errors = _gn_configured_library_blend_paths(library)
+        errors.extend(path_errors)
+        path_records.extend((path, library) for path in paths)
+
+    metadata = []
+    for path, library in path_records:
+        try:
+            metadata.append((path, os.path.getsize(path), int(os.path.getmtime(path)), library["name"]))
+        except OSError as exc:
+            errors.append({
+                "library": library["name"],
+                "path": path,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+    key = (_gn_node_catalog_cache_key(), tuple(metadata))
+    cached = _GN_USER_ASSET_CATALOG_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    valid_paths = {item[0] for item in metadata}
+    records = []
+    for path, library in path_records:
+        if path not in valid_paths:
+            continue
+        try:
+            records.extend(_gn_load_node_asset_library(
+                path,
+                source_scope="USER",
+                configured_library={
+                    "name": library["name"],
+                    "path": library["path"],
+                    "import_method": library["import_method"],
+                },
+            ))
+        except _GNAssetCleanupError:
+            raise
+        except Exception as exc:
+            errors.append({
+                "library": library["name"],
+                "path": path,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+    records.sort(key=lambda item: (
+        item["name"].casefold(),
+        item["configured_library"].get("name", "").casefold(),
+        item["source_path"],
+    ))
+    result = {
+        "records": records,
+        "errors": errors,
+        "library_paths": [item[0] for item in path_records],
+        "configured_libraries": [
+            {key: value for key, value in item.items() if key != "real_path"}
+            for item in libraries
+        ],
+    }
+    _GN_USER_ASSET_CATALOG_CACHE.clear()
+    _GN_USER_ASSET_CATALOG_CACHE[key] = result
     return result
 
 
@@ -1484,8 +2174,9 @@ def _gn_node_asset_summary(record):
         key: record[key]
         for key in (
             "name", "description", "author", "catalog_id", "tags",
-            "tree_type", "source_library", "source_path", "node_count",
-            "link_count", "interface_item_count", "dependencies",
+            "tree_type", "source_scope", "source_library", "source_path",
+            "configured_library", "node_count", "link_count",
+            "interface_item_count", "dependencies",
         )
     } | {
         "interface_summary": {
@@ -1494,6 +2185,161 @@ def _gn_node_asset_summary(record):
             "panels": panels,
         },
     }
+
+
+def _gn_node_asset_catalog_for_scope(scope, library=""):
+    scope_value = str(scope or "USER").strip().upper()
+    if scope_value not in _GN_ASSET_SCOPES:
+        raise ValueError("scope must be 'ESSENTIALS', 'USER', or 'ALL'")
+    catalogs = []
+    if scope_value in {"ESSENTIALS", "ALL"}:
+        catalogs.append(_gn_official_node_asset_catalog())
+    if scope_value in {"USER", "ALL"}:
+        catalogs.append(_gn_user_node_asset_catalog(library))
+    return scope_value, {
+        "records": [item for catalog in catalogs for item in catalog["records"]],
+        "errors": [item for catalog in catalogs for item in catalog["errors"]],
+    }
+
+
+def _gn_import_node_asset(
+    source_path,
+    asset_name,
+    *,
+    tree_type="",
+    scope="USER",
+    library="",
+    conflict_policy="REJECT",
+):
+    if not isinstance(source_path, str) or not source_path.strip():
+        raise ValueError("source_path must be a non-empty string from asset search")
+    if not isinstance(asset_name, str) or not asset_name.strip():
+        raise ValueError("asset_name must be a non-empty string")
+    asset_name = asset_name.strip()
+    tree_type = str(tree_type or "").strip()
+    if tree_type and tree_type not in NODE_TREE_TYPES:
+        raise ValueError(
+            "tree_type must be GeometryNodeTree, ShaderNodeTree, or CompositorNodeTree"
+        )
+    policy = str(conflict_policy or "REJECT").strip().upper()
+    if policy not in {"REJECT", "RENAME"}:
+        raise ValueError("conflict_policy must be 'REJECT' or 'RENAME'")
+
+    requested_path = os.path.normcase(os.path.realpath(os.path.abspath(source_path)))
+    scope_value, catalog = _gn_node_asset_catalog_for_scope(scope, library)
+    matches = [
+        record for record in catalog["records"]
+        if os.path.normcase(os.path.realpath(record["source_path"])) == requested_path
+        and record["name"] == asset_name
+        and (not tree_type or record["tree_type"] == tree_type)
+    ]
+    if not matches:
+        raise ValueError(
+            "Asset identity was not found in the requested configured/bundled "
+            "catalog. Run search_blender_node_assets and pass its exact "
+            "source_path, name, tree_type, scope, and library identity."
+        )
+    if len(matches) > 1:
+        raise ValueError("Asset identity is ambiguous across the requested catalogs")
+    record = matches[0]
+
+    existing = bpy.data.node_groups.get(asset_name)
+    if existing is not None and policy == "REJECT":
+        return {
+            "schema": BLENDER_NODE_ASSET_IMPORT_SCHEMA,
+            "status": "rejected",
+            "imported": False,
+            "mutated": False,
+            "asset": _gn_node_asset_summary(record),
+            "node_group": None,
+            "diagnostics": [_gn_patch_diagnostic(
+                "error",
+                "node_group_name_conflict",
+                "/conflict_policy",
+                f"Node group {asset_name!r} already exists. Use conflict_policy "
+                "'RENAME' to import a distinct local copy.",
+            )],
+        }
+
+    before = _gn_blend_data_ids()
+    try:
+        try:
+            loader = bpy.data.libraries.load(
+                record["source_path"], link=False, assets_only=True
+            )
+        except TypeError:
+            loader = bpy.data.libraries.load(record["source_path"], link=False)
+        with loader as (data_from, data_to):
+            if asset_name not in data_from.node_groups:
+                raise RuntimeError(
+                    f"Node asset {asset_name!r} disappeared from {record['source_path']!r}"
+                )
+            data_to.node_groups = [asset_name]
+        imported = data_to.node_groups[0] if data_to.node_groups else None
+        if imported is None or imported.bl_idname != record["tree_type"]:
+            raise RuntimeError("Blender did not append the requested node asset")
+        imported["blender_mcp_asset_name"] = record["name"]
+        imported["blender_mcp_asset_source_path"] = os.path.normpath(
+            record["source_path"]
+        )
+        imported["blender_mcp_asset_source_scope"] = record["source_scope"]
+        after = _gn_blend_data_ids()
+        imported_ids = [
+            item for pointer, item in after.items() if pointer not in before
+        ]
+        if imported not in imported_ids:
+            raise RuntimeError("Imported node group was not isolated as a new datablock")
+        return {
+            "schema": BLENDER_NODE_ASSET_IMPORT_SCHEMA,
+            "status": "imported",
+            "imported": True,
+            "mutated": True,
+            "asset": _gn_node_asset_summary(record),
+            "node_group": {
+                "name": imported.name,
+                "tree_type": imported.bl_idname,
+                "library": _node_id_library(imported),
+                "editable": _node_id_editable(imported),
+            },
+            "imported_ids": [
+                {
+                    "id_type": item.bl_rna.identifier,
+                    "name": item.name,
+                }
+                for item in sorted(
+                    imported_ids,
+                    key=lambda item: (item.bl_rna.identifier, item.name),
+                )
+            ],
+            "import_method": "APPEND_LOCAL",
+            "conflict_policy": policy,
+            "scope": scope_value,
+            "diagnostics": [],
+        }
+    except Exception as exc:
+        appended = [
+            item for pointer, item in _gn_blend_data_ids().items()
+            if pointer not in before
+        ]
+        cleanup_error = None
+        if appended:
+            try:
+                bpy.data.batch_remove(ids=appended)
+            except Exception as rollback_exc:
+                cleanup_error = rollback_exc
+        remaining = [
+            item for pointer, item in _gn_blend_data_ids().items()
+            if pointer not in before
+        ]
+        if remaining or cleanup_error is not None:
+            details = ", ".join(
+                f"{item.bl_rna.identifier}/{item.name}" for item in remaining[:10]
+            )
+            raise RuntimeError(
+                f"Asset import failed and rollback was incomplete: {exc}; "
+                f"cleanup={cleanup_error}; remaining={details}"
+            ) from exc
+        raise RuntimeError(f"Asset import failed and was rolled back: {exc}") from exc
 
 
 def _gn_patch_diagnostic(severity, code, path, message):
@@ -2912,6 +3758,9 @@ def _node_validate_patch_runtime(target, patch):
                     owner=target["owner"],
                     capabilities=capabilities,
                 )
+                diagnostics.extend(
+                    _node_graph_diagnostics(working_target["tree"])
+                )
         except Exception as exc:
             diagnostics.append(_gn_patch_diagnostic(
                 "error", "dry_run_execution_rejected", "",
@@ -4015,7 +4864,9 @@ class BlenderMCPServer:
             "get_scene_info": self.get_scene_info,
             "get_object_info": self.get_object_info,
             "get_blender_version_context": self.get_blender_version_context,
+            "get_runtime_automation_context": self.get_runtime_automation_context,
             "list_node_trees": self.list_node_trees,
+            "ensure_scene_compositor_tree": self.ensure_scene_compositor_tree,
             "export_node_tree": self.export_node_tree,
             "get_node_tree_index": self.get_node_tree_index,
             "get_node_type_schema": self.get_node_type_schema,
@@ -4026,6 +4877,7 @@ class BlenderMCPServer:
             "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
             "search_geometry_node_types": self.search_geometry_node_types,
             "search_blender_node_assets": self.search_blender_node_assets,
+            "import_blender_node_asset": self.import_blender_node_asset,
             "get_geometry_node_tree_index": self.get_geometry_node_tree_index,
             "validate_geometry_node_patch": self.validate_geometry_node_patch,
             "apply_geometry_node_patch": self.apply_geometry_node_patch,
@@ -4129,6 +4981,18 @@ class BlenderMCPServer:
         """Return exact version/build metadata for documentation resolution."""
         return _blender_version_context()
 
+    def get_runtime_automation_context(self):
+        """Return live render, Action, compositor, and instance compatibility."""
+        return _runtime_automation_context()
+
+    def ensure_scene_compositor_tree(
+        self, scene_name, create_if_missing=False,
+    ):
+        """Inspect or transactionally initialize one local Scene compositor."""
+        return _node_ensure_scene_compositor_tree(
+            scene_name, bool(create_if_missing),
+        )
+
     def list_node_trees(self, tree_types=None, owner_kinds=None):
         """List owner-addressed Geometry, Shader, and Compositor trees."""
         tree_types = list(tree_types or ())
@@ -4166,6 +5030,7 @@ class BlenderMCPServer:
                 "link_count": snapshot["stats"]["link_count"],
                 "interface_item_count": snapshot["stats"]["interface_item_count"],
                 "users": snapshot["users"],
+                "diagnostics": snapshot["diagnostics"],
             })
         return {
             "schema": NODE_TREE_SNAPSHOT_SCHEMA,
@@ -4375,9 +5240,10 @@ class BlenderMCPServer:
         }
 
     def search_blender_node_assets(
-        self, query="", library="", tree_type="", detail="summary", offset=0, limit=20,
+        self, query="", library="", tree_type="", detail="summary", scope="ESSENTIALS",
+        offset=0, limit=20,
     ):
-        """Search installed official Essentials node assets without retaining IDs."""
+        """Search bundled or configured node assets without retaining inspected IDs."""
         try:
             offset = int(offset)
             limit = int(limit)
@@ -4392,22 +5258,47 @@ class BlenderMCPServer:
             raise ValueError("detail must be 'summary' or 'full'")
         if detail == "full" and limit > 20:
             raise ValueError("full detail limit must not exceed 20")
+        scope_value = str(scope or "ESSENTIALS").strip().upper()
+        if scope_value not in _GN_ASSET_SCOPES:
+            raise ValueError("scope must be 'ESSENTIALS', 'USER', or 'ALL'")
         query_value = "" if query is None else str(query)
         library_value = "" if library is None else str(library)
         tree_type_value = "" if tree_type is None else str(tree_type)
         query_text = query_value.strip().casefold()
         library_text = library_value.strip().casefold()
         tree_type_text = tree_type_value.strip().casefold()
-        catalog = _gn_official_node_asset_catalog()
+        catalogs = []
+        if scope_value in {"ESSENTIALS", "ALL"}:
+            catalogs.append(_gn_official_node_asset_catalog())
+        if scope_value in {"USER", "ALL"}:
+            catalogs.append(_gn_user_node_asset_catalog(library_value))
+        catalog = {
+            "records": [item for part in catalogs for item in part["records"]],
+            "errors": [item for part in catalogs for item in part["errors"]],
+            "library_paths": [item for part in catalogs for item in part["library_paths"]],
+            "configured_libraries": [
+                item
+                for part in catalogs
+                for item in part.get("configured_libraries", ())
+            ],
+        }
         matches = []
         for item in catalog["records"]:
-            if library_text and library_text not in item["source_library"].casefold():
+            library_haystack = " ".join((
+                item["source_library"],
+                item["source_path"],
+                item.get("configured_library", {}).get("name", ""),
+                item.get("configured_library", {}).get("path", ""),
+            )).casefold()
+            if library_text and library_text not in library_haystack:
                 continue
             if tree_type_text and tree_type_text != item["tree_type"].casefold():
                 continue
             haystack = " ".join((
                 item["name"], item["description"], item["author"],
-                item["source_library"], item["tree_type"], " ".join(item["tags"]),
+                item["source_scope"], item["source_library"],
+                item.get("configured_library", {}).get("name", ""),
+                item["tree_type"], " ".join(item["tags"]),
             )).casefold()
             if query_text and query_text not in haystack:
                 continue
@@ -4422,10 +5313,12 @@ class BlenderMCPServer:
             "query": query_value,
             "library": library_value,
             "tree_type": tree_type_value,
+            "scope": scope_value,
             "detail": detail,
             "offset": offset,
             "limit": limit,
             "library_count": len(catalog["library_paths"]),
+            "configured_library_count": len(catalog["configured_libraries"]),
             "total_assets": len(catalog["records"]),
             "total_matches": len(matches),
             "next_offset": next_offset if next_offset < len(matches) else None,
@@ -4435,6 +5328,25 @@ class BlenderMCPServer:
             ],
             "errors": catalog["errors"],
         }
+
+    def import_blender_node_asset(
+        self,
+        source_path,
+        asset_name,
+        tree_type="",
+        scope="USER",
+        library="",
+        conflict_policy="REJECT",
+    ):
+        """Append one exact searched node asset through a rollback-safe transaction."""
+        return _gn_import_node_asset(
+            source_path,
+            asset_name,
+            tree_type=tree_type,
+            scope=scope,
+            library=library,
+            conflict_policy=conflict_policy,
+        )
 
     def get_geometry_node_tree_index(self, tree_name, query="", offset=0, limit=100):
         """Return a searchable, paginated node-name/type index for subgraph discovery."""

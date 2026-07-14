@@ -67,6 +67,11 @@ class RuntimeKnowledgeToolTests(unittest.TestCase):
             "limit": 25,
         })
 
+    def test_runtime_automation_context_uses_read_only_bridge_command(self):
+        response = json.loads(server.get_runtime_automation_context(None))
+        self.assertEqual(response["command"], "get_runtime_automation_context")
+        self.assertIsNone(response["params"])
+
     def test_node_asset_search_forwards_filters_and_detail(self):
         response = json.loads(server.search_blender_node_assets(
             None,
@@ -74,6 +79,7 @@ class RuntimeKnowledgeToolTests(unittest.TestCase):
             library="dynamics",
             tree_type="GeometryNodeTree",
             detail="full",
+            scope="USER",
             offset=2,
             limit=10,
         ))
@@ -83,8 +89,29 @@ class RuntimeKnowledgeToolTests(unittest.TestCase):
             "library": "dynamics",
             "tree_type": "GeometryNodeTree",
             "detail": "full",
+            "scope": "USER",
             "offset": 2,
             "limit": 10,
+        })
+
+    def test_node_asset_import_forwards_exact_identity_and_conflict_policy(self):
+        response = json.loads(server.import_blender_node_asset(
+            None,
+            source_path=r"D:\Assets\nodes.blend",
+            asset_name="Index Field",
+            tree_type="GeometryNodeTree",
+            scope="USER",
+            library="My Assets",
+            conflict_policy="RENAME",
+        ))
+        self.assertEqual(response["command"], "import_blender_node_asset")
+        self.assertEqual(response["params"], {
+            "source_path": r"D:\Assets\nodes.blend",
+            "asset_name": "Index Field",
+            "tree_type": "GeometryNodeTree",
+            "scope": "USER",
+            "library": "My Assets",
+            "conflict_policy": "RENAME",
         })
 
 

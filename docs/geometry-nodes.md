@@ -26,6 +26,9 @@ operations outside the supported patch schema.
 | `get_geometry_node_tree_index` | Search/page compact node names and types | No |
 | `export_geometry_node_tree` | Return or write a full graph or N-hop subgraph | No |
 | `get_geometry_node_type_schema` | Probe sockets and editable RNA properties in the running Blender version | No |
+| `search_geometry_node_types` | Search node types accepted by the connected Blender build | No |
+| `search_blender_node_assets` | Inspect bundled or configured-user node assets in a disposable scope | No |
+| `import_blender_node_asset` | Append one exact searched asset after revalidating its source identity | Yes |
 | `validate_geometry_node_patch` | Structurally validate and execute a disposable-copy dry-run | No |
 | `apply_geometry_node_patch` | Validate, copy, verify, remap users, and report the actual diff | Yes |
 
@@ -48,7 +51,8 @@ and patch files larger than 4 MiB are rejected.
 2. For a non-trivial graph, call `get_geometry_node_tree_index`. Search by node
    name, label, `bl_idname`, or Blender label and page through results if needed.
 3. Call `export_geometry_node_tree` with the chosen `node_names` and a
-   `neighbor_depth` from 0 to 5. Use `view="semantic"` unless layout is relevant.
+   `neighbor_depth` from 0 to 5. Use `view="operations"` for formulas and links,
+   `semantic` when socket/RNA detail is needed, or `layout` for presentation.
 4. Copy the returned `revision` into `base_revision` in a patch file. Create or
    edit that file with the client's existing file-edit tool.
 5. Call `validate_geometry_node_patch` with `patch_path`. Do not apply unless it
@@ -101,6 +105,9 @@ to that ID; the application result maps it to the actual Blender node name.
   library path, and editability metadata.
 - Full, semantic, layout, and subgraph exports of the same source share the same
   full-graph `revision`. `scope.content_revision` identifies the returned view.
+- The `operations` view keeps operation enums, relevant scalar/socket defaults,
+  interfaces, and links without inherited RNA metadata, and shares that same
+  full-graph revision.
 - Validation rejects a patch when `base_revision` is stale.
 - Dry-run applies every operation to a disposable copy, re-exports it, and
   reports the candidate revision without changing the source.
@@ -147,6 +154,10 @@ all-view payload in this fixture because socket and RNA metadata dominate;
 omitting layout alone is not enough. The recommended context strategy is
 therefore **index -> targeted subgraph -> type probe when needed -> patch**.
 
+For small formula/connectivity reviews, prefer the `operations` view even when
+the entire utility group is requested. The model-efficiency acceptance requires
+it to be smaller than the semantic view while retaining the same revision.
+
 Token figures should be measured with the actual client model's tokenizer. The
 acceptance test's byte/4 estimate is only a coarse budget signal, not a model
 benchmark or a guaranteed task success rate.
@@ -174,6 +185,20 @@ animation/drivers, simulation bake state, lossless cross-version migration,
 linked-tree mutation, and arbitrary node-specific operators remain outside the
 contracts. Unsupported work may use `execute_blender_code`, but doing so bypasses
 revision, schema, dry-run, copy-on-write, and actual-diff guarantees.
+
+## Configured node assets
+
+`search_blender_node_assets` accepts `scope=ESSENTIALS|USER|ALL`. USER paths are
+read only from Blender's configured asset libraries, remain within each real
+configured root, and are scanned with a bounded file count. Inspection removes
+every appended datablock before returning `source_path`, `source_scope`, and
+configured-library identity.
+
+Pass that exact identity to `import_blender_node_asset`. The tool rejects
+arbitrary paths, locally appends rather than links, defaults to rejecting an
+existing node-group name, and supports `conflict_policy=RENAME` for a distinct
+Blender-suffixed copy. If append or verification fails, all newly created IDs
+are removed.
 
 ## Build and install the ZIP
 

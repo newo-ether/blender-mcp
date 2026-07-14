@@ -1038,6 +1038,169 @@ function Test-SamePath {
     }
 }
 
+function Test-LegacyBlenderMcpCommand {
+    param(
+        [string]$Command,
+        [object[]]$Arguments
+    )
+
+    if (-not $Command) {
+        return $false
+    }
+    $leaf = [System.IO.Path]::GetFileName(([string]$Command).Trim('"')).ToLowerInvariant()
+    $args = @($Arguments | ForEach-Object { ([string]$_).Trim() })
+    if ($leaf -eq "uvx" -or $leaf -eq "uvx.exe") {
+        return [bool](@($args | Where-Object {
+            $_ -eq "blender-mcp" -or $_ -like "blender-mcp@*"
+        }).Count)
+    }
+    if ($leaf -eq "uv" -or $leaf -eq "uv.exe") {
+        for ($index = 0; $index -lt $args.Count; $index++) {
+            if ($args[$index] -ne "uvx") {
+                continue
+            }
+            if ($index + 1 -lt $args.Count -and (
+                $args[$index + 1] -eq "blender-mcp" -or
+                $args[$index + 1] -like "blender-mcp@*"
+            )) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Test-LegacyBlenderMcpCommandLine {
+    param([string]$CommandLine)
+
+    $value = ([string]$CommandLine).Trim()
+    if (-not $value) {
+        return $false
+    }
+    if ($value -match '(?i)(?:^|[\\/\s"])(uvx(?:\.exe)?)["]?\s+(?:[^\r\n]*\s+)?blender-mcp(?:@[^\s]+)?(?:\s|$)') {
+        return $true
+    }
+    return [bool]($value -match '(?i)(?:^|[\\/\s"])(uv(?:\.exe)?)["]?\s+(?:tool\s+)?uvx\s+blender-mcp(?:@[^\s]+)?(?:\s|$)')
+}
+
+function Get-CodexLegacyBlenderMcpEntries {
+    param([string]$CodexExecutable)
+
+    $probe = Invoke-CapturedCommand -FilePath $CodexExecutable -ArgumentList @(
+        "mcp", "list", "--json"
+    ) -IncludeErrorOutput
+    if ($probe.ExitCode -ne 0) {
+        Write-WarningLine "Could not list Codex MCP entries for legacy Blender MCP migration."
+        return @()
+    }
+    try {
+        $parsedEntries = ($probe.Output -join "`n") | ConvertFrom-Json
+        # Windows PowerShell 5.1 emits a top-level JSON array as one Object[]
+        # pipeline item. Assign first so the array subexpression expands it.
+        $entries = @($parsedEntries)
+    }
+    catch {
+        Write-WarningLine "Codex returned an unreadable MCP list; legacy entries were not changed."
+        return @()
+    }
+    $results = @()
+    foreach ($entry in $entries) {
+        $name = [string](Get-JsonProperty -Object $entry -Name "name")
+        if (-not $name -or $name -eq "blender_mcp") {
+            continue
+        }
+        $transport = Get-JsonProperty -Object $entry -Name "transport"
+        $command = [string](Get-JsonProperty -Object $transport -Name "command")
+        $arguments = @(Get-JsonProperty -Object $transport -Name "args")
+        if (Test-LegacyBlenderMcpCommand -Command $command -Arguments $arguments) {
+            $results += [PSCustomObject]@{
+                Name = $name
+                Command = $command
+                Arguments = $arguments
+            }
+        }
+    }
+    return @($results)
+}
+
+function Get-ClaudeLegacyBlenderMcpEntries {
+    param([string]$ClaudeExecutable)
+
+    $probe = Invoke-CapturedCommand -FilePath $ClaudeExecutable -ArgumentList @(
+        "mcp", "list"
+    ) -IncludeErrorOutput
+    if ($probe.ExitCode -ne 0) {
+        Write-WarningLine "Could not list Claude Code MCP entries for legacy Blender MCP migration."
+        return @()
+    }
+    $results = @()
+    foreach ($rawLine in $probe.Output) {
+        $line = ([string]$rawLine) -replace "$([char]27)\[[0-9;]*m", ""
+        if ($line -notmatch '^\s*([^:]+):\s+(.+?)\s+-\s+.+$') {
+            continue
+        }
+        $name = $Matches[1].Trim()
+        $commandLine = $Matches[2].Trim()
+        if ($name -eq "blender_mcp") {
+            continue
+        }
+        if (Test-LegacyBlenderMcpCommandLine -CommandLine $commandLine) {
+            $results += [PSCustomObject]@{
+                Name = $name
+                CommandLine = $commandLine
+            }
+        }
+    }
+    return @($results)
+}
+
+function Remove-CodexLegacyBlenderMcpEntries {
+    param(
+        [string]$CodexExecutable,
+        [bool]$PreserveExisting
+    )
+    $entries = @(Get-CodexLegacyBlenderMcpEntries -CodexExecutable $CodexExecutable)
+    foreach ($entry in $entries) {
+        if ($PreserveExisting) {
+            Write-WarningLine "Preserving legacy Codex MCP entry '$($entry.Name)': $($entry.Command) $($entry.Arguments -join ' ')"
+            continue
+        }
+        Invoke-CheckedCommand -FilePath $CodexExecutable -ArgumentList @(
+            "mcp", "remove", $entry.Name
+        ) -Description "Removing legacy Codex Blender MCP entry '$($entry.Name)'..."
+        if (-not $script:DryRunEnabled) {
+            Write-Ok "Removed legacy Codex Blender MCP entry '$($entry.Name)'."
+        }
+    }
+}
+
+function Remove-ClaudeLegacyBlenderMcpEntries {
+    param(
+        [string]$ClaudeExecutable,
+        [bool]$PreserveExisting
+    )
+    $entries = @(Get-ClaudeLegacyBlenderMcpEntries -ClaudeExecutable $ClaudeExecutable)
+    foreach ($entry in $entries) {
+        if ($PreserveExisting) {
+            Write-WarningLine "Preserving legacy Claude Code MCP entry '$($entry.Name)': $($entry.CommandLine)"
+            continue
+        }
+        if ($script:DryRunEnabled) {
+            Write-Info "Would remove legacy Claude Code user-scope entry '$($entry.Name)'."
+            continue
+        }
+        $remove = Invoke-CapturedCommand -FilePath $ClaudeExecutable -ArgumentList @(
+            "mcp", "remove", $entry.Name, "--scope", "user"
+        ) -IncludeErrorOutput
+        if ($remove.ExitCode -eq 0) {
+            Write-Ok "Removed legacy Claude Code Blender MCP entry '$($entry.Name)'."
+        }
+        else {
+            Write-WarningLine "Could not remove legacy Claude Code entry '$($entry.Name)' from user scope; it was retained."
+        }
+    }
+}
+
 function Register-CodexMcp {
     param(
         [string]$CodexExecutable,
@@ -1046,6 +1209,10 @@ function Register-CodexMcp {
         [int]$Port,
         [bool]$PreserveExisting
     )
+
+    Remove-CodexLegacyBlenderMcpEntries `
+        -CodexExecutable $CodexExecutable `
+        -PreserveExisting $PreserveExisting
 
     $existing = $null
     $existingProbe = Invoke-CapturedCommand -FilePath $CodexExecutable -ArgumentList @(
@@ -1127,6 +1294,10 @@ function Register-ClaudeCodeMcp {
         [int]$Port,
         [bool]$PreserveExisting
     )
+
+    Remove-ClaudeLegacyBlenderMcpEntries `
+        -ClaudeExecutable $ClaudeExecutable `
+        -PreserveExisting $PreserveExisting
 
     $existingProbe = Invoke-CapturedCommand -FilePath $ClaudeExecutable -ArgumentList @(
         "mcp", "get", "blender_mcp"
@@ -1430,7 +1601,7 @@ try {
     }
     Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @(
         "-c",
-        "import asyncio; from blender_mcp.server import mcp; tools = asyncio.run(mcp.list_tools()); names = {tool.name for tool in tools}; required = {'get_blender_documentation_context', 'search_blender_docs', 'get_blender_doc_page', 'search_geometry_node_types', 'search_blender_node_assets', 'list_node_trees', 'get_node_tree_index', 'export_node_tree', 'get_node_type_schema', 'validate_node_tree_patch', 'apply_node_tree_patch'}; missing = sorted(required - names); print(f'Registered MCP tools: {len(tools)}'); print(f'Missing required tools: {missing}' if missing else 'Knowledge and structured-node tools: ready'); assert len(tools) >= 39 and not missing"
+        "import asyncio; from blender_mcp.server import mcp; tools = asyncio.run(mcp.list_tools()); names = {tool.name for tool in tools}; required = {'get_blender_documentation_context', 'search_blender_docs', 'get_blender_doc_page', 'get_runtime_automation_context', 'search_geometry_node_types', 'search_blender_node_assets', 'import_blender_node_asset', 'list_node_trees', 'ensure_scene_compositor_tree', 'get_node_tree_index', 'export_node_tree', 'get_node_type_schema', 'validate_node_tree_patch', 'apply_node_tree_patch'}; missing = sorted(required - names); print(f'Registered MCP tools: {len(tools)}'); print(f'Missing required tools: {missing}' if missing else 'Knowledge and structured-node tools: ready'); assert len(tools) >= 42 and not missing"
     ) -Description "Verifying MCP imports and tool registration..."
     if (-not $script:DryRunEnabled) {
         if (-not (Test-Path -LiteralPath $serverExecutable -PathType Leaf)) {

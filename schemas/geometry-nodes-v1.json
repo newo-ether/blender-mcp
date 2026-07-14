@@ -16,7 +16,7 @@
       "minItems": 3,
       "maxItems": 3
     },
-    "view": {"enum": ["semantic", "layout", "all"]},
+    "view": {"enum": ["semantic", "operations", "layout", "all"]},
     "revision": {
       "description": "Full all-view graph revision, independent of export view, subgraph scope, data-block name, users, library metadata, and editability",
       "type": "string",

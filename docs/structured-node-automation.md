@@ -18,7 +18,8 @@ and RNA metadata still dominate the payload, so the intended context path is:
 
 1. `list_node_trees` to choose an exact owner.
 2. `get_node_tree_index` to search and page node names and types.
-3. `export_node_tree` with selected names and a small neighbor depth.
+3. `export_node_tree` with `view="operations"`, selected names, and a small
+   neighbor depth when only formulas, socket values, and links are needed.
 4. `get_node_type_schema` only when an exact runtime socket or property is
    needed.
 5. Edit a small patch with the client's normal file-edit tool.
@@ -43,6 +44,7 @@ reconstruct it from a UI label.
 | Tool | Role | Changes Blender |
 | --- | --- | --- |
 | `list_node_trees` | Discover owners, capabilities, revisions, size, users, and limits | No |
+| `ensure_scene_compositor_tree` | Inspect a Scene or explicitly initialize its missing compositor tree | Only with `create_if_missing=true` |
 | `get_node_tree_index` | Search/page a compact index | No |
 | `export_node_tree` | Return or atomically write a full graph or targeted N-hop subgraph | No |
 | `get_node_type_schema` | Probe the live Blender version in an exact owner context | No |
@@ -53,6 +55,24 @@ The JSON contracts live in [`schemas/`](../schemas). Both validation and
 application accept exactly one of an inline `patch` or a workspace-relative
 `patch_path`. File-backed patches are recommended because they are durable,
 diffable, and easy to edit incrementally.
+
+The `operations` export view omits inherited RNA metadata while retaining node
+operation enums, non-default writable scalars, enabled/linked socket defaults,
+interfaces, and links. It uses the same full-graph revision as every other view.
+
+## Empty Scene compositor setup
+
+An empty Scene may have no compositor tree. In Blender 5.1+, setting
+`Scene.use_nodes` does not create the required `Scene.compositing_node_group`.
+Call `ensure_scene_compositor_tree` first with its default
+`create_if_missing=false` to inspect state. Repeat with `true` only when the
+caller explicitly wants a tree.
+
+For Blender 5.1+, creation builds a standalone `CompositorNodeTree`, adds its
+Image output interface and Group Output, assigns only the selected Scene, and
+verifies the canonical `tree_ref`. Failure restores the Scene pointer and
+removes the new tree. Existing trees return `ready` without mutation; linked or
+override Scenes are rejected.
 
 ## Patch model
 
@@ -117,6 +137,10 @@ Treat `rollback_failed` as requiring manual inspection.
 - Runtime mutation is limited to 10,000 nodes and 30 seconds of validation.
 - A public full response is limited to 8 MiB. Use index plus targeted export if
   the graph is larger.
+- Geometry exports and patch dry-runs warn when a local Object Info source is
+  hidden from render, `As Instance` is a fixed true value, and its geometry
+  reaches Group Output. Keep the prototype render-visible outside the camera,
+  disable instancing, or realize/author the prototype inside the graph.
 
 `BLENDER_MCP_WORKSPACE` bounds all snapshot and patch paths. Paths outside that
 directory and non-JSON files are rejected.

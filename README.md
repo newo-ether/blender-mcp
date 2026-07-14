@@ -173,7 +173,10 @@ Blender Extension <-> Blender scene and node trees
 ```
 
 The MCP server is launched by the client. The Blender Extension hosts the local
-bridge. Start the bridge before asking the client to use Blender tools.
+bridge. The installer installs the Extension but does not launch Blender. Start
+Blender from the logged-on interactive desktop, then start the bridge before
+asking the client to use Blender tools; a background or Windows Session 0
+process cannot provide a visible window.
 
 ## Blender knowledge
 
@@ -189,7 +192,9 @@ source-attributed JSON instead of loading an entire Manual into context.
 | `search_geometry_node_types` | Find node types constructible in Geometry Nodes in the running build. | Yes |
 | `get_geometry_node_type_schema` | Read compact live sockets, node-owned properties, and dynamic items; inherited RNA is opt-in. | Yes |
 | `get_node_type_schema` | Inspect a Geometry, Shader, or Compositor node in its exact owner context. | Yes |
-| `search_blender_node_assets` | Inspect installed official Essentials node assets without leaving data blocks in the project. | Yes |
+| `get_runtime_automation_context` | Probe live render-engine/output, layered Action, compositor, and Object Info compatibility without retaining probe data. | Yes |
+| `search_blender_node_assets` | Inspect bundled Essentials or configured user node assets without leaving data blocks in the project. | Yes |
+| `import_blender_node_asset` | Append one exact searched asset locally after revalidating its configured/bundled source identity. | Yes |
 
 Use `version="auto"` for build-correct answers or an explicit version such as
 `"5.1"` while Blender is disconnected. Prerelease, channel, and English
@@ -221,6 +226,7 @@ Supported generic owners:
 | Tool | Purpose | Mutates Blender |
 | --- | --- | --- |
 | `list_node_trees` | List owner-addressed Geometry, Shader, and Compositor trees, users, capabilities, limits, and revisions. | No |
+| `ensure_scene_compositor_tree` | Inspect an exact Scene, or explicitly create and verify its missing compositor tree with rollback. | Only with `create_if_missing=true` |
 | `get_node_tree_index` | Search and page a compact index without putting the full graph in model context. | No |
 | `export_node_tree` | Return or write a full flat graph or targeted N-hop subgraph. | No |
 | `get_node_type_schema` | Probe exact runtime sockets, properties, dynamic structures, and owner restrictions. | No |
@@ -228,18 +234,22 @@ Supported generic owners:
 | `apply_node_tree_patch` | Revalidate, commit through the owner adapter, re-export, and roll back exactly on failure. | Yes |
 
 The eight `*_geometry_node_*` tools remain available as the Geometry Nodes v1
-compatibility contract, including modifier inputs, explicit shared-tree policy,
-and official Essentials asset search.
+compatibility contract, including modifier inputs and explicit shared-tree
+policy. Asset discovery additionally supports Blender-configured user libraries;
+import is a separate opt-in transaction.
 
 ### Recommended workflow
 
-1. Call `list_node_trees` and retain the exact `tree_ref`.
-2. Search large graphs with `get_node_tree_index`.
-3. Export only the relevant nodes and neighbors.
-4. Put the returned `revision` and `tree_ref` into a small patch JSON file.
-5. Edit that file with the client's normal file-edit tool.
-6. Call `validate_node_tree_patch`.
-7. Apply only a valid patch, then inspect `actual_diff`, `new_revision`, users,
+1. For a Scene with no compositor tree, call `ensure_scene_compositor_tree`
+   read-only first, then repeat with `create_if_missing=true` only when wanted.
+2. Call `list_node_trees` and retain the exact `tree_ref`.
+3. Search large graphs with `get_node_tree_index`.
+4. Export only the relevant nodes and neighbors. Use `view="operations"` for
+   formulas and connectivity without inherited RNA metadata.
+5. Put the returned `revision` and `tree_ref` into a small patch JSON file.
+6. Edit that file with the client's normal file-edit tool.
+7. Call `validate_node_tree_patch`.
+8. Apply only a valid patch, then inspect `actual_diff`, `new_revision`, users,
    and backup disposition.
 
 The generic protocol supports common graph/layout operations, Frame
@@ -267,7 +277,7 @@ Examples and contracts:
 
 ## Other capabilities
 
-The server currently exposes 39 MCP tools, including:
+The server currently exposes 42 MCP tools, including:
 
 - scene and object inspection;
 - viewport screenshots;
@@ -278,7 +288,8 @@ The server currently exposes 39 MCP tools, including:
 - Hyper3D Rodin text/image generation and import;
 - Hunyuan3D generation and import;
 - the three official-documentation tools;
-- six owner-aware structured-node tools and the eight Geometry Nodes v1 tools.
+- seven owner-aware structured-node tools, runtime compatibility probing,
+  configured node-asset import, and the eight Geometry Nodes v1 tools.
 
 Example requests:
 
@@ -411,11 +422,13 @@ MCP server telemetry.
 | A custom MCP entry must not be updated | Rerun with `-PreserveExistingMcpEntries`, or use the client-specific skip switch. |
 | Claude Code still uses another same-name entry | Run `claude mcp get blender_mcp` and check its scope. Local and project entries take precedence and are intentionally not removed by this installer. |
 | The client cannot reach Blender | Open Blender and confirm auto-connect is enabled, or click **Connect to Claude** manually; both sides must use the same host and port. |
+| Blender is running but no window is visible | The installer does not launch Blender. Start it from the logged-on desktop; a background or Windows Session 0 process is not an interactive GUI launch. |
+| An old `blender: uvx blender-mcp` entry still appears | Rerun the installer. It removes only semantically matched legacy entries unless `-PreserveExistingMcpEntries` is set; unrelated `uvx` services are retained. |
 | The Extension is absent from one Blender | Rerun and select that version, or pass its executable with `-BlenderPath`. |
 | A Geometry Nodes patch is stale | Re-index or re-export the tree and rebuild the patch with the new revision. |
 | A Shader or Compositor patch is stale | Re-index or re-export the exact owner-addressed `tree_ref`; do not reuse a patch for another owner with the same display tree name. |
 | A linked or override node tree cannot be edited | Linked data is read-only. Local library overrides can be inspected and dry-run, but apply is intentionally disabled. |
-| A full graph exceeds the response limit | Use `get_node_tree_index`, then call `export_node_tree` with `node_names` and a small `neighbor_depth`. |
+| A full graph exceeds the response limit | Use `get_node_tree_index`, then call `export_node_tree` with `view="operations"`, selected `node_names`, and a small `neighbor_depth`. |
 | Documentation is unavailable offline | Warm the same source/version/language first. Only marked stale entries fall back during network or server failure; a 404 does not. |
 | A prerelease Manual page is missing | Check the structured fallback, then query live node types/schema and installed Essentials for the exact build. |
 | Old versioned environments remain | Close all MCP clients, then remove obsolete `%LOCALAPPDATA%\BlenderMCP\venv-<old-version>` directories. Keep the path named in `current-server.txt`. |
@@ -443,6 +456,9 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm 
 - Shader owner and node-group transactions remap their existing users.
   Blender 5.1+ Scene compositor edits switch only the selected Scene; unrelated
   Scenes sharing the original tree stay unchanged.
+- Structured exports and patch validation warn when a local Object Info target
+  is hidden from render, `As Instance` is a fixed true value, and its geometry
+  reaches Group Output.
 - Claude Desktop always requires final MCPB approval.
 - Automatic installation is Windows-only.
 - Blender 4.2.22 LTS, 5.1.2, and 5.2 LTS RC passed the local runtime,

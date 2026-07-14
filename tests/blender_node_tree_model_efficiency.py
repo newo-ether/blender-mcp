@@ -70,13 +70,23 @@ def make_patch(reference, revision, operations, capabilities):
 def build_benchmark_tree(domain, count):
     if domain == "shader":
         tree_type = "ShaderNodeTree"
-        node_type = "ShaderNodeValue"
+        candidates = ("ShaderNodeMath",)
     else:
         tree_type = "CompositorNodeTree"
-        node_type = "CompositorNodeCurveRGB"
+        candidates = ("ShaderNodeMath", "CompositorNodeMath")
     tree = bpy.data.node_groups.new(
         f"{PREFIX}{domain.title()}_{count:04d}", tree_type
     )
+    node_type = None
+    for candidate in candidates:
+        try:
+            probe = tree.nodes.new(candidate)
+        except RuntimeError:
+            continue
+        tree.nodes.remove(probe)
+        node_type = candidate
+        break
+    assert_true(node_type is not None, f"no Math node is available for {tree_type}")
     for index in range(count):
         node = tree.nodes.new(node_type)
         node.name = f"{domain.title()} Node {index:04d}"
@@ -89,6 +99,9 @@ def benchmark_tree(server, tree):
     reference = tree_ref(tree)
     middle = sorted(node.name for node in tree.nodes)[len(tree.nodes) // 2]
     full_ms, full = timed(lambda: server.export_node_tree(reference, "semantic"))
+    operations_ms, operations = timed(
+        lambda: server.export_node_tree(reference, "operations")
+    )
     targeted_ms, targeted = timed(
         lambda: server.export_node_tree(reference, "semantic", [middle], 1)
     )
@@ -96,12 +109,20 @@ def benchmark_tree(server, tree):
         lambda: server.get_node_tree_index(reference, middle, 0, 10)
     )
     full_bytes = full["stats"]["json_bytes"]
+    operations_bytes = operations["stats"]["json_bytes"]
     targeted_bytes = targeted["stats"]["json_bytes"]
     index_bytes = encoded_bytes(index)
     combined_bytes = targeted_bytes + index_bytes
-    assert_true(full["revision"] == targeted["revision"] == index["revision"], "revision drift")
+    assert_true(
+        full["revision"] == operations["revision"] == targeted["revision"] == index["revision"],
+        "revision drift",
+    )
     assert_true(targeted["scope"]["kind"] == "subgraph", "targeted scope missing")
     assert_true(targeted_bytes < full_bytes, "targeted result is not smaller")
+    assert_true(
+        operations_bytes < full_bytes * 0.75,
+        "operations view is not materially smaller",
+    )
     if len(tree.nodes) >= 256:
         assert_true(combined_bytes < full_bytes * 0.15, "index-first context is not materially smaller")
     return {
@@ -116,6 +137,12 @@ def benchmark_tree(server, tree):
             "ms": targeted_ms,
             "bytes": targeted_bytes,
             "estimated_tokens": estimated_tokens(targeted_bytes),
+        },
+        "operations": {
+            "ms": operations_ms,
+            "bytes": operations_bytes,
+            "estimated_tokens": estimated_tokens(operations_bytes),
+            "semantic_ratio": round(operations_bytes / full_bytes, 5),
         },
         "index": {
             "ms": index_ms,

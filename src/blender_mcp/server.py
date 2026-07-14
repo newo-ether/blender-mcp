@@ -324,6 +324,31 @@ def get_object_info(ctx: Context, object_name: str, user_prompt: str = "") -> st
 
 
 @mcp.tool()
+@telemetry_tool("get_runtime_automation_context")
+def get_runtime_automation_context(
+    ctx: Context,
+    user_prompt: str = "",
+) -> str:
+    """Inspect live Blender automation compatibility without changing the project.
+
+    Probes render-engine identifiers and engine-specific movie output on a
+    disposable Scene, reports the legacy/layered Action model, identifies the
+    active Scene compositor adapter, and warns about hidden Object Info instance
+    sources. Use this before generating version-sensitive Blender Python.
+
+    Parameters:
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command("get_runtime_automation_context")
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error getting runtime automation context: {str(e)}")
+        return f"Error getting runtime automation context: {str(e)}"
+
+
+@mcp.tool()
 @telemetry_tool("get_blender_documentation_context")
 def get_blender_documentation_context(
     ctx: Context,
@@ -506,6 +531,42 @@ def list_node_trees(
 
 
 @mcp.tool()
+@telemetry_tool("ensure_scene_compositor_tree")
+def ensure_scene_compositor_tree(
+    ctx: Context,
+    scene_name: str,
+    create_if_missing: bool = False,
+    user_prompt: str = "",
+) -> str:
+    """Inspect or explicitly create a local Scene compositor tree.
+
+    The default is read-only and reports `missing` when the Scene has no active
+    compositor tree. Set create_if_missing=true to opt into a transactional,
+    version-aware initialization. Blender 5.1+ receives a standalone
+    CompositorNodeTree with its required Image output interface; failures restore
+    the Scene pointer and remove the created tree.
+
+    Parameters:
+    - scene_name: Exact local Blender Scene name
+    - create_if_missing: Explicitly allow creation when no tree exists
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "ensure_scene_compositor_tree",
+            {
+                "scene_name": scene_name,
+                "create_if_missing": create_if_missing,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error ensuring Scene compositor tree: {str(e)}")
+        return f"Error ensuring Scene compositor tree: {str(e)}"
+
+
+@mcp.tool()
 @telemetry_tool("export_node_tree")
 def export_node_tree(
     ctx: Context,
@@ -524,7 +585,7 @@ def export_node_tree(
 
     Parameters:
     - tree_ref: Object containing tree_type and owner {kind, name}
-    - view: semantic, layout, or all
+    - view: semantic, compact operations, layout, or all
     - node_names: Optional stable node names for a targeted subgraph
     - neighbor_depth: Include connected nodes up to 0-5 hops
     - output_path: Optional workspace-constrained .json output path
@@ -886,7 +947,7 @@ def export_geometry_node_tree(
 
     Parameters:
     - tree_name: Exact Geometry Node group name
-    - view: semantic, layout, or all
+    - view: semantic, compact operations, layout, or all
     - node_names: Optional node names for a targeted subgraph export
     - neighbor_depth: Include connected nodes up to 0-5 hops from node_names
     - output_path: Optional .json path constrained to the MCP workspace root
@@ -991,21 +1052,24 @@ def search_blender_node_assets(
     library: str = "",
     tree_type: str = "",
     detail: str = "summary",
+    scope: str = "ESSENTIALS",
     offset: int = 0,
     limit: int = 20,
     user_prompt: str = "",
 ) -> str:
-    """Search installed official Blender Essentials node assets.
+    """Search bundled Essentials and configured user node assets.
 
     Blender loads assets only into a disposable inspection scope and removes all
     appended datablocks before returning. Summary is compact; full includes the
-    complete interface for up to 20 assets.
+    complete interface for up to 20 assets. User paths come only from Blender's
+    configured asset libraries and scans are bounded.
 
     Parameters:
     - query: Text across asset name, description, author, tags, and library
     - library: Optional library filename substring
     - tree_type: Optional exact GeometryNodeTree/ShaderNodeTree/CompositorNodeTree
     - detail: summary or full
+    - scope: ESSENTIALS (default), USER, or ALL
     - offset: Zero-based result offset
     - limit: 1-100 for summary, 1-20 for full
     - user_prompt: Original user prompt for telemetry
@@ -1019,6 +1083,7 @@ def search_blender_node_assets(
                 "library": library,
                 "tree_type": tree_type,
                 "detail": detail,
+                "scope": scope,
                 "offset": offset,
                 "limit": limit,
             },
@@ -1027,6 +1092,54 @@ def search_blender_node_assets(
     except Exception as e:
         logger.error(f"Error searching Blender node assets: {str(e)}")
         return f"Error searching Blender node assets: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("import_blender_node_asset")
+def import_blender_node_asset(
+    ctx: Context,
+    source_path: str,
+    asset_name: str,
+    tree_type: str = "",
+    scope: str = "USER",
+    library: str = "",
+    conflict_policy: str = "REJECT",
+    user_prompt: str = "",
+) -> str:
+    """Append one exact node asset returned by search into the current file.
+
+    Source identity is revalidated against bundled Essentials or Blender's
+    configured user libraries; arbitrary .blend paths are rejected. The import
+    is a local append, never a link. On failure every newly appended datablock is
+    removed. Existing names are rejected by default; use RENAME for a distinct
+    Blender-suffixed copy.
+
+    Parameters:
+    - source_path: Exact source_path returned by search_blender_node_assets
+    - asset_name: Exact asset name returned by search
+    - tree_type: Optional exact node-tree type returned by search
+    - scope: ESSENTIALS, USER (default), or ALL, matching the search
+    - library: Optional configured/bundled library identity used in the search
+    - conflict_policy: REJECT (default) or RENAME
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "import_blender_node_asset",
+            {
+                "source_path": source_path,
+                "asset_name": asset_name,
+                "tree_type": tree_type,
+                "scope": scope,
+                "library": library,
+                "conflict_policy": conflict_policy,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error importing Blender node asset: {str(e)}")
+        return f"Error importing Blender node asset: {str(e)}"
 
 
 @mcp.tool()

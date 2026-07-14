@@ -15,7 +15,7 @@
       "minItems": 3,
       "maxItems": 3
     },
-    "view": {"enum": ["semantic", "layout", "all"]},
+    "view": {"enum": ["semantic", "operations", "layout", "all"]},
     "tree_ref": {"$ref": "#/$defs/treeRef"},
     "owner": {"$ref": "#/$defs/owner"},
     "capabilities": {"$ref": "#/$defs/capabilities"},
@@ -36,6 +36,20 @@
     },
     "scope": {"type": "object"},
     "users": {"type": "array", "items": {"type": "object"}},
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "code", "path", "message"],
+        "properties": {
+          "severity": {"enum": ["warning", "error"]},
+          "code": {"type": "string"},
+          "path": {"type": "string"},
+          "message": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
     "stats": {"type": "object"}
   },
   "$defs": {

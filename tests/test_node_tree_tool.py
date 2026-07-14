@@ -72,6 +72,18 @@ class NodeTreeToolTests(unittest.TestCase):
             "neighbor_depth": 2,
         })
 
+    def test_scene_compositor_initialization_requires_explicit_flag(self):
+        response = json.loads(server.ensure_scene_compositor_tree(
+            None,
+            scene_name="Scene",
+            create_if_missing=True,
+        ))
+        self.assertEqual(response["command"], "ensure_scene_compositor_tree")
+        self.assertEqual(response["params"], {
+            "scene_name": "Scene",
+            "create_if_missing": True,
+        })
+
     def test_index_forwards_structured_reference_and_paging(self):
         response = json.loads(server.get_node_tree_index(
             None,
@@ -151,10 +163,11 @@ class NodeTreeToolTests(unittest.TestCase):
             "keep_backup": False,
         })
 
-    def test_all_six_generic_tools_are_registered(self):
+    def test_all_generic_tools_are_registered(self):
         names = {tool.name for tool in server.mcp._tool_manager.list_tools()}
         self.assertTrue({
             "list_node_trees",
+            "ensure_scene_compositor_tree",
             "export_node_tree",
             "get_node_tree_index",
             "get_node_type_schema",
