@@ -1,0 +1,19 @@
+{
+  "schema": "blender-geometry-nodes-patch/1",
+  "tree_name": "Example Geometry",
+  "base_revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "shared_tree_policy": "reject",
+  "operations": [
+    {
+      "op": "set_socket_default",
+      "node": "Transform Geometry",
+      "socket": "input:2:Translation",
+      "value": [1.0, 0.0, 0.0]
+    },
+    {
+      "op": "set_node_layout",
+      "node": "Transform Geometry",
+      "location": [320.0, 80.0]
+    }
+  ]
+}

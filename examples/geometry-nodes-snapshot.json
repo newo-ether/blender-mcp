@@ -1,0 +1,78 @@
+{
+  "schema": "blender-geometry-nodes/1",
+  "blender_version": [5, 1, 2],
+  "view": "semantic",
+  "tree": {
+    "name": "Example Geometry",
+    "bl_idname": "GeometryNodeTree",
+    "editable": true,
+    "library": null,
+    "interface": [],
+    "nodes": {
+      "Transform Geometry": {
+        "id": "Transform Geometry",
+        "name": "Transform Geometry",
+        "label": "Move result",
+        "bl_idname": "GeometryNodeTransform",
+        "properties": {},
+        "inputs": [
+          {
+            "id": "input:0:Geometry",
+            "index": 0,
+            "name": "Geometry",
+            "direction": "INPUT",
+            "bl_idname": "NodeSocketGeometry",
+            "enabled": true,
+            "linked": true
+          },
+          {
+            "id": "input:2:Translation",
+            "index": 2,
+            "name": "Translation",
+            "direction": "INPUT",
+            "bl_idname": "NodeSocketVectorTranslation",
+            "enabled": true,
+            "linked": false,
+            "default": [0.0, 0.0, 0.0]
+          }
+        ],
+        "outputs": [
+          {
+            "id": "output:0:Geometry",
+            "index": 0,
+            "name": "Geometry",
+            "direction": "OUTPUT",
+            "bl_idname": "NodeSocketGeometry",
+            "enabled": true,
+            "linked": false
+          }
+        ]
+      }
+    },
+    "links": []
+  },
+  "scope": {
+    "kind": "subgraph",
+    "requested_nodes": ["Transform Geometry"],
+    "neighbor_depth": 0,
+    "included_nodes": ["Transform Geometry"],
+    "content_revision": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "users": [
+    {
+      "kind": "MODIFIER",
+      "name": "Cube / GeometryNodes",
+      "object": "Cube",
+      "modifier": "GeometryNodes"
+    }
+  ],
+  "stats": {
+    "node_count": 1,
+    "link_count": 0,
+    "interface_item_count": 0,
+    "total_node_count": 3,
+    "total_link_count": 2,
+    "json_bytes": 0
+  }
+}

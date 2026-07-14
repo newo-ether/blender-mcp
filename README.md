@@ -247,6 +247,10 @@ Maintainers can reproduce the Extension package with:
 python scripts/build_blender_extension.py --blender /path/to/blender
 ```
 
+For the revisioned Geometry Nodes workflow, tool reference, safety model,
+compatibility matrix, performance measurements, and example patch files, see
+[Geometry Nodes automation](docs/geometry-nodes.md).
+
 
 ## Usage
 
