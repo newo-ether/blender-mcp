@@ -275,6 +275,18 @@ To inspect the script before executing it, open the Raw URL above or download
 it first. A tag-specific Raw URL and `-ReleaseTag v1.7.0` can be used when a
 fully pinned installation is preferred.
 
+Selector limitations and fallbacks:
+
+- The TUI requires a real interactive Windows console. Redirected input/output,
+  CI, SSH, and `-NonInteractive` use detected defaults instead of waiting for
+  keys.
+- If `Console.ReadKey()` is unavailable in an otherwise interactive host, the
+  installer tries the WinForms selector. If WinForms is also unavailable, it
+  falls back to detected defaults and prints a warning.
+- `-Gui` requires an interactive Windows desktop session.
+- Claude Desktop always requires final MCPB approval inside Claude Desktop; the
+  bootstrap intentionally cannot bypass that confirmation.
+
 From a cloned repository, the same installer uses and validates local source by
 default:
 
