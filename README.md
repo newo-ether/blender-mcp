@@ -1,9 +1,5 @@
 # Blender MCP — Geometry Nodes Automation Fork
 
-[![Release](https://img.shields.io/github/v/release/newo-ether/blender-mcp)](https://github.com/newo-ether/blender-mcp/releases/latest)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Blender 4.2+](https://img.shields.io/badge/Blender-4.2%2B-orange.svg)](https://www.blender.org/)
-
 This community fork connects MCP clients to Blender and adds a structured,
 revision-safe workflow for reading and editing Geometry Nodes.
 
@@ -83,8 +79,6 @@ Use `-Gui` for a WinForms checkbox window.
 3. Click **Connect to Claude** to start the bridge on port `9876`.
 4. Restart or reopen the selected MCP clients.
 5. If Claude Desktop was selected, approve the MCPB inside Claude Desktop.
-
-![BlenderMCP sidebar](assets/addon-instructions.png)
 
 ## Installer reference
 
