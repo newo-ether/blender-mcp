@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import tempfile
 import traceback
 from pathlib import Path
@@ -12,6 +13,7 @@ import bpy
 
 PREFIX = "__BLENDER_MCP_SC_LINKED__"
 RESULT_PREFIX = "BLENDER_MCP_SC_LINKED_RESULT="
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def cleanup():
@@ -76,6 +78,22 @@ def main():
         linked_light = bpy.data.lights[names["light"]]
         linked_shader = bpy.data.node_groups[names["shader_group"]]
         linked_compositor = bpy.data.node_groups[names["compositor_group"]]
+        namespace = runpy.run_path(
+            str(REPO_ROOT / "addon.py"),
+            run_name="blender_mcp_node_linked_test",
+        )
+        server = namespace["BlenderMCPServer"]()
+        generic_listing = server.list_node_trees(
+            tree_types=["ShaderNodeTree", "CompositorNodeTree"]
+        )
+        material_export = server.export_node_tree({
+            "tree_type": "ShaderNodeTree",
+            "owner": {"kind": "MATERIAL", "name": linked_material.name},
+        })
+        shader_export = server.export_node_tree({
+            "tree_type": "ShaderNodeTree",
+            "owner": {"kind": "NODE_GROUP", "name": linked_shader.name},
+        })
         result = {
             "version": list(bpy.app.version[:3]),
             "owners": {
@@ -88,10 +106,22 @@ def main():
                 "compositor": record(linked_compositor, linked_compositor),
             },
             "active_scene_unchanged": bpy.context.scene == active_scene,
+            "generic": {
+                "listed": [
+                    item["tree_ref"] for item in generic_listing["trees"]
+                    if item["owner"]["name"].startswith(PREFIX)
+                ],
+                "material_capabilities": material_export["capabilities"],
+                "shader_group_capabilities": shader_export["capabilities"],
+            },
         }
         for item in list(result["owners"].values()) + list(result["groups"].values()):
             if item["editable"] or item["tree_editable"]:
                 raise AssertionError(f"linked target unexpectedly editable: {item}")
+        if material_export["capabilities"]["editable"] or material_export["capabilities"]["apply"]:
+            raise AssertionError("generic Material capabilities did not fail closed")
+        if shader_export["capabilities"]["editable"] or shader_export["capabilities"]["apply"]:
+            raise AssertionError("generic Shader group capabilities did not fail closed")
         cleanup()
         result["leaks"] = {
             collection_name: [

@@ -122,6 +122,11 @@ GEOMETRY_NODES_VIEWS = {"semantic", "layout", "all"}
 GEOMETRY_NODE_TYPE_SCHEMA_DETAILS = {"compact", "full"}
 GEOMETRY_NODE_TYPE_CATALOG_SCHEMA = "blender-geometry-node-type-catalog/1"
 BLENDER_NODE_ASSET_CATALOG_SCHEMA = "blender-node-asset-catalog/1"
+NODE_TREE_SNAPSHOT_SCHEMA = "blender-node-tree/1"
+NODE_TREE_INDEX_SCHEMA = "blender-node-tree-index/1"
+NODE_TYPE_SCHEMA = "blender-node-type-schema/1"
+NODE_TREE_TYPES = {"GeometryNodeTree", "ShaderNodeTree", "CompositorNodeTree"}
+NODE_TREE_OWNER_KINDS = {"MATERIAL", "WORLD", "LIGHT", "SCENE", "NODE_GROUP"}
 
 _GN_NODE_TYPE_CATALOG_CACHE = {}
 _GN_ESSENTIALS_CATALOG_CACHE = {}
@@ -178,12 +183,16 @@ _GN_NODE_PROPERTY_EXCLUDES = {
 }
 
 
-def _gn_normalize_view(view):
+def _node_normalize_view(view, label="Node tree"):
     normalized = str(view).strip().lower()
     if normalized not in GEOMETRY_NODES_VIEWS:
         choices = ", ".join(sorted(GEOMETRY_NODES_VIEWS))
-        raise ValueError(f"Unsupported Geometry Nodes view {view!r}; expected: {choices}")
+        raise ValueError(f"Unsupported {label} view {view!r}; expected: {choices}")
     return normalized
+
+
+def _gn_normalize_view(view):
+    return _node_normalize_view(view, "Geometry Nodes")
 
 
 def _gn_json_value(value):
@@ -298,6 +307,13 @@ def _gn_node_record(node, view):
             _gn_socket_record(socket, "OUTPUT", index)
             for index, socket in enumerate(node.outputs)
         ]
+        annotation = node.get("blender_mcp_note")
+        if isinstance(annotation, str) and annotation:
+            limit = 16384
+            record["annotation"] = {
+                "text": annotation[:limit],
+                "truncated": len(annotation) > limit,
+            }
     if include_layout:
         record["layout"] = {
             "location": [float(node.location.x), float(node.location.y)],
@@ -422,8 +438,21 @@ def _gn_snapshot_revision(snapshot):
     return f"sha256:{digest}"
 
 
-def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
-    view = _gn_normalize_view(view)
+def _node_export_tree(
+    tree,
+    view="semantic",
+    node_names=None,
+    neighbor_depth=0,
+    *,
+    schema=NODE_TREE_SNAPSHOT_SCHEMA,
+    users=None,
+    tree_ref=None,
+    owner=None,
+    capabilities=None,
+    normalizer=_node_normalize_view,
+):
+    """Serialize any supported NodeTree through the shared flat graph core."""
+    view = normalizer(view)
     include_semantic = view in {"semantic", "all"}
     library = getattr(tree, "library", None)
     try:
@@ -496,7 +525,7 @@ def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
         "library": library.filepath if library else None,
     }
     snapshot = {
-        "schema": GEOMETRY_NODES_SNAPSHOT_SCHEMA,
+        "schema": schema,
         "blender_version": list(bpy.app.version[:3]),
         "view": view,
         "tree": {
@@ -506,7 +535,7 @@ def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
             "links": links,
         },
         "scope": scope,
-        "users": _gn_tree_users(tree),
+        "users": list(users or ()),
         "stats": {
             "node_count": len(nodes),
             "link_count": len(links),
@@ -522,7 +551,7 @@ def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
         else {node.name: _gn_node_record(node, "all") for node in ordered_nodes}
     )
     revision_snapshot = {
-        "schema": GEOMETRY_NODES_SNAPSHOT_SCHEMA,
+        "schema": schema,
         "view": "all",
         "tree": {
             **tree_identity,
@@ -531,6 +560,12 @@ def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
             "links": graph_links,
         },
     }
+    if tree_ref is not None:
+        snapshot["tree_ref"] = tree_ref
+    if owner is not None:
+        snapshot["owner"] = owner
+    if capabilities is not None:
+        snapshot["capabilities"] = capabilities
     snapshot["revision"] = _gn_snapshot_revision(revision_snapshot)
     scope["content_revision"] = _gn_snapshot_revision(snapshot)
     for _iteration in range(3):
@@ -541,11 +576,319 @@ def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
     return snapshot
 
 
+def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
+    """Compatibility facade preserving the Geometry Nodes v1 envelope."""
+    return _node_export_tree(
+        tree,
+        view,
+        node_names,
+        neighbor_depth,
+        schema=GEOMETRY_NODES_SNAPSHOT_SCHEMA,
+        users=_gn_tree_users(tree),
+        normalizer=_gn_normalize_view,
+    )
+
+
 def _gn_geometry_trees():
     return sorted(
         (tree for tree in bpy.data.node_groups if tree.bl_idname == "GeometryNodeTree"),
         key=lambda item: item.name,
     )
+
+
+def _node_domain(tree_type):
+    return {
+        "GeometryNodeTree": "geometry",
+        "ShaderNodeTree": "shader",
+        "CompositorNodeTree": "compositor",
+    }[tree_type]
+
+
+def _node_id_library(value):
+    library = getattr(value, "library", None)
+    return library.filepath if library else None
+
+
+def _node_id_editable(value):
+    library = getattr(value, "library", None)
+    return bool(getattr(value, "is_editable", library is None))
+
+
+def _node_owner_record(kind, owner):
+    return {
+        "kind": kind,
+        "name": owner.name,
+        "id_type": owner.bl_rna.identifier,
+        "library": _node_id_library(owner),
+        "editable": _node_id_editable(owner),
+        "user_count": int(owner.users),
+    }
+
+
+def _node_tree_ref(tree_type, owner_kind, owner_name):
+    return {
+        "tree_type": tree_type,
+        "owner": {"kind": owner_kind, "name": owner_name},
+    }
+
+
+def _node_normalize_tree_ref(tree_ref):
+    if not isinstance(tree_ref, dict):
+        raise ValueError("tree_ref must be an object")
+    tree_type = tree_ref.get("tree_type")
+    if tree_type not in NODE_TREE_TYPES:
+        choices = ", ".join(sorted(NODE_TREE_TYPES))
+        raise ValueError(f"tree_ref.tree_type must be one of: {choices}")
+    owner = tree_ref.get("owner")
+    if not isinstance(owner, dict):
+        raise ValueError("tree_ref.owner must be an object")
+    owner_kind = str(owner.get("kind", "")).strip().upper()
+    if owner_kind not in NODE_TREE_OWNER_KINDS:
+        choices = ", ".join(sorted(NODE_TREE_OWNER_KINDS))
+        raise ValueError(f"tree_ref.owner.kind must be one of: {choices}")
+    owner_name = owner.get("name")
+    if not isinstance(owner_name, str) or not owner_name.strip():
+        raise ValueError("tree_ref.owner.name must be a non-empty string")
+    owner_name = owner_name.strip()
+    if len(owner_name) > 1024:
+        raise ValueError("tree_ref.owner.name must not exceed 1024 characters")
+    allowed = {
+        "GeometryNodeTree": {"NODE_GROUP"},
+        "ShaderNodeTree": {"MATERIAL", "WORLD", "LIGHT", "NODE_GROUP"},
+        "CompositorNodeTree": {"SCENE", "NODE_GROUP"},
+    }[tree_type]
+    if owner_kind not in allowed:
+        raise ValueError(
+            f"{owner_kind} cannot own a {tree_type}; expected one of: "
+            + ", ".join(sorted(allowed))
+        )
+    return _node_tree_ref(tree_type, owner_kind, owner_name)
+
+
+def _node_scene_tree(scene):
+    if hasattr(scene, "compositing_node_group"):
+        return scene.compositing_node_group, "scene_compositing_node_group"
+    return getattr(scene, "node_tree", None), "scene_embedded_node_tree"
+
+
+def _node_target(tree_type, owner_kind, owner, tree, adapter):
+    if tree is None:
+        raise ValueError(
+            f"{owner_kind} {owner.name!r} has no enabled {tree_type}"
+        )
+    if tree.bl_idname != tree_type:
+        raise ValueError(
+            f"{owner_kind} {owner.name!r} owns {tree.bl_idname}, not {tree_type}"
+        )
+    return {
+        "tree_type": tree_type,
+        "domain": _node_domain(tree_type),
+        "tree_ref": _node_tree_ref(tree_type, owner_kind, owner.name),
+        "owner_kind": owner_kind,
+        "owner_id": owner,
+        "owner": _node_owner_record(owner_kind, owner),
+        "tree": tree,
+        "adapter": adapter,
+    }
+
+
+def _node_resolve_tree_ref(tree_ref):
+    canonical = _node_normalize_tree_ref(tree_ref)
+    tree_type = canonical["tree_type"]
+    owner_kind = canonical["owner"]["kind"]
+    owner_name = canonical["owner"]["name"]
+    if owner_kind == "MATERIAL":
+        owner = bpy.data.materials.get(owner_name)
+        tree = getattr(owner, "node_tree", None) if owner else None
+        adapter = "embedded_shader_owner"
+    elif owner_kind == "WORLD":
+        owner = bpy.data.worlds.get(owner_name)
+        tree = getattr(owner, "node_tree", None) if owner else None
+        adapter = "embedded_shader_owner"
+    elif owner_kind == "LIGHT":
+        owner = bpy.data.lights.get(owner_name)
+        tree = getattr(owner, "node_tree", None) if owner else None
+        adapter = "embedded_shader_owner"
+    elif owner_kind == "SCENE":
+        owner = bpy.data.scenes.get(owner_name)
+        tree, adapter = _node_scene_tree(owner) if owner else (None, None)
+    else:
+        owner = bpy.data.node_groups.get(owner_name)
+        tree = owner
+        adapter = "standalone_node_group"
+    if owner is None:
+        raise ValueError(f"{owner_kind} owner not found: {owner_name}")
+    return _node_target(tree_type, owner_kind, owner, tree, adapter)
+
+
+def _node_iter_targets():
+    targets = []
+    for material in sorted(bpy.data.materials, key=lambda item: item.name):
+        if material.node_tree is not None:
+            targets.append(_node_target(
+                "ShaderNodeTree", "MATERIAL", material, material.node_tree,
+                "embedded_shader_owner",
+            ))
+    for world in sorted(bpy.data.worlds, key=lambda item: item.name):
+        if world.node_tree is not None:
+            targets.append(_node_target(
+                "ShaderNodeTree", "WORLD", world, world.node_tree,
+                "embedded_shader_owner",
+            ))
+    for light in sorted(bpy.data.lights, key=lambda item: item.name):
+        if light.node_tree is not None:
+            targets.append(_node_target(
+                "ShaderNodeTree", "LIGHT", light, light.node_tree,
+                "embedded_shader_owner",
+            ))
+    for scene in sorted(bpy.data.scenes, key=lambda item: item.name):
+        tree, adapter = _node_scene_tree(scene)
+        if tree is not None:
+            targets.append(_node_target(
+                "CompositorNodeTree", "SCENE", scene, tree, adapter,
+            ))
+    for tree in sorted(bpy.data.node_groups, key=lambda item: item.name):
+        if tree.bl_idname in NODE_TREE_TYPES:
+            targets.append(_node_target(
+                tree.bl_idname, "NODE_GROUP", tree, tree,
+                "standalone_node_group",
+            ))
+    return sorted(
+        targets,
+        key=lambda item: (
+            item["tree_type"], item["owner_kind"], item["owner_id"].name,
+        ),
+    )
+
+
+def _node_id_users(value):
+    try:
+        user_map = bpy.data.user_map(subset={value})
+        direct_users = user_map.get(value, set())
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        direct_users = set()
+    return [
+        {
+            "kind": "ID",
+            "id_type": user.bl_rna.identifier,
+            "name": user.name,
+            "library": _node_id_library(user),
+        }
+        for user in sorted(
+            direct_users,
+            key=lambda item: (item.bl_rna.identifier, item.name),
+        )
+    ]
+
+
+def _node_target_users(target):
+    records = _node_id_users(target["owner_id"])
+    if target["owner_kind"] == "NODE_GROUP":
+        tree = target["tree"]
+        for parent in _node_iter_targets():
+            for node in sorted(parent["tree"].nodes, key=lambda item: item.name):
+                if getattr(node, "node_tree", None) == tree:
+                    records.append({
+                        "kind": "GROUP_NODE",
+                        "tree_ref": parent["tree_ref"],
+                        "node": node.name,
+                    })
+        if target["tree_type"] == "GeometryNodeTree":
+            for obj in sorted(bpy.data.objects, key=lambda item: item.name):
+                for modifier in obj.modifiers:
+                    if modifier.type == "NODES" and modifier.node_group == tree:
+                        records.append({
+                            "kind": "MODIFIER",
+                            "object": obj.name,
+                            "modifier": modifier.name,
+                        })
+    unique = {_gn_canonical_json(record): record for record in records}
+    return [unique[key] for key in sorted(unique)]
+
+
+def _node_target_capabilities(target):
+    tree = target["tree"]
+    editable = target["owner"]["editable"] and _node_id_editable(tree)
+    if not editable:
+        mutation_reason = "linked_or_read_only"
+    else:
+        mutation_reason = "generic_mutation_not_available_in_protocol_v1"
+    return {
+        "read": True,
+        "index": True,
+        "export": True,
+        "schema": True,
+        "validate": False,
+        "apply": False,
+        "editable": editable,
+        "mutation_reason": mutation_reason,
+        "transaction_adapter": target["adapter"],
+        "interface": getattr(tree, "interface", None) is not None,
+    }
+
+
+def _node_export_target(target, view="semantic", node_names=None, neighbor_depth=0):
+    return _node_export_tree(
+        target["tree"],
+        view,
+        node_names,
+        neighbor_depth,
+        schema=NODE_TREE_SNAPSHOT_SCHEMA,
+        users=_node_target_users(target),
+        tree_ref=target["tree_ref"],
+        owner=target["owner"],
+        capabilities=_node_target_capabilities(target),
+    )
+
+
+def _node_tree_index(target, query="", offset=0, limit=100):
+    try:
+        offset = int(offset)
+        limit = int(limit)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("offset and limit must be integers") from exc
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
+    if not 1 <= limit <= 500:
+        raise ValueError("limit must be from 1 to 500")
+    query_value = "" if query is None else str(query)
+    query_text = query_value.strip().casefold()
+    tree = target["tree"]
+    matches = [
+        node for node in sorted(tree.nodes, key=lambda item: item.name)
+        if not query_text or query_text in " ".join(
+            (node.name, node.label, node.bl_idname, node.bl_label)
+        ).casefold()
+    ]
+    page = matches[offset:offset + limit]
+    next_offset = offset + len(page)
+    snapshot = _node_export_target(target, "all")
+    return {
+        "schema": NODE_TREE_INDEX_SCHEMA,
+        "blender_version": list(bpy.app.version[:3]),
+        "tree_ref": target["tree_ref"],
+        "owner": target["owner"],
+        "capabilities": _node_target_capabilities(target),
+        "revision": snapshot["revision"],
+        "query": query_value,
+        "offset": offset,
+        "limit": limit,
+        "total_nodes": len(tree.nodes),
+        "total_matches": len(matches),
+        "next_offset": next_offset if next_offset < len(matches) else None,
+        "nodes": [
+            {
+                "name": node.name,
+                "label": node.label,
+                "bl_idname": node.bl_idname,
+                "bl_label": node.bl_label,
+                "parent": node.parent.name if node.parent else None,
+                "input_count": len(node.inputs),
+                "output_count": len(node.outputs),
+            }
+            for node in page
+        ],
+    }
 
 
 def _gn_actual_snapshot_diff(before, after):
@@ -688,6 +1031,196 @@ def _gn_socket_type_schema(socket, direction, index):
                 except (TypeError, ValueError):
                     pass
     return record
+
+
+def _node_special_structure_schema(node):
+    structures = []
+    if hasattr(node, "color_ramp"):
+        ramp = node.color_ramp
+        structures.append({
+            "identifier": "color_ramp",
+            "type": "COLOR_RAMP",
+            "interpolation": ramp.interpolation,
+            "color_mode": ramp.color_mode,
+            "hue_interpolation": ramp.hue_interpolation,
+            "elements": [
+                {
+                    "index": index,
+                    "position": float(element.position),
+                    "color": _gn_json_value(element.color),
+                }
+                for index, element in enumerate(ramp.elements)
+            ],
+        })
+    if hasattr(node, "mapping"):
+        mapping = node.mapping
+        structures.append({
+            "identifier": "mapping",
+            "type": "CURVE_MAPPING",
+            "use_clip": bool(getattr(mapping, "use_clip", False)),
+            "curves": [
+                {
+                    "index": curve_index,
+                    "points": [
+                        {
+                            "index": point_index,
+                            "location": _gn_json_value(point.location),
+                            "handle_type": point.handle_type,
+                        }
+                        for point_index, point in enumerate(curve.points)
+                    ],
+                }
+                for curve_index, curve in enumerate(mapping.curves)
+            ],
+        })
+    for identifier in ("file_slots", "layer_slots"):
+        if not hasattr(node, identifier):
+            continue
+        collection = getattr(node, identifier)
+        items = []
+        for index, item in enumerate(collection):
+            values = {}
+            for property_name in ("name", "path", "use_node_format"):
+                if hasattr(item, property_name):
+                    try:
+                        values[property_name] = _gn_json_value(
+                            getattr(item, property_name)
+                        )
+                    except (AttributeError, TypeError, ValueError, RuntimeError):
+                        pass
+            items.append({"index": index, "values": values})
+        structures.append({
+            "identifier": identifier,
+            "type": "COLLECTION",
+            "item_rna_type": getattr(
+                getattr(collection, "bl_rna", None), "identifier", None
+            ),
+            "items": items,
+        })
+    return structures
+
+
+def _node_create_schema_probe(tree_type, owner_kind):
+    canonical = _node_normalize_tree_ref({
+        "tree_type": tree_type,
+        "owner": {"kind": owner_kind, "name": ".BlenderMCP_TypeSchema"},
+    })
+    owner_kind = canonical["owner"]["kind"]
+    temporary_owner = None
+    standalone_tree = None
+    if owner_kind == "MATERIAL":
+        temporary_owner = bpy.data.materials.new(".BlenderMCP_TypeSchema")
+        temporary_owner.use_nodes = True
+        tree = temporary_owner.node_tree
+    elif owner_kind == "WORLD":
+        temporary_owner = bpy.data.worlds.new(".BlenderMCP_TypeSchema")
+        temporary_owner.use_nodes = True
+        tree = temporary_owner.node_tree
+    elif owner_kind == "LIGHT":
+        temporary_owner = bpy.data.lights.new(".BlenderMCP_TypeSchema", "POINT")
+        temporary_owner.use_nodes = True
+        tree = temporary_owner.node_tree
+    elif owner_kind == "SCENE":
+        temporary_owner = bpy.data.scenes.new(".BlenderMCP_TypeSchema")
+        if hasattr(temporary_owner, "compositing_node_group"):
+            standalone_tree = bpy.data.node_groups.new(
+                ".BlenderMCP_TypeSchema", "CompositorNodeTree"
+            )
+            temporary_owner.compositing_node_group = standalone_tree
+            tree = standalone_tree
+        else:
+            temporary_owner.use_nodes = True
+            tree = temporary_owner.node_tree
+    else:
+        standalone_tree = bpy.data.node_groups.new(
+            ".BlenderMCP_TypeSchema", tree_type
+        )
+        tree = standalone_tree
+    return tree, temporary_owner, standalone_tree, owner_kind
+
+
+def _node_remove_schema_probe(temporary_owner, standalone_tree):
+    if temporary_owner is not None:
+        if isinstance(temporary_owner, bpy.types.Material):
+            bpy.data.materials.remove(temporary_owner, do_unlink=True)
+        elif isinstance(temporary_owner, bpy.types.World):
+            bpy.data.worlds.remove(temporary_owner, do_unlink=True)
+        elif isinstance(temporary_owner, bpy.types.Light):
+            bpy.data.lights.remove(temporary_owner, do_unlink=True)
+        elif isinstance(temporary_owner, bpy.types.Scene):
+            bpy.data.scenes.remove(temporary_owner, do_unlink=True)
+    if (
+        standalone_tree is not None
+        and standalone_tree.name in bpy.data.node_groups
+    ):
+        bpy.data.node_groups.remove(standalone_tree, do_unlink=True)
+
+
+def _node_type_schema(tree_type, owner_kind, node_type, detail="compact"):
+    if not isinstance(node_type, str) or not node_type.strip():
+        raise ValueError("node_type must be a non-empty Blender node bl_idname")
+    detail = str(detail or "compact").strip().lower()
+    if detail not in GEOMETRY_NODE_TYPE_SCHEMA_DETAILS:
+        raise ValueError("detail must be 'compact' or 'full'")
+    tree, temporary_owner, standalone_tree, owner_kind = _node_create_schema_probe(
+        tree_type, owner_kind
+    )
+    try:
+        try:
+            node = tree.nodes.new(type=node_type.strip())
+        except RuntimeError as exc:
+            raise ValueError(
+                f"Unsupported {node_type} in {owner_kind} {tree_type} "
+                f"on Blender {bpy.app.version_string}"
+            ) from exc
+        property_source = (
+            _gn_node_owned_properties(node)
+            if detail == "compact"
+            else node.bl_rna.properties
+        )
+        properties = []
+        dynamic_items = []
+        for prop in property_source:
+            if prop.identifier in _GN_NODE_PROPERTY_EXCLUDES or prop.identifier == "rna_type":
+                continue
+            if getattr(prop, "is_hidden", False):
+                continue
+            if prop.type == "COLLECTION":
+                if detail == "compact":
+                    dynamic_items.append(_gn_dynamic_collection_schema(node, prop))
+                continue
+            properties.append(_gn_property_schema(node, prop))
+        result = {
+            "schema": NODE_TYPE_SCHEMA,
+            "blender_version": list(bpy.app.version[:3]),
+            "blender_version_string": bpy.app.version_string,
+            "build_hash": _blender_app_text("build_hash"),
+            "tree_type": tree_type,
+            "owner_kind": owner_kind,
+            "detail": detail,
+            "node_type": node.bl_idname,
+            "label": node.bl_label,
+            "description": node.bl_description,
+            "properties": properties,
+            "inputs": [
+                (_gn_socket_type_schema if detail == "compact" else _gn_socket_record)(
+                    socket, "INPUT", index
+                )
+                for index, socket in enumerate(node.inputs)
+            ],
+            "outputs": [
+                (_gn_socket_type_schema if detail == "compact" else _gn_socket_record)(
+                    socket, "OUTPUT", index
+                )
+                for index, socket in enumerate(node.outputs)
+            ],
+        }
+        if detail == "compact":
+            result["dynamic_items"] = dynamic_items
+            result["special_structures"] = _node_special_structure_schema(node)
+        return result
+    finally:
+        _node_remove_schema_probe(temporary_owner, standalone_tree)
 
 
 def _gn_node_catalog_cache_key():
@@ -2326,6 +2859,10 @@ class BlenderMCPServer:
             "get_scene_info": self.get_scene_info,
             "get_object_info": self.get_object_info,
             "get_blender_version_context": self.get_blender_version_context,
+            "list_node_trees": self.list_node_trees,
+            "export_node_tree": self.export_node_tree,
+            "get_node_tree_index": self.get_node_tree_index,
+            "get_node_type_schema": self.get_node_type_schema,
             "list_geometry_node_trees": self.list_geometry_node_trees,
             "export_geometry_node_tree": self.export_geometry_node_tree,
             "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
@@ -2433,6 +2970,76 @@ class BlenderMCPServer:
     def get_blender_version_context(self):
         """Return exact version/build metadata for documentation resolution."""
         return _blender_version_context()
+
+    def list_node_trees(self, tree_types=None, owner_kinds=None):
+        """List owner-addressed Geometry, Shader, and Compositor trees."""
+        tree_types = list(tree_types or ())
+        owner_kinds = [str(item).strip().upper() for item in (owner_kinds or ())]
+        invalid_tree_types = sorted(set(tree_types) - NODE_TREE_TYPES)
+        invalid_owner_kinds = sorted(set(owner_kinds) - NODE_TREE_OWNER_KINDS)
+        if invalid_tree_types:
+            raise ValueError(
+                "Unsupported tree_types: " + ", ".join(invalid_tree_types)
+            )
+        if invalid_owner_kinds:
+            raise ValueError(
+                "Unsupported owner_kinds: " + ", ".join(invalid_owner_kinds)
+            )
+        records = []
+        for target in _node_iter_targets():
+            if tree_types and target["tree_type"] not in tree_types:
+                continue
+            if owner_kinds and target["owner_kind"] not in owner_kinds:
+                continue
+            snapshot = _node_export_target(target, "semantic")
+            records.append({
+                "domain": target["domain"],
+                "tree_ref": target["tree_ref"],
+                "owner": target["owner"],
+                "tree": {
+                    "name": target["tree"].name,
+                    "bl_idname": target["tree"].bl_idname,
+                    "library": _node_id_library(target["tree"]),
+                    "editable": _node_id_editable(target["tree"]),
+                },
+                "capabilities": _node_target_capabilities(target),
+                "revision": snapshot["revision"],
+                "node_count": snapshot["stats"]["node_count"],
+                "link_count": snapshot["stats"]["link_count"],
+                "interface_item_count": snapshot["stats"]["interface_item_count"],
+                "users": snapshot["users"],
+            })
+        return {
+            "schema": NODE_TREE_SNAPSHOT_SCHEMA,
+            "blender_version": list(bpy.app.version[:3]),
+            "blender_version_string": bpy.app.version_string,
+            "build_hash": _blender_app_text("build_hash"),
+            "tree_types": tree_types,
+            "owner_kinds": owner_kinds,
+            "tree_count": len(records),
+            "trees": records,
+        }
+
+    def export_node_tree(
+        self, tree_ref, view="semantic", node_names=None, neighbor_depth=0,
+    ):
+        """Export an owner-addressed NodeTree as deterministic flat JSON."""
+        target = _node_resolve_tree_ref(tree_ref)
+        return _node_export_target(
+            target, view, node_names or [], neighbor_depth,
+        )
+
+    def get_node_tree_index(self, tree_ref, query="", offset=0, limit=100):
+        """Return a compact index for one owner-addressed NodeTree."""
+        return _node_tree_index(
+            _node_resolve_tree_ref(tree_ref), query, offset, limit,
+        )
+
+    def get_node_type_schema(
+        self, tree_type, node_type, owner_kind="NODE_GROUP", detail="compact",
+    ):
+        """Inspect a node type in an exact tree and owner context."""
+        return _node_type_schema(tree_type, owner_kind, node_type, detail)
 
     def list_geometry_node_trees(self):
         """List Geometry Node groups with revisions and user summaries."""

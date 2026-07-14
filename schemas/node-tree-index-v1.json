@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/newo-ether/blender-mcp/schemas/node-tree-index-v1.json",
+  "title": "Blender MCP owner-addressed node-tree index v1",
+  "type": "object",
+  "required": [
+    "schema", "blender_version", "tree_ref", "owner", "capabilities", "revision",
+    "query", "offset", "limit", "total_nodes", "total_matches", "next_offset", "nodes"
+  ],
+  "properties": {
+    "schema": {"const": "blender-node-tree-index/1"},
+    "blender_version": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "integer"}},
+    "tree_ref": {"type": "object"},
+    "owner": {"type": "object"},
+    "capabilities": {"type": "object"},
+    "revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "query": {"type": "string"},
+    "offset": {"type": "integer", "minimum": 0},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+    "total_nodes": {"type": "integer", "minimum": 0},
+    "total_matches": {"type": "integer", "minimum": 0},
+    "next_offset": {"type": ["integer", "null"], "minimum": 0},
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "label", "bl_idname", "bl_label", "parent", "input_count", "output_count"],
+        "properties": {
+          "name": {"type": "string"},
+          "label": {"type": "string"},
+          "bl_idname": {"type": "string"},
+          "bl_label": {"type": "string"},
+          "parent": {"type": ["string", "null"]},
+          "input_count": {"type": "integer", "minimum": 0},
+          "output_count": {"type": "integer", "minimum": 0}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

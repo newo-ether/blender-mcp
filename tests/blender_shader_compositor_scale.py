@@ -90,12 +90,48 @@ def benchmark(tree, export_tree, node_record):
     return result
 
 
+def generic_benchmark(server, tree):
+    reference = {
+        "tree_type": tree.bl_idname,
+        "owner": {"kind": "NODE_GROUP", "name": tree.name},
+    }
+    middle_name = sorted(node.name for node in tree.nodes)[len(tree.nodes) // 2]
+    full_ms, full = timed(
+        lambda: server.export_node_tree(reference, "semantic"), repeats=3
+    )
+    targeted_ms, targeted = timed(
+        lambda: server.export_node_tree(
+            reference, "semantic", [middle_name], 2
+        ),
+        repeats=3,
+    )
+    index_ms, index = timed(
+        lambda: server.get_node_tree_index(reference, "12", 0, 100)
+    )
+    if full["schema"] != "blender-node-tree/1":
+        raise AssertionError("generic export returned wrong schema")
+    if targeted["revision"] != full["revision"]:
+        raise AssertionError("targeted and full generic revisions differ")
+    if targeted["stats"]["json_bytes"] >= full["stats"]["json_bytes"]:
+        raise AssertionError("generic targeted export is not smaller")
+    return {
+        "full_export_ms": full_ms,
+        "full_json_bytes": full["stats"]["json_bytes"],
+        "targeted_export_ms": targeted_ms,
+        "targeted_json_bytes": targeted["stats"]["json_bytes"],
+        "index_ms": index_ms,
+        "index_matches": index["total_matches"],
+        "stable_revision": server.export_node_tree(reference)["revision"] == full["revision"],
+    }
+
+
 def main():
     cleanup()
     active_scene = bpy.context.scene
     namespace = runpy.run_path(str(REPO_ROOT / "addon.py"), run_name="n0_perf_addon")
     export_tree = namespace["_gn_export_tree"]
     node_record = namespace["_gn_node_record"]
+    server = object.__new__(namespace["BlenderMCPServer"])
     shader = build_group(PREFIX + "Shader", "ShaderNodeTree", "ShaderNodeValue")
     compositor = build_group(
         PREFIX + "Compositor", "CompositorNodeTree", "CompositorNodeCurveRGB"
@@ -104,6 +140,10 @@ def main():
         "version": list(bpy.app.version[:3]),
         "shader": benchmark(shader, export_tree, node_record),
         "compositor": benchmark(compositor, export_tree, node_record),
+        "generic": {
+            "shader": generic_benchmark(server, shader),
+            "compositor": generic_benchmark(server, compositor),
+        },
         "active_scene_unchanged": bpy.context.scene == active_scene,
     }
     cleanup()

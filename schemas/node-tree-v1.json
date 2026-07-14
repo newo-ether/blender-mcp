@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/newo-ether/blender-mcp/schemas/node-tree-v1.json",
+  "title": "Blender MCP owner-addressed node-tree snapshot v1",
+  "type": "object",
+  "required": [
+    "schema", "blender_version", "view", "tree_ref", "owner", "capabilities",
+    "tree", "scope", "revision", "users", "stats"
+  ],
+  "properties": {
+    "schema": {"const": "blender-node-tree/1"},
+    "blender_version": {
+      "type": "array",
+      "prefixItems": [{"type": "integer"}, {"type": "integer"}, {"type": "integer"}],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "view": {"enum": ["semantic", "layout", "all"]},
+    "tree_ref": {"$ref": "#/$defs/treeRef"},
+    "owner": {"$ref": "#/$defs/owner"},
+    "capabilities": {"$ref": "#/$defs/capabilities"},
+    "revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "tree": {
+      "type": "object",
+      "required": ["name", "bl_idname", "editable", "library", "interface", "nodes", "links"],
+      "properties": {
+        "name": {"type": "string"},
+        "bl_idname": {"enum": ["GeometryNodeTree", "ShaderNodeTree", "CompositorNodeTree"]},
+        "editable": {"type": "boolean"},
+        "library": {"type": ["string", "null"]},
+        "interface": {"type": "array", "items": {"type": "object"}},
+        "nodes": {"type": "object", "additionalProperties": {"$ref": "#/$defs/node"}},
+        "links": {"type": "array", "items": {"type": "object"}}
+      },
+      "additionalProperties": false
+    },
+    "scope": {"type": "object"},
+    "users": {"type": "array", "items": {"type": "object"}},
+    "stats": {"type": "object"}
+  },
+  "$defs": {
+    "treeRef": {
+      "type": "object",
+      "required": ["tree_type", "owner"],
+      "properties": {
+        "tree_type": {"enum": ["GeometryNodeTree", "ShaderNodeTree", "CompositorNodeTree"]},
+        "owner": {
+          "type": "object",
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": {"enum": ["MATERIAL", "WORLD", "LIGHT", "SCENE", "NODE_GROUP"]},
+            "name": {"type": "string", "minLength": 1, "maxLength": 1024}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "owner": {
+      "type": "object",
+      "required": ["kind", "name", "id_type", "library", "editable", "user_count"],
+      "properties": {
+        "kind": {"enum": ["MATERIAL", "WORLD", "LIGHT", "SCENE", "NODE_GROUP"]},
+        "name": {"type": "string"},
+        "id_type": {"type": "string"},
+        "library": {"type": ["string", "null"]},
+        "editable": {"type": "boolean"},
+        "user_count": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["read", "index", "export", "schema", "validate", "apply", "editable", "mutation_reason", "transaction_adapter", "interface"],
+      "properties": {
+        "read": {"type": "boolean"},
+        "index": {"type": "boolean"},
+        "export": {"type": "boolean"},
+        "schema": {"type": "boolean"},
+        "validate": {"type": "boolean"},
+        "apply": {"type": "boolean"},
+        "editable": {"type": "boolean"},
+        "mutation_reason": {"type": "string"},
+        "transaction_adapter": {"type": "string"},
+        "interface": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "name", "label", "bl_idname", "properties", "inputs", "outputs"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "label": {"type": "string"},
+        "bl_idname": {"type": "string"},
+        "properties": {"type": "object"},
+        "inputs": {"type": "array"},
+        "outputs": {"type": "array"},
+        "layout": {"type": "object"},
+        "annotation": {
+          "type": "object",
+          "required": ["text", "truncated"],
+          "properties": {"text": {"type": "string"}, "truncated": {"type": "boolean"}},
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
