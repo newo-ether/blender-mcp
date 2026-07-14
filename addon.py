@@ -450,9 +450,11 @@ def _node_export_tree(
     owner=None,
     capabilities=None,
     normalizer=_node_normalize_view,
+    record_factory=None,
 ):
     """Serialize any supported NodeTree through the shared flat graph core."""
     view = normalizer(view)
+    record_factory = record_factory or _node_graph_record
     include_semantic = view in {"semantic", "all"}
     library = getattr(tree, "library", None)
     try:
@@ -464,7 +466,7 @@ def _node_export_tree(
 
     ordered_nodes = sorted(tree.nodes, key=lambda item: item.name)
     view_nodes = {
-        node.name: _gn_node_record(node, view)
+        node.name: record_factory(node, view)
         for node in ordered_nodes
     }
     graph_links = sorted(
@@ -548,7 +550,7 @@ def _node_export_tree(
     revision_nodes = (
         view_nodes
         if view == "all"
-        else {node.name: _gn_node_record(node, "all") for node in ordered_nodes}
+        else {node.name: record_factory(node, "all") for node in ordered_nodes}
     )
     revision_snapshot = {
         "schema": schema,
@@ -586,6 +588,7 @@ def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
         schema=GEOMETRY_NODES_SNAPSHOT_SCHEMA,
         users=_gn_tree_users(tree),
         normalizer=_gn_normalize_view,
+        record_factory=_gn_node_record,
     )
 
 
@@ -812,13 +815,13 @@ def _node_target_capabilities(target):
     if not editable:
         mutation_reason = "linked_or_read_only"
     else:
-        mutation_reason = "generic_mutation_not_available_in_protocol_v1"
+        mutation_reason = "generic_apply_not_available_in_protocol_v1"
     return {
         "read": True,
         "index": True,
         "export": True,
         "schema": True,
-        "validate": False,
+        "validate": editable,
         "apply": False,
         "editable": editable,
         "mutation_reason": mutation_reason,
@@ -1064,7 +1067,7 @@ def _node_special_structure_schema(node):
                     "points": [
                         {
                             "index": point_index,
-                            "location": _gn_json_value(point.location),
+                            "location": [float(value) for value in point.location],
                             "handle_type": point.handle_type,
                         }
                         for point_index, point in enumerate(curve.points)
@@ -1098,6 +1101,16 @@ def _node_special_structure_schema(node):
             "items": items,
         })
     return structures
+
+
+def _node_graph_record(node, view):
+    """Extend the compatibility node record with generic dynamic structures."""
+    record = _gn_node_record(node, view)
+    if view in {"semantic", "all"}:
+        structures = _node_special_structure_schema(node)
+        if structures:
+            record["special_structures"] = structures
+    return record
 
 
 def _node_create_schema_probe(tree_type, owner_kind):
@@ -1484,14 +1497,26 @@ def _gn_resolve_id_reference(value):
         "Object": bpy.data.objects,
         "Collection": bpy.data.collections,
         "Material": bpy.data.materials,
+        "World": bpy.data.worlds,
+        "Light": bpy.data.lights,
         "Image": bpy.data.images,
+        "MovieClip": bpy.data.movieclips,
+        "Mask": bpy.data.masks,
+        "Scene": bpy.data.scenes,
         "Texture": bpy.data.textures,
         "GeometryNodeTree": bpy.data.node_groups,
         "ShaderNodeTree": bpy.data.node_groups,
+        "CompositorNodeTree": bpy.data.node_groups,
         "NodeTree": bpy.data.node_groups,
     }
     collection = collections.get(id_type)
-    return collection.get(name) if collection is not None and isinstance(name, str) else None
+    resolved = collection.get(name) if collection is not None and isinstance(name, str) else None
+    expected_library = value.get("library")
+    if resolved is not None and expected_library is not None:
+        actual_library = _node_id_library(resolved)
+        if actual_library != expected_library:
+            return None
+    return resolved
 
 
 def _gn_decode_patch_value(value, node_refs=None):
@@ -2269,6 +2294,550 @@ def _gn_user_handle(user):
     return owner_tree.nodes.get(user["node"]) if owner_tree else None
 
 
+_NODE_EFFECT_SENSITIVE_TYPES = {
+    "ShaderNodeScript",
+    "CompositorNodeOutputFile",
+}
+_NODE_EFFECT_SENSITIVE_PROPERTIES = {
+    "base_path", "bytecode", "filepath", "file_slots", "layer_slots", "script",
+}
+
+
+def _node_validation_copy(target):
+    owner_kind = target["owner_kind"]
+    original_owner = target["owner_id"]
+    standalone_tree = None
+    if owner_kind == "NODE_GROUP":
+        working_owner = original_owner.copy()
+        working_tree = working_owner
+        standalone_tree = working_tree
+    elif owner_kind in {"MATERIAL", "WORLD", "LIGHT"}:
+        working_owner = original_owner.copy()
+        working_tree = working_owner.node_tree
+    elif target["adapter"] == "scene_embedded_node_tree":
+        working_owner = original_owner.copy()
+        working_tree = working_owner.node_tree
+    else:
+        working_owner = original_owner.copy()
+        working_tree = target["tree"].copy()
+        working_owner.compositing_node_group = working_tree
+        standalone_tree = working_tree
+    working_owner.name = ".BlenderMCP Node Patch Validation"
+    if standalone_tree is not None:
+        standalone_tree.name = ".BlenderMCP Node Patch Validation"
+    working_target = dict(target)
+    working_target.update({
+        "owner_id": working_owner,
+        "tree": working_tree,
+    })
+    return working_target, working_owner, standalone_tree
+
+
+def _node_remove_validation_copy(target, working_owner, standalone_tree):
+    owner_kind = target["owner_kind"]
+    if owner_kind == "NODE_GROUP":
+        if working_owner.name in bpy.data.node_groups:
+            bpy.data.node_groups.remove(working_owner, do_unlink=True)
+        return
+    if owner_kind == "MATERIAL" and working_owner.name in bpy.data.materials:
+        bpy.data.materials.remove(working_owner, do_unlink=True)
+    elif owner_kind == "WORLD" and working_owner.name in bpy.data.worlds:
+        bpy.data.worlds.remove(working_owner, do_unlink=True)
+    elif owner_kind == "LIGHT" and working_owner.name in bpy.data.lights:
+        bpy.data.lights.remove(working_owner, do_unlink=True)
+    elif owner_kind == "SCENE" and working_owner.name in bpy.data.scenes:
+        bpy.data.scenes.remove(working_owner, do_unlink=True)
+    if (
+        standalone_tree is not None
+        and standalone_tree.name in bpy.data.node_groups
+    ):
+        bpy.data.node_groups.remove(standalone_tree, do_unlink=True)
+
+
+def _node_interface_mutable(target):
+    return (
+        target["owner_kind"] == "NODE_GROUP"
+        or target["adapter"] == "scene_compositing_node_group"
+    )
+
+
+def _node_mutation_allowed(node, operation, path, diagnostics, property_name=None):
+    if node.bl_idname in _NODE_EFFECT_SENSITIVE_TYPES:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "effect_sensitive_node_read_only", path,
+            f"{node.bl_idname} is read-only because mutation may configure external effects",
+        ))
+        return False
+    if property_name in _NODE_EFFECT_SENSITIVE_PROPERTIES:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "effect_sensitive_property_read_only", path,
+            f"Property {property_name!r} is read-only in the generic patch protocol",
+        ))
+        return False
+    return True
+
+
+def _node_apply_color_ramp(node, operation):
+    ramp = getattr(node, "color_ramp", None)
+    if ramp is None:
+        raise ValueError(f"Node {node.name!r} has no Color Ramp")
+    if "interpolation" in operation:
+        ramp.interpolation = operation["interpolation"]
+    requested = operation["elements"]
+    while len(ramp.elements) > 2:
+        ramp.elements.remove(ramp.elements[-1])
+    for index, element in enumerate(requested):
+        target = (
+            ramp.elements[index]
+            if index < 2
+            else ramp.elements.new(float(element["position"]))
+        )
+        target.position = float(element["position"])
+        target.color = element["color"]
+
+
+def _node_apply_curve_mapping(node, operation):
+    mapping = getattr(node, "mapping", None)
+    if mapping is None:
+        raise ValueError(f"Node {node.name!r} has no Curve Mapping")
+    curves = operation["curves"]
+    if len(curves) != len(mapping.curves):
+        raise ValueError(
+            f"Expected {len(mapping.curves)} curves, received {len(curves)}"
+        )
+    if "use_clip" in operation:
+        mapping.use_clip = bool(operation["use_clip"])
+    for curve, curve_patch in zip(mapping.curves, curves):
+        requested = curve_patch["points"]
+        while len(curve.points) > 2:
+            curve.points.remove(curve.points[-1])
+        for index, point_patch in enumerate(requested):
+            location = point_patch["location"]
+            point = (
+                curve.points[index]
+                if index < 2
+                else curve.points.new(float(location[0]), float(location[1]))
+            )
+            point.location = location
+            if "handle_type" in point_patch:
+                point.handle_type = point_patch["handle_type"]
+    mapping.update()
+
+
+def _node_execute_patch_operations(target, patch):
+    tree = target["tree"]
+    diagnostics = []
+    plan = []
+    diff = {
+        "nodes_added": 0,
+        "nodes_removed": 0,
+        "nodes_renamed": 0,
+        "node_properties_changed": 0,
+        "socket_defaults_changed": 0,
+        "links_added": 0,
+        "links_removed": 0,
+        "layouts_changed": 0,
+        "annotations_changed": 0,
+        "interface_sockets_added": 0,
+        "interface_sockets_removed": 0,
+        "dynamic_structures_changed": 0,
+    }
+    node_refs = {
+        node.name: {"node": node, "removed": False, "existing": True}
+        for node in tree.nodes
+    }
+    interface_refs = {
+        (getattr(item, "identifier", "") or item.name): {
+            "item": item,
+            "removed": False,
+        }
+        for item in tree.interface.items_tree
+    }
+    created_nodes = {}
+    created_interface = {}
+
+    def resolve_node(reference, path):
+        item = node_refs.get(reference)
+        if item is None:
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "node_not_found", path,
+                f"Node reference not found: {reference}",
+            ))
+            return None
+        if item["removed"]:
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "node_already_removed", path,
+                f"Node was already removed: {reference}",
+            ))
+            return None
+        return item["node"]
+
+    for index, operation in enumerate(patch["operations"]):
+        path = f"/operations/{index}"
+        errors_before = sum(item["severity"] == "error" for item in diagnostics)
+        op = operation["op"]
+        summary = op
+        try:
+            if op == "add_node":
+                reference = operation["id"]
+                if reference in node_refs:
+                    raise ValueError(f"Node reference already exists: {reference}")
+                if operation["node_type"] in _NODE_EFFECT_SENSITIVE_TYPES:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "effect_sensitive_node_read_only", f"{path}/node_type",
+                        f"{operation['node_type']} cannot be added by the patch protocol",
+                    ))
+                    node = None
+                else:
+                    node = tree.nodes.new(operation["node_type"])
+                if node is not None:
+                    requested_name = operation.get("name")
+                    if (
+                        requested_name
+                        and tree.nodes.get(requested_name) not in {None, node}
+                    ):
+                        tree.nodes.remove(node)
+                        raise ValueError(f"Node name already exists: {requested_name}")
+                    if requested_name:
+                        node.name = requested_name
+                    node_refs[reference] = {
+                        "node": node, "removed": False, "existing": False,
+                    }
+                    created_nodes[reference] = node.name
+                    for property_name, value in operation.get("properties", {}).items():
+                        property_path = f"{path}/properties/{property_name}"
+                        if not _node_mutation_allowed(
+                            node, op, property_path, diagnostics, property_name
+                        ):
+                            continue
+                        if _gn_validate_value(
+                            node, property_name, value, property_path,
+                            diagnostics, node_refs,
+                        ):
+                            setattr(
+                                node, property_name,
+                                _gn_decode_patch_value(value, node_refs),
+                            )
+                    layout = operation.get("layout", {})
+                    for field in ("location", "width", "height"):
+                        if field in layout:
+                            setattr(node, field, layout[field])
+                    if layout.get("parent") is not None:
+                        parent = resolve_node(
+                            layout["parent"], f"{path}/layout/parent"
+                        )
+                        if parent is not None:
+                            if parent.bl_idname != "NodeFrame":
+                                raise ValueError("Node parent must be a Frame")
+                            node.parent = parent
+                    diff["nodes_added"] += 1
+                    summary = f"Add {node.bl_idname} as {reference}"
+
+            elif op == "remove_node":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None and _node_mutation_allowed(
+                    node, op, path, diagnostics
+                ):
+                    tree.nodes.remove(node)
+                    node_refs[operation["node"]]["removed"] = True
+                    created_nodes.pop(operation["node"], None)
+                    diff["nodes_removed"] += 1
+                    summary = f"Remove {operation['node']}"
+
+            elif op == "rename_node":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None:
+                    if operation["name"] != node.name and operation["name"] in tree.nodes:
+                        raise ValueError(f"Node name already exists: {operation['name']}")
+                    node.name = operation["name"]
+                    if operation["node"] in created_nodes:
+                        created_nodes[operation["node"]] = node.name
+                    diff["nodes_renamed"] += 1
+                    summary = f"Rename {operation['node']} to {node.name}"
+
+            elif op == "set_node_property":
+                node = resolve_node(operation["node"], f"{path}/node")
+                property_name = operation["property"]
+                if node is not None and _node_mutation_allowed(
+                    node, op, f"{path}/property", diagnostics, property_name
+                ) and _gn_validate_value(
+                    node, property_name, operation["value"], f"{path}/value",
+                    diagnostics, node_refs, property_path=f"{path}/property",
+                ):
+                    setattr(
+                        node, property_name,
+                        _gn_decode_patch_value(operation["value"], node_refs),
+                    )
+                    diff["node_properties_changed"] += 1
+                    summary = f"Set {operation['node']}.{property_name}"
+
+            elif op == "set_socket_default":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None and _node_mutation_allowed(
+                    node, op, path, diagnostics
+                ):
+                    socket = _gn_resolve_patch_socket(
+                        node, operation["socket"], "input", f"{path}/socket", diagnostics
+                    )
+                    if socket is not None and _gn_validate_value(
+                        socket, "default_value", operation["value"], f"{path}/value",
+                        diagnostics, node_refs,
+                    ):
+                        if socket.is_linked:
+                            diagnostics.append(_gn_patch_diagnostic(
+                                "warning", "linked_socket_default", f"{path}/socket",
+                                "The default is stored but has no effect while the socket is linked",
+                            ))
+                        socket.default_value = _gn_decode_patch_value(
+                            operation["value"], node_refs
+                        )
+                        diff["socket_defaults_changed"] += 1
+                        summary = f"Set default for {operation['node']}"
+
+            elif op in {"add_link", "remove_link"}:
+                from_node = resolve_node(operation["from_node"], f"{path}/from_node")
+                to_node = resolve_node(operation["to_node"], f"{path}/to_node")
+                if from_node is not None and to_node is not None:
+                    if not _node_mutation_allowed(from_node, op, path, diagnostics):
+                        from_node = None
+                    if not _node_mutation_allowed(to_node, op, path, diagnostics):
+                        to_node = None
+                if from_node is not None and to_node is not None:
+                    from_socket = _gn_resolve_patch_socket(
+                        from_node, operation["from_socket"], "output",
+                        f"{path}/from_socket", diagnostics,
+                    )
+                    to_socket = _gn_resolve_patch_socket(
+                        to_node, operation["to_socket"], "input",
+                        f"{path}/to_socket", diagnostics,
+                    )
+                    if from_socket is not None and to_socket is not None:
+                        existing = next((
+                            link for link in tree.links
+                            if link.from_socket == from_socket and link.to_socket == to_socket
+                        ), None)
+                        if op == "add_link":
+                            if existing is not None:
+                                raise ValueError("Link already exists")
+                            if not getattr(to_socket, "is_multi_input", False) and to_socket.is_linked:
+                                raise ValueError(
+                                    "Remove the existing link before linking this input"
+                                )
+                            link = tree.links.new(from_socket, to_socket, verify_limits=True)
+                            if not link.is_valid:
+                                raise ValueError("Blender rejected the projected link")
+                            if from_socket.type != to_socket.type:
+                                diagnostics.append(_gn_patch_diagnostic(
+                                    "warning", "implicit_socket_conversion", path,
+                                    f"Blender converts {from_socket.type} to {to_socket.type}",
+                                ))
+                            diff["links_added"] += 1
+                        else:
+                            if existing is None:
+                                raise ValueError("Link does not exist")
+                            tree.links.remove(existing)
+                            diff["links_removed"] += 1
+                        summary = f"{op} {operation['from_node']} -> {operation['to_node']}"
+
+            elif op == "set_node_layout":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None:
+                    for field in ("location", "width", "height"):
+                        if field in operation:
+                            setattr(node, field, operation[field])
+                    if "parent" in operation:
+                        if operation["parent"] is None:
+                            node.parent = None
+                        else:
+                            parent = resolve_node(operation["parent"], f"{path}/parent")
+                            if parent is not None:
+                                if parent == node or parent.bl_idname != "NodeFrame":
+                                    raise ValueError("Node parent must be a different Frame")
+                                node.parent = parent
+                    diff["layouts_changed"] += 1
+                    summary = f"Update layout for {operation['node']}"
+
+            elif op == "set_annotation":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None:
+                    if node.bl_idname != "NodeFrame":
+                        raise ValueError("Annotations may only be attached to Frame nodes")
+                    if operation["text"]:
+                        node["blender_mcp_note"] = operation["text"]
+                    elif "blender_mcp_note" in node:
+                        del node["blender_mcp_note"]
+                    diff["annotations_changed"] += 1
+                    summary = f"Set annotation for {operation['node']}"
+
+            elif op == "add_interface_socket":
+                if not _node_interface_mutable(target):
+                    raise ValueError("This owner does not expose a mutable node interface")
+                if operation["id"] in interface_refs:
+                    raise ValueError(f"Interface reference already exists: {operation['id']}")
+                parent = None
+                if operation.get("parent"):
+                    parent_record = interface_refs.get(operation["parent"])
+                    if parent_record is None or parent_record["removed"]:
+                        raise ValueError(f"Interface parent not found: {operation['parent']}")
+                    parent = parent_record["item"]
+                    if parent.item_type != "PANEL":
+                        raise ValueError("Interface parent must be a panel")
+                item = tree.interface.new_socket(
+                    name=operation["name"],
+                    in_out=operation["in_out"],
+                    socket_type=operation["socket_type"],
+                    parent=parent,
+                )
+                if "default" in operation and hasattr(item, "default_value"):
+                    if _gn_validate_value(
+                        item, "default_value", operation["default"], f"{path}/default",
+                        diagnostics, node_refs,
+                    ):
+                        item.default_value = _gn_decode_patch_value(
+                            operation["default"], node_refs
+                        )
+                interface_refs[operation["id"]] = {"item": item, "removed": False}
+                created_interface[operation["id"]] = (
+                    getattr(item, "identifier", "") or item.name
+                )
+                diff["interface_sockets_added"] += 1
+                summary = f"Add interface socket {operation['id']}"
+
+            elif op == "remove_interface_socket":
+                if not _node_interface_mutable(target):
+                    raise ValueError("This owner does not expose a mutable node interface")
+                record = interface_refs.get(operation["identifier"])
+                if record is None or record["removed"] or record["item"].item_type != "SOCKET":
+                    raise ValueError(
+                        f"Interface socket not found: {operation['identifier']}"
+                    )
+                tree.interface.remove(record["item"])
+                record["removed"] = True
+                created_interface.pop(operation["identifier"], None)
+                diff["interface_sockets_removed"] += 1
+                summary = f"Remove interface socket {operation['identifier']}"
+
+            elif op == "set_color_ramp":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None and _node_mutation_allowed(
+                    node, op, path, diagnostics
+                ):
+                    _node_apply_color_ramp(node, operation)
+                    diff["dynamic_structures_changed"] += 1
+                    summary = f"Set Color Ramp on {operation['node']}"
+
+            elif op == "set_curve_mapping":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None and _node_mutation_allowed(
+                    node, op, path, diagnostics
+                ):
+                    _node_apply_curve_mapping(node, operation)
+                    diff["dynamic_structures_changed"] += 1
+                    summary = f"Set Curve Mapping on {operation['node']}"
+        except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "operation_rejected", path,
+                f"{type(exc).__name__}: {exc}",
+            ))
+        errors_after = sum(item["severity"] == "error" for item in diagnostics)
+        plan.append({
+            "index": index,
+            "op": op,
+            "status": "ready" if errors_after == errors_before else "invalid",
+            "summary": summary,
+        })
+    return {
+        "diagnostics": diagnostics,
+        "plan": plan,
+        "semantic_diff": diff,
+        "created_nodes": created_nodes,
+        "created_interface": created_interface,
+    }
+
+
+def _node_validate_patch_runtime(target, patch):
+    current_snapshot = _node_export_target(target, "all")
+    current_revision = current_snapshot["revision"]
+    diagnostics = []
+    try:
+        patch_ref = _node_normalize_tree_ref(patch.get("tree_ref"))
+    except ValueError as exc:
+        patch_ref = patch.get("tree_ref")
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "invalid_tree_ref", "/tree_ref", str(exc),
+        ))
+    if patch_ref != target["tree_ref"]:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "tree_ref_mismatch", "/tree_ref",
+            "Patch tree_ref does not identify the resolved target",
+        ))
+    if patch.get("base_revision") != current_revision:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "stale_revision", "/base_revision",
+            f"Patch revision {patch.get('base_revision')!r} does not match current {current_revision!r}",
+        ))
+    capabilities = _node_target_capabilities(target)
+    if not capabilities["editable"]:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "tree_not_editable", "/tree_ref",
+            "The selected owner or NodeTree is linked or otherwise read-only",
+        ))
+
+    execution = {
+        "diagnostics": [],
+        "plan": [],
+        "semantic_diff": {},
+    }
+    candidate_snapshot = None
+    if not any(item["severity"] == "error" for item in diagnostics):
+        working_target = working_owner = standalone_tree = None
+        try:
+            working_target, working_owner, standalone_tree = _node_validation_copy(target)
+            execution = _node_execute_patch_operations(working_target, patch)
+            diagnostics.extend(execution["diagnostics"])
+            if not any(item["severity"] == "error" for item in diagnostics):
+                invalid_links = [link for link in working_target["tree"].links if not link.is_valid]
+                if invalid_links:
+                    raise RuntimeError(
+                        f"Projected tree contains {len(invalid_links)} invalid links"
+                    )
+                candidate_snapshot = _node_export_tree(
+                    working_target["tree"],
+                    "all",
+                    schema=NODE_TREE_SNAPSHOT_SCHEMA,
+                    tree_ref=target["tree_ref"],
+                    owner=target["owner"],
+                    capabilities=capabilities,
+                )
+        except Exception as exc:
+            diagnostics.append(_gn_patch_diagnostic(
+                "error", "dry_run_execution_rejected", "",
+                f"{type(exc).__name__}: {exc}",
+            ))
+        finally:
+            if working_owner is not None:
+                _node_remove_validation_copy(target, working_owner, standalone_tree)
+
+    result = {
+        "schema": "blender-node-tree-patch-validation/1",
+        "valid": not any(item["severity"] == "error" for item in diagnostics),
+        "stage": "runtime",
+        "will_mutate": False,
+        "tree_ref": target["tree_ref"],
+        "base_revision": patch.get("base_revision"),
+        "current_revision": current_revision,
+        "capabilities": capabilities,
+        "users": current_snapshot["users"],
+        "diagnostics": diagnostics,
+        "plan": execution["plan"],
+        "semantic_diff": execution["semantic_diff"],
+    }
+    if candidate_snapshot is not None:
+        result["candidate_revision"] = candidate_snapshot["revision"]
+        result["candidate_stats"] = candidate_snapshot["stats"]
+    return result
+
+
 def _gn_assign_user(handle, kind, tree):
     if kind == "MODIFIER":
         handle.node_group = tree
@@ -2863,6 +3432,7 @@ class BlenderMCPServer:
             "export_node_tree": self.export_node_tree,
             "get_node_tree_index": self.get_node_tree_index,
             "get_node_type_schema": self.get_node_type_schema,
+            "validate_node_tree_patch": self.validate_node_tree_patch,
             "list_geometry_node_trees": self.list_geometry_node_trees,
             "export_geometry_node_tree": self.export_geometry_node_tree,
             "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
@@ -3040,6 +3610,25 @@ class BlenderMCPServer:
     ):
         """Inspect a node type in an exact tree and owner context."""
         return _node_type_schema(tree_type, owner_kind, node_type, detail)
+
+    def validate_node_tree_patch(self, patch):
+        """Dry-run a generic node-tree patch on an owner-aware disposable copy."""
+        try:
+            target = _node_resolve_tree_ref(patch.get("tree_ref"))
+        except (AttributeError, TypeError, ValueError) as exc:
+            return {
+                "schema": "blender-node-tree-patch-validation/1",
+                "valid": False,
+                "stage": "runtime",
+                "will_mutate": False,
+                "tree_ref": patch.get("tree_ref"),
+                "diagnostics": [_gn_patch_diagnostic(
+                    "error", "target_resolution_failed", "/tree_ref", str(exc),
+                )],
+                "plan": [],
+                "semantic_diff": {},
+            }
+        return _node_validate_patch_runtime(target, patch)
 
     def list_geometry_node_trees(self):
         """List Geometry Node groups with revisions and user summaries."""

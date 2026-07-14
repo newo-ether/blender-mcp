@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/newo-ether/blender-mcp/schemas/node-tree-patch-v1.json",
+  "title": "Blender MCP owner-addressed node-tree patch v1",
+  "type": "object",
+  "required": ["schema", "tree_ref", "base_revision", "capabilities", "operations"],
+  "properties": {
+    "schema": {"const": "blender-node-tree-patch/1"},
+    "tree_ref": {"$ref": "node-tree-v1.json#/$defs/treeRef"},
+    "base_revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"enum": ["graph", "layout", "interface", "annotation", "dynamic", "id_reference"]}
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/addNode"},
+          {"$ref": "#/$defs/removeNode"},
+          {"$ref": "#/$defs/renameNode"},
+          {"$ref": "#/$defs/setNodeProperty"},
+          {"$ref": "#/$defs/setSocketDefault"},
+          {"$ref": "#/$defs/addLink"},
+          {"$ref": "#/$defs/removeLink"},
+          {"$ref": "#/$defs/setNodeLayout"},
+          {"$ref": "#/$defs/setAnnotation"},
+          {"$ref": "#/$defs/addInterfaceSocket"},
+          {"$ref": "#/$defs/removeInterfaceSocket"},
+          {"$ref": "#/$defs/setColorRamp"},
+          {"$ref": "#/$defs/setCurveMapping"}
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "typedValue": {
+      "oneOf": [
+        {"type": ["null", "boolean", "integer", "number", "string"]},
+        {"type": "array", "items": {"$ref": "#/$defs/typedValue"}},
+        {
+          "type": "object",
+          "required": ["$type", "id_type", "name"],
+          "properties": {
+            "$type": {"const": "ID"},
+            "id_type": {"type": "string", "minLength": 1},
+            "name": {"type": "string", "minLength": 1},
+            "library": {"type": ["string", "null"]}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["$type", "name"],
+          "properties": {
+            "$type": {"const": "NodeRef"},
+            "name": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "layout": {
+      "type": "object",
+      "properties": {
+        "location": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "minItems": 2, "maxItems": 2},
+        "width": {"type": "number"},
+        "height": {"type": "number"},
+        "parent": {"type": ["string", "null"]}
+      },
+      "minProperties": 1,
+      "additionalProperties": false
+    },
+    "addNode": {
+      "type": "object",
+      "required": ["op", "id", "node_type"],
+      "properties": {
+        "op": {"const": "add_node"},
+        "id": {"type": "string", "minLength": 1},
+        "node_type": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "properties": {"type": "object", "additionalProperties": {"$ref": "#/$defs/typedValue"}},
+        "layout": {"$ref": "#/$defs/layout"}
+      },
+      "additionalProperties": false
+    },
+    "removeNode": {"type": "object", "required": ["op", "node"], "properties": {"op": {"const": "remove_node"}, "node": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+    "renameNode": {"type": "object", "required": ["op", "node", "name"], "properties": {"op": {"const": "rename_node"}, "node": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+    "setNodeProperty": {"type": "object", "required": ["op", "node", "property", "value"], "properties": {"op": {"const": "set_node_property"}, "node": {"type": "string", "minLength": 1}, "property": {"type": "string", "minLength": 1}, "value": {"$ref": "#/$defs/typedValue"}}, "additionalProperties": false},
+    "setSocketDefault": {"type": "object", "required": ["op", "node", "socket", "value"], "properties": {"op": {"const": "set_socket_default"}, "node": {"type": "string", "minLength": 1}, "socket": {"type": "string", "pattern": "^input:[0-9]+:.+$"}, "value": {"$ref": "#/$defs/typedValue"}}, "additionalProperties": false},
+    "linkFields": {
+      "type": "object",
+      "required": ["op", "from_node", "from_socket", "to_node", "to_socket"],
+      "properties": {
+        "from_node": {"type": "string", "minLength": 1},
+        "from_socket": {"type": "string", "pattern": "^output:[0-9]+:.+$"},
+        "to_node": {"type": "string", "minLength": 1},
+        "to_socket": {"type": "string", "pattern": "^input:[0-9]+:.+$"}
+      }
+    },
+    "addLink": {"allOf": [{"$ref": "#/$defs/linkFields"}, {"properties": {"op": {"const": "add_link"}}}], "unevaluatedProperties": false},
+    "removeLink": {"allOf": [{"$ref": "#/$defs/linkFields"}, {"properties": {"op": {"const": "remove_link"}}}], "unevaluatedProperties": false},
+    "setNodeLayout": {
+      "type": "object",
+      "required": ["op", "node"],
+      "properties": {
+        "op": {"const": "set_node_layout"},
+        "node": {"type": "string", "minLength": 1},
+        "location": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "minItems": 2, "maxItems": 2},
+        "width": {"type": "number"},
+        "height": {"type": "number"},
+        "parent": {"type": ["string", "null"]}
+      },
+      "minProperties": 3,
+      "additionalProperties": false
+    },
+    "setAnnotation": {"type": "object", "required": ["op", "node", "text"], "properties": {"op": {"const": "set_annotation"}, "node": {"type": "string", "minLength": 1}, "text": {"type": "string", "maxLength": 16384}}, "additionalProperties": false},
+    "addInterfaceSocket": {"type": "object", "required": ["op", "id", "name", "in_out", "socket_type"], "properties": {"op": {"const": "add_interface_socket"}, "id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}, "in_out": {"enum": ["INPUT", "OUTPUT"]}, "socket_type": {"type": "string", "minLength": 1}, "parent": {"type": "string", "minLength": 1}, "default": {"$ref": "#/$defs/typedValue"}}, "additionalProperties": false},
+    "removeInterfaceSocket": {"type": "object", "required": ["op", "identifier"], "properties": {"op": {"const": "remove_interface_socket"}, "identifier": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+    "rampElement": {"type": "object", "required": ["position", "color"], "properties": {"position": {"type": "number", "minimum": 0, "maximum": 1}, "color": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4}}, "additionalProperties": false},
+    "setColorRamp": {"type": "object", "required": ["op", "node", "elements"], "properties": {"op": {"const": "set_color_ramp"}, "node": {"type": "string", "minLength": 1}, "interpolation": {"type": "string", "minLength": 1}, "elements": {"type": "array", "minItems": 2, "maxItems": 32, "items": {"$ref": "#/$defs/rampElement"}}}, "additionalProperties": false},
+    "curvePoint": {"type": "object", "required": ["location"], "properties": {"location": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "minItems": 2, "maxItems": 2}, "handle_type": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+    "curve": {"type": "object", "required": ["points"], "properties": {"points": {"type": "array", "minItems": 2, "maxItems": 64, "items": {"$ref": "#/$defs/curvePoint"}}}, "additionalProperties": false},
+    "setCurveMapping": {"type": "object", "required": ["op", "node", "curves"], "properties": {"op": {"const": "set_curve_mapping"}, "node": {"type": "string", "minLength": 1}, "use_clip": {"type": "boolean"}, "curves": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"$ref": "#/$defs/curve"}}}, "additionalProperties": false}
+  },
+  "additionalProperties": false
+}

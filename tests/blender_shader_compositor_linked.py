@@ -94,6 +94,18 @@ def main():
             "tree_type": "ShaderNodeTree",
             "owner": {"kind": "NODE_GROUP", "name": linked_shader.name},
         })
+        linked_patch = {
+            "schema": "blender-node-tree-patch/1",
+            "tree_ref": shader_export["tree_ref"],
+            "base_revision": shader_export["revision"],
+            "capabilities": ["graph"],
+            "operations": [{
+                "op": "rename_node",
+                "node": next(iter(shader_export["tree"]["nodes"])),
+                "name": "Must Not Change",
+            }],
+        }
+        linked_validation = server.validate_node_tree_patch(linked_patch)
         result = {
             "version": list(bpy.app.version[:3]),
             "owners": {
@@ -113,6 +125,9 @@ def main():
                 ],
                 "material_capabilities": material_export["capabilities"],
                 "shader_group_capabilities": shader_export["capabilities"],
+                "validation_codes": sorted(
+                    item["code"] for item in linked_validation["diagnostics"]
+                ),
             },
         }
         for item in list(result["owners"].values()) + list(result["groups"].values()):
@@ -122,6 +137,10 @@ def main():
             raise AssertionError("generic Material capabilities did not fail closed")
         if shader_export["capabilities"]["editable"] or shader_export["capabilities"]["apply"]:
             raise AssertionError("generic Shader group capabilities did not fail closed")
+        if linked_validation["valid"] or "tree_not_editable" not in {
+            item["code"] for item in linked_validation["diagnostics"]
+        }:
+            raise AssertionError("linked generic validation did not fail closed")
         cleanup()
         result["leaks"] = {
             collection_name: [

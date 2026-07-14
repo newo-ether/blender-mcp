@@ -103,7 +103,8 @@
           "required": ["text", "truncated"],
           "properties": {"text": {"type": "string"}, "truncated": {"type": "boolean"}},
           "additionalProperties": false
-        }
+        },
+        "special_structures": {"type": "array", "items": {"type": "object"}}
       },
       "additionalProperties": false
     }

@@ -104,13 +104,40 @@ class NodeTreeToolTests(unittest.TestCase):
             "detail": "compact",
         })
 
-    def test_all_four_generic_tools_are_registered(self):
+    def test_validation_runs_structure_gate_then_forwards(self):
+        patch = {
+            "schema": "blender-node-tree-patch/1",
+            "tree_ref": self.tree_ref,
+            "base_revision": "sha256:" + "a" * 64,
+            "capabilities": ["graph"],
+            "operations": [{
+                "op": "rename_node",
+                "node": "Principled BSDF",
+                "name": "Surface",
+            }],
+        }
+        response = json.loads(server.validate_node_tree_patch(None, patch=patch))
+        self.assertEqual(response["command"], "validate_node_tree_patch")
+        self.assertEqual(response["params"], {"patch": patch})
+
+        invalid = dict(patch)
+        invalid["capabilities"] = ["layout"]
+        rejected = json.loads(server.validate_node_tree_patch(None, patch=invalid))
+        self.assertFalse(rejected["valid"])
+        self.assertEqual(rejected["stage"], "structure")
+        self.assertIn(
+            "undeclared_capability",
+            {item["code"] for item in rejected["diagnostics"]},
+        )
+
+    def test_all_five_generic_tools_are_registered(self):
         names = {tool.name for tool in server.mcp._tool_manager.list_tools()}
         self.assertTrue({
             "list_node_trees",
             "export_node_tree",
             "get_node_tree_index",
             "get_node_type_schema",
+            "validate_node_tree_patch",
         }.issubset(names))
 
 

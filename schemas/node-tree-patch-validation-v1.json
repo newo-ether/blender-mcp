@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/newo-ether/blender-mcp/schemas/node-tree-patch-validation-v1.json",
+  "title": "Blender MCP generic node-tree patch validation v1",
+  "type": "object",
+  "required": ["schema", "valid", "stage", "will_mutate", "diagnostics", "plan", "semantic_diff"],
+  "properties": {
+    "schema": {"const": "blender-node-tree-patch-validation/1"},
+    "valid": {"type": "boolean"},
+    "stage": {"enum": ["structure", "runtime", "transport"]},
+    "will_mutate": {"const": false},
+    "tree_ref": {"type": "object"},
+    "base_revision": {"type": "string"},
+    "current_revision": {"type": "string"},
+    "candidate_revision": {"type": "string"},
+    "candidate_stats": {"type": "object"},
+    "capabilities": {"type": "object"},
+    "users": {"type": "array", "items": {"type": "object"}},
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "code", "path", "message"],
+        "properties": {
+          "severity": {"enum": ["error", "warning"]},
+          "code": {"type": "string"},
+          "path": {"type": "string"},
+          "message": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "plan": {"type": "array", "items": {"type": "object"}},
+    "semantic_diff": {"type": "object"}
+  },
+  "additionalProperties": false
+}

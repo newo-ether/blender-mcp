@@ -33,7 +33,17 @@ from .geometry_nodes_schema import (
     validate_patch_structure,
     write_snapshot_json,
 )
-from .node_tree_schema import write_snapshot_json as write_node_tree_snapshot_json
+from .node_tree_schema import (
+    NodeTreeSchemaError,
+    write_snapshot_json as write_node_tree_snapshot_json,
+)
+from .node_tree_patch import (
+    NodeTreePatchError,
+    PATCH_VALIDATION_SCHEMA as NODE_PATCH_VALIDATION_SCHEMA,
+    assert_valid_patch as assert_valid_node_patch,
+    read_patch_json as read_node_patch_json,
+    validate_patch_structure as validate_node_patch_structure,
+)
 
 # Import telemetry
 from .telemetry import record_startup, get_telemetry, EventType
@@ -623,6 +633,112 @@ def get_node_type_schema(
     except Exception as e:
         logger.error(f"Error inspecting node type: {str(e)}")
         return f"Error inspecting node type: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("validate_node_tree_patch")
+def validate_node_tree_patch(
+    ctx: Context,
+    patch: Dict[str, Any] = None,
+    patch_path: str = "",
+    user_prompt: str = "",
+) -> str:
+    """Dry-run an owner-addressed node-tree patch without changing live data.
+
+    Provide exactly one inline patch or workspace-relative patch_path. Structural
+    validation runs in the MCP process, then Blender repeats semantic validation
+    on an owner-aware disposable copy. Script and File Output mutations fail
+    closed, and this endpoint never commits a change.
+
+    Parameters:
+    - patch: Inline blender-node-tree-patch/1 object
+    - patch_path: JSON file below BLENDER_MCP_WORKSPACE
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        has_inline_patch = patch is not None
+        has_patch_path = bool(patch_path)
+        if has_inline_patch == has_patch_path:
+            return json.dumps(
+                {
+                    "schema": NODE_PATCH_VALIDATION_SCHEMA,
+                    "valid": False,
+                    "stage": "structure",
+                    "will_mutate": False,
+                    "diagnostics": [{
+                        "severity": "error",
+                        "code": "patch_source_count",
+                        "path": "",
+                        "message": "Provide exactly one of patch or patch_path",
+                    }],
+                    "plan": [],
+                    "semantic_diff": {},
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        patch_document = read_node_patch_json(patch_path) if patch_path else patch
+        diagnostics = validate_node_patch_structure(patch_document)
+        if diagnostics:
+            return json.dumps(
+                {
+                    "schema": NODE_PATCH_VALIDATION_SCHEMA,
+                    "valid": False,
+                    "stage": "structure",
+                    "will_mutate": False,
+                    "diagnostics": diagnostics,
+                    "plan": [],
+                    "semantic_diff": {},
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        patch_document = assert_valid_node_patch(patch_document)
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "validate_node_tree_patch", {"patch": patch_document}
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except (NodeTreePatchError, NodeTreeSchemaError) as e:
+        diagnostics = getattr(e, "diagnostics", None) or [{
+            "severity": "error",
+            "code": "patch_file_error",
+            "path": "/patch_path",
+            "message": str(e),
+        }]
+        return json.dumps(
+            {
+                "schema": NODE_PATCH_VALIDATION_SCHEMA,
+                "valid": False,
+                "stage": "structure",
+                "will_mutate": False,
+                "diagnostics": diagnostics,
+                "plan": [],
+                "semantic_diff": {},
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as e:
+        logger.error(f"Error validating node-tree patch: {str(e)}")
+        return json.dumps(
+            {
+                "schema": NODE_PATCH_VALIDATION_SCHEMA,
+                "valid": False,
+                "stage": "transport",
+                "will_mutate": False,
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "validation_transport_error",
+                    "path": "",
+                    "message": str(e),
+                }],
+                "plan": [],
+                "semantic_diff": {},
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
 
 @mcp.tool()
