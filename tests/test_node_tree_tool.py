@@ -130,7 +130,28 @@ class NodeTreeToolTests(unittest.TestCase):
             {item["code"] for item in rejected["diagnostics"]},
         )
 
-    def test_all_five_generic_tools_are_registered(self):
+    def test_apply_repeats_structure_gate_and_forwards_backup_policy(self):
+        patch = {
+            "schema": "blender-node-tree-patch/1",
+            "tree_ref": self.tree_ref,
+            "base_revision": "sha256:" + "a" * 64,
+            "capabilities": ["graph"],
+            "operations": [{
+                "op": "rename_node",
+                "node": "Principled BSDF",
+                "name": "Surface",
+            }],
+        }
+        response = json.loads(server.apply_node_tree_patch(
+            None, patch=patch, keep_backup=False
+        ))
+        self.assertEqual(response["command"], "apply_node_tree_patch")
+        self.assertEqual(response["params"], {
+            "patch": patch,
+            "keep_backup": False,
+        })
+
+    def test_all_six_generic_tools_are_registered(self):
         names = {tool.name for tool in server.mcp._tool_manager.list_tools()}
         self.assertTrue({
             "list_node_trees",
@@ -138,6 +159,7 @@ class NodeTreeToolTests(unittest.TestCase):
             "get_node_tree_index",
             "get_node_type_schema",
             "validate_node_tree_patch",
+            "apply_node_tree_patch",
         }.issubset(names))
 
 

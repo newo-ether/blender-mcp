@@ -106,6 +106,9 @@ def main():
             }],
         }
         linked_validation = server.validate_node_tree_patch(linked_patch)
+        linked_application = server.apply_node_tree_patch(
+            linked_patch, keep_backup=True
+        )
         result = {
             "version": list(bpy.app.version[:3]),
             "owners": {
@@ -128,6 +131,7 @@ def main():
                 "validation_codes": sorted(
                     item["code"] for item in linked_validation["diagnostics"]
                 ),
+                "application_status": linked_application["status"],
             },
         }
         for item in list(result["owners"].values()) + list(result["groups"].values()):
@@ -141,6 +145,8 @@ def main():
             item["code"] for item in linked_validation["diagnostics"]
         }:
             raise AssertionError("linked generic validation did not fail closed")
+        if linked_application["applied"] or linked_application["mutated"]:
+            raise AssertionError("linked generic application did not fail closed")
         cleanup()
         result["leaks"] = {
             collection_name: [

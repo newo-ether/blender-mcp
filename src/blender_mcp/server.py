@@ -39,6 +39,7 @@ from .node_tree_schema import (
 )
 from .node_tree_patch import (
     NodeTreePatchError,
+    PATCH_APPLICATION_SCHEMA as NODE_PATCH_APPLICATION_SCHEMA,
     PATCH_VALIDATION_SCHEMA as NODE_PATCH_VALIDATION_SCHEMA,
     assert_valid_patch as assert_valid_node_patch,
     read_patch_json as read_node_patch_json,
@@ -735,6 +736,111 @@ def validate_node_tree_patch(
                 }],
                 "plan": [],
                 "semantic_diff": {},
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
+@mcp.tool()
+@telemetry_tool("apply_node_tree_patch")
+def apply_node_tree_patch(
+    ctx: Context,
+    patch: Dict[str, Any] = None,
+    patch_path: str = "",
+    keep_backup: bool = True,
+    user_prompt: str = "",
+) -> str:
+    """Apply an owner-addressed patch through a verified transaction.
+
+    N3 enables local Material, World, Light, and Shader node-group owners.
+    Compositor apply remains unavailable until its versioned transaction phase.
+    Validation is repeated immediately before the owner copy/remap commit. On
+    failure, owner users, names, fake-user state, and graph identity are restored.
+
+    Parameters:
+    - patch: Inline blender-node-tree-patch/1 object
+    - patch_path: JSON file below BLENDER_MCP_WORKSPACE
+    - keep_backup: Preserve the pre-commit owner/tree as a fake-user backup
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        has_inline_patch = patch is not None
+        has_patch_path = bool(patch_path)
+        if has_inline_patch == has_patch_path:
+            return json.dumps(
+                {
+                    "schema": NODE_PATCH_APPLICATION_SCHEMA,
+                    "status": "rejected",
+                    "applied": False,
+                    "mutated": False,
+                    "diagnostics": [{
+                        "severity": "error",
+                        "code": "patch_source_count",
+                        "path": "",
+                        "message": "Provide exactly one of patch or patch_path",
+                    }],
+                    "plan": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        patch_document = read_node_patch_json(patch_path) if patch_path else patch
+        diagnostics = validate_node_patch_structure(patch_document)
+        if diagnostics:
+            return json.dumps(
+                {
+                    "schema": NODE_PATCH_APPLICATION_SCHEMA,
+                    "status": "rejected",
+                    "applied": False,
+                    "mutated": False,
+                    "diagnostics": diagnostics,
+                    "plan": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        patch_document = assert_valid_node_patch(patch_document)
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "apply_node_tree_patch",
+            {"patch": patch_document, "keep_backup": keep_backup},
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except (NodeTreePatchError, NodeTreeSchemaError) as e:
+        diagnostics = getattr(e, "diagnostics", None) or [{
+            "severity": "error",
+            "code": "patch_file_error",
+            "path": "/patch_path",
+            "message": str(e),
+        }]
+        return json.dumps(
+            {
+                "schema": NODE_PATCH_APPLICATION_SCHEMA,
+                "status": "rejected",
+                "applied": False,
+                "mutated": False,
+                "diagnostics": diagnostics,
+                "plan": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as e:
+        logger.error(f"Error applying node-tree patch: {str(e)}")
+        return json.dumps(
+            {
+                "schema": NODE_PATCH_APPLICATION_SCHEMA,
+                "status": "failed",
+                "applied": False,
+                "mutated": False,
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "application_transport_error",
+                    "path": "",
+                    "message": str(e),
+                }],
+                "plan": [],
             },
             ensure_ascii=False,
             indent=2,

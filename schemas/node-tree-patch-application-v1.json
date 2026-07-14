@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/newo-ether/blender-mcp/schemas/node-tree-patch-application-v1.json",
+  "title": "Blender MCP generic node-tree patch application v1",
+  "type": "object",
+  "required": ["schema", "status", "applied", "mutated"],
+  "properties": {
+    "schema": {"const": "blender-node-tree-patch-application/1"},
+    "status": {"enum": ["applied", "rejected", "rolled_back", "rollback_failed", "failed"]},
+    "applied": {"type": "boolean"},
+    "mutated": {"type": "boolean"},
+    "tree_ref": {"type": ["object", "null"]},
+    "previous_owner_name": {"type": "string"},
+    "base_revision": {"type": "string"},
+    "current_revision": {"type": "string"},
+    "new_revision": {"type": "string"},
+    "users_reassigned": {"type": "array", "items": {"type": "object"}},
+    "backup": {"type": ["object", "null"]},
+    "created_nodes": {"type": "object"},
+    "created_interface_sockets": {"type": "object"},
+    "operations": {"type": "array", "items": {"type": "object"}},
+    "semantic_diff": {"type": "object"},
+    "actual_diff": {"type": "object"},
+    "warnings": {"type": "array", "items": {"type": "object"}},
+    "verification": {"type": "object"},
+    "diagnostics": {"type": "array", "items": {"type": "object"}},
+    "plan": {"type": "array", "items": {"type": "object"}}
+  },
+  "additionalProperties": false
+}

@@ -146,7 +146,11 @@ def run_test():
     for expected in expected_refs:
         key = json.dumps(expected, sort_keys=True)
         assert_true(key in listed_refs, f"tree missing from generic list: {expected}")
-        assert_true(not listed_refs[key]["capabilities"]["apply"], "N1 exposed apply")
+        expected_apply = expected["tree_type"] == "ShaderNodeTree"
+        assert_true(
+            listed_refs[key]["capabilities"]["apply"] == expected_apply,
+            f"unexpected apply capability for {expected}",
+        )
 
     shader_only = server.list_node_trees(
         tree_types=["ShaderNodeTree"], owner_kinds=["MATERIAL"]
