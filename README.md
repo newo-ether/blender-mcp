@@ -33,14 +33,16 @@ model-generation tools while adding:
 Open PowerShell and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1 | iex
+Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1 | iex
 ```
 
-The source is human-readable: [install.ps1](install.ps1). For a reproducible,
-version-pinned install, use:
+`-Scope Process` applies only to the current PowerShell window; it does not
+permanently change the user or machine execution policy. The source is
+human-readable: [install.ps1](install.ps1). For a reproducible, version-pinned
+install, use:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.7.0/install.ps1))) -ReleaseTag v1.7.0
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.7.0/install.ps1))) -ReleaseTag v1.7.0
 ```
 
 Before changing the machine, the installer:
@@ -89,6 +91,7 @@ Use `-Gui` for a WinForms checkbox window.
 Pass parameters to the remote script by creating a script block:
 
 ```powershell
+Set-ExecutionPolicy Bypass -Scope Process -Force
 $installer = [scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1))
 & $installer -Gui
 ```
@@ -344,7 +347,7 @@ MCP server telemetry.
 Dry-run command:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1))) -DryRun
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1))) -DryRun
 ```
 
 ## Security and known limitations
