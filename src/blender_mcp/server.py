@@ -14,6 +14,8 @@ from pathlib import Path
 import base64
 from urllib.parse import urlparse
 
+from .geometry_nodes_schema import write_snapshot_json
+
 # Import telemetry
 from .telemetry import record_startup, get_telemetry, EventType
 from .telemetry_decorator import telemetry_tool, rich_telemetry_tool
@@ -289,6 +291,108 @@ def get_object_info(ctx: Context, object_name: str, user_prompt: str = "") -> st
     except Exception as e:
         logger.error(f"Error getting object info from Blender: {str(e)}")
         return f"Error getting object info: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("list_geometry_node_trees")
+def list_geometry_node_trees(ctx: Context, user_prompt: str = "") -> str:
+    """List Geometry Node trees available in the current Blender file.
+
+    Returns each tree's revision, editability, graph size, and modifier/group users.
+
+    Parameters:
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command("list_geometry_node_trees")
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error listing Geometry Node trees: {str(e)}")
+        return f"Error listing Geometry Node trees: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("export_geometry_node_tree")
+def export_geometry_node_tree(
+    ctx: Context,
+    tree_name: str,
+    view: str = "semantic",
+    node_names: List[str] = None,
+    neighbor_depth: int = 0,
+    output_path: str = "",
+    user_prompt: str = "",
+) -> str:
+    """Export one Geometry Node tree as normalized graph JSON.
+
+    With no output_path, the JSON is returned directly for inspection or use with
+    the client's file-edit tool. When output_path is provided, the MCP server
+    atomically writes below BLENDER_MCP_WORKSPACE (or its current working
+    directory) and returns a compact summary. Blender never reads that path.
+
+    Parameters:
+    - tree_name: Exact Geometry Node group name
+    - view: semantic, layout, or all
+    - node_names: Optional node names for a targeted subgraph export
+    - neighbor_depth: Include connected nodes up to 0-5 hops from node_names
+    - output_path: Optional .json path constrained to the MCP workspace root
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "export_geometry_node_tree",
+            {
+                "tree_name": tree_name,
+                "view": view,
+                "node_names": node_names or [],
+                "neighbor_depth": neighbor_depth,
+            },
+        )
+        if not output_path:
+            return json.dumps(result, ensure_ascii=False, indent=2)
+
+        destination = write_snapshot_json(result, output_path)
+        return json.dumps(
+            {
+                "status": "written",
+                "path": str(destination),
+                "tree_name": result["tree"]["name"],
+                "view": result["view"],
+                "revision": result["revision"],
+                "stats": result["stats"],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    except Exception as e:
+        logger.error(f"Error exporting Geometry Node tree: {str(e)}")
+        return f"Error exporting Geometry Node tree: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("get_geometry_node_type_schema")
+def get_geometry_node_type_schema(
+    ctx: Context,
+    node_type: str,
+    user_prompt: str = "",
+) -> str:
+    """Inspect sockets and RNA properties for a node type in running Blender.
+
+    Parameters:
+    - node_type: Blender node bl_idname, for example GeometryNodeJoinGeometry
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "get_geometry_node_type_schema",
+            {"node_type": node_type},
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error inspecting Geometry Node type: {str(e)}")
+        return f"Error inspecting Geometry Node type: {str(e)}"
 
 @mcp.tool()
 def get_viewport_screenshot(ctx: Context, max_size: int = 1000, user_prompt: str = "") -> Image:

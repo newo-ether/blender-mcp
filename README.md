@@ -231,11 +231,21 @@ _Prerequisites_: Make sure you have [Visual Studio Code](https://code.visualstud
 
 ### Installing the Blender Addon
 
-1. Download the `addon.py` file from this repo
-1. Open Blender
-2. Go to Edit > Preferences > Add-ons
-3. Click "Install..." and select the `addon.py` file
-4. Enable the addon by checking the box next to "Interface: Blender MCP"
+For Blender 4.2 or newer, use the packaged Extension ZIP:
+
+1. Download `blender_mcp-1.6.0.zip` from the release artifacts.
+2. Open Blender and go to Edit > Preferences > Add-ons.
+3. Open the drop-down menu and choose **Install from Disk...**.
+4. Select the ZIP without extracting it, then enable **Blender MCP**.
+
+The legacy `addon.py` installation remains available for Blender 3.x: choose
+**Install...** in Preferences > Add-ons and select the Python file directly.
+
+Maintainers can reproduce the Extension package with:
+
+```bash
+python scripts/build_blender_extension.py --blender /path/to/blender
+```
 
 
 ## Usage
@@ -258,6 +268,8 @@ Once the config file has been set on Claude, and the addon is running on Blender
 #### Capabilities
 
 - Get scene and object information 
+- List and export Geometry Node trees as revisioned JSON (full graph or targeted subgraph)
+- Inspect node sockets and properties from the running Blender version
 - Create, delete and modify shapes
 - Apply or create materials for objects
 - Execute any Python code in Blender

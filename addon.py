@@ -23,12 +23,17 @@ from contextlib import redirect_stdout, suppress
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 2),
+    "version": (1, 6, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > BlenderMCP",
     "description": "Connect Blender to Claude via MCP",
     "category": "Interface",
 }
+
+# Blender Extensions are imported below ``bl_ext.<repository>.<extension>``.
+# ``__package__`` is therefore the stable identifier for extension preferences,
+# while legacy single-file installs need to fall back to ``__name__``.
+ADDON_MODULE_ID = __package__ or __name__
 
 RODIN_FREE_TRIAL_KEY = "vibecoding"
 
@@ -40,7 +45,7 @@ def get_blendermcp_addon_preferences(context=None):
     """Get add-on preferences object if available."""
     if context is None:
         context = bpy.context
-    addon = context.preferences.addons.get(__name__)
+    addon = context.preferences.addons.get(ADDON_MODULE_ID)
     return addon.preferences if addon else None
 
 # ── Persistent preference sync ──
@@ -61,14 +66,14 @@ _PREF_PROPERTY_NAMES = [
 def _make_scene_update(prop_name):
     """Factory: returns an update callback that syncs the scene value to AddonPreferences."""
     def update(self, context):
-        addon_prefs = context.preferences.addons.get(__name__)
+        addon_prefs = context.preferences.addons.get(ADDON_MODULE_ID)
         if addon_prefs and hasattr(addon_prefs.preferences, prop_name):
             setattr(addon_prefs.preferences, prop_name, getattr(self, f'blendermcp_{prop_name}'))
     return update
 
 def sync_prefs_to_scene():
     """Copy all persistent AddonPreferences values to the current scene."""
-    addon_prefs = bpy.context.preferences.addons.get(__name__)
+    addon_prefs = bpy.context.preferences.addons.get(ADDON_MODULE_ID)
     if not addon_prefs:
         return
     prefs = addon_prefs.preferences
@@ -84,7 +89,7 @@ def sync_prefs_to_scene():
 
 def _auto_connect_if_enabled():
     """Start MCP server if auto_connect is enabled and not already running."""
-    addon_prefs = bpy.context.preferences.addons.get(__name__)
+    addon_prefs = bpy.context.preferences.addons.get(ADDON_MODULE_ID)
     if not addon_prefs:
         return
     if not addon_prefs.preferences.auto_connect:
@@ -100,6 +105,406 @@ def _load_post_handler(_dummy):
     """On .blend file load: sync prefs → scene, auto-connect if enabled."""
     sync_prefs_to_scene()
     _auto_connect_if_enabled()
+
+
+# ---------------------------------------------------------------------------
+# Geometry Nodes read-only protocol (schema: blender-geometry-nodes/1)
+# ---------------------------------------------------------------------------
+
+GEOMETRY_NODES_SNAPSHOT_SCHEMA = "blender-geometry-nodes/1"
+GEOMETRY_NODES_VIEWS = {"semantic", "layout", "all"}
+
+_GN_NODE_PROPERTY_EXCLUDES = {
+    "rna_type", "name", "label", "location", "width", "width_hidden",
+    "height", "dimensions", "parent", "select", "show_options",
+    "show_preview", "show_texture", "use_custom_color", "color",
+    "inputs", "outputs", "internal_links", "type", "bl_idname",
+}
+
+
+def _gn_normalize_view(view):
+    normalized = str(view).strip().lower()
+    if normalized not in GEOMETRY_NODES_VIEWS:
+        choices = ", ".join(sorted(GEOMETRY_NODES_VIEWS))
+        raise ValueError(f"Unsupported Geometry Nodes view {view!r}; expected: {choices}")
+    return normalized
+
+
+def _gn_json_value(value):
+    """Convert Blender RNA values without leaking pointer-based repr strings."""
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if value != value:
+            return {"$type": "float", "value": "nan"}
+        if value == float("inf"):
+            return {"$type": "float", "value": "infinity"}
+        if value == float("-inf"):
+            return {"$type": "float", "value": "-infinity"}
+        return value
+    if isinstance(value, bpy.types.Node):
+        return {"$type": "NodeRef", "name": value.name}
+    if isinstance(value, bpy.types.NodeSocket):
+        return {
+            "$type": "SocketRef",
+            "node": value.node.name if value.node else None,
+            "identifier": getattr(value, "identifier", "") or value.name,
+        }
+    if isinstance(value, bpy.types.ID):
+        library = getattr(value, "library", None)
+        return {
+            "$type": "ID",
+            "id_type": value.bl_rna.identifier,
+            "name": value.name,
+            "library": library.filepath if library else None,
+        }
+    if isinstance(value, dict):
+        return {str(key): _gn_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        items = [_gn_json_value(item) for item in value]
+        return sorted(items, key=lambda item: json.dumps(item, sort_keys=True)) if isinstance(value, set) else items
+    if hasattr(value, "to_list"):
+        return _gn_json_value(value.to_list())
+    if hasattr(value, "__iter__") and not isinstance(value, bpy.types.bpy_struct):
+        return [_gn_json_value(item) for item in value]
+    raise TypeError(f"Unsupported RNA value type: {type(value).__name__}")
+
+
+def _gn_socket_id(socket, direction, index):
+    identifier = getattr(socket, "identifier", "") or socket.name
+    return f"{direction.lower()}:{index}:{identifier}"
+
+
+def _gn_socket_record(socket, direction, index, include_default=True):
+    record = {
+        "id": _gn_socket_id(socket, direction, index),
+        "index": index,
+        "name": socket.name,
+        "identifier": getattr(socket, "identifier", "") or "",
+        "direction": direction,
+        "bl_idname": socket.bl_idname,
+        "enabled": bool(socket.enabled),
+        "linked": bool(socket.is_linked),
+        "multi_input": bool(getattr(socket, "is_multi_input", False)),
+    }
+    if include_default and hasattr(socket, "default_value"):
+        try:
+            record["default"] = _gn_json_value(socket.default_value)
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return record
+
+
+def _gn_rna_properties(value, excludes=None, include_readonly=None):
+    excludes = set(excludes or ())
+    include_readonly = set(include_readonly or ())
+    result = {}
+    for prop in value.bl_rna.properties:
+        identifier = prop.identifier
+        if identifier in excludes or identifier == "rna_type":
+            continue
+        if getattr(prop, "type", None) == "COLLECTION":
+            continue
+        if getattr(prop, "is_hidden", False) or getattr(prop, "is_skip_save", False):
+            continue
+        if getattr(prop, "is_readonly", False) and identifier not in include_readonly:
+            continue
+        try:
+            result[identifier] = _gn_json_value(getattr(value, identifier))
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            continue
+    return result
+
+
+def _gn_node_record(node, view):
+    include_semantic = view in {"semantic", "all"}
+    include_layout = view in {"layout", "all"}
+    record = {
+        "id": node.name,
+        "name": node.name,
+        "label": node.label,
+        "bl_idname": node.bl_idname,
+        "properties": {},
+        "inputs": [],
+        "outputs": [],
+    }
+    if include_semantic:
+        record["properties"] = _gn_rna_properties(
+            node,
+            excludes=_GN_NODE_PROPERTY_EXCLUDES,
+            include_readonly={"paired_input", "paired_output"},
+        )
+        record["inputs"] = [
+            _gn_socket_record(socket, "INPUT", index)
+            for index, socket in enumerate(node.inputs)
+        ]
+        record["outputs"] = [
+            _gn_socket_record(socket, "OUTPUT", index)
+            for index, socket in enumerate(node.outputs)
+        ]
+    if include_layout:
+        record["layout"] = {
+            "location": [float(node.location.x), float(node.location.y)],
+            "width": float(node.width),
+            "height": float(node.height),
+            "parent": node.parent.name if node.parent else None,
+        }
+    return record
+
+
+def _gn_interface_record(item):
+    identifier = getattr(item, "identifier", "") or item.name
+    parent = getattr(item, "parent", None)
+    record = {
+        "item_type": item.item_type,
+        "identifier": identifier,
+        "name": item.name,
+        "parent": (getattr(parent, "identifier", "") or parent.name) if parent else None,
+    }
+    if item.item_type == "SOCKET":
+        record.update({
+            "in_out": item.in_out,
+            "socket_type": item.socket_type,
+            "description": getattr(item, "description", ""),
+            "hide_value": bool(getattr(item, "hide_value", False)),
+        })
+        for property_name in (
+            "default_value", "default_attribute_name", "attribute_domain",
+            "default_input", "structure_type", "force_non_field",
+        ):
+            if hasattr(item, property_name):
+                try:
+                    output_name = "default" if property_name == "default_value" else property_name
+                    record[output_name] = _gn_json_value(getattr(item, property_name))
+                except (AttributeError, TypeError, ValueError, RuntimeError):
+                    pass
+    else:
+        record["description"] = getattr(item, "description", "")
+        record["default_closed"] = bool(getattr(item, "default_closed", False))
+    return record
+
+
+def _gn_tree_interface(tree, include_semantic=True):
+    if not include_semantic:
+        return []
+    interface = getattr(tree, "interface", None)
+    if interface is None or not hasattr(interface, "items_tree"):
+        raise RuntimeError(
+            "This Blender version does not expose NodeTree.interface.items_tree; "
+            "Geometry Nodes snapshots require Blender 4.2 or newer"
+        )
+    return [_gn_interface_record(item) for item in interface.items_tree]
+
+
+def _gn_find_socket_index(node, socket, direction):
+    sockets = node.outputs if direction == "OUTPUT" else node.inputs
+    for index, candidate in enumerate(sockets):
+        if candidate == socket:
+            return index
+    raise RuntimeError(f"Socket {socket.name!r} is not owned by node {node.name!r}")
+
+
+def _gn_link_record(link):
+    from_index = _gn_find_socket_index(link.from_node, link.from_socket, "OUTPUT")
+    to_index = _gn_find_socket_index(link.to_node, link.to_socket, "INPUT")
+    record = {
+        "from_node": link.from_node.name,
+        "from_socket": _gn_socket_id(link.from_socket, "OUTPUT", from_index),
+        "to_node": link.to_node.name,
+        "to_socket": _gn_socket_id(link.to_socket, "INPUT", to_index),
+    }
+    sort_id = getattr(link, "multi_input_sort_id", None)
+    if sort_id is not None and sort_id >= 0:
+        record["multi_input_sort_id"] = int(sort_id)
+    return record
+
+
+def _gn_tree_users(tree):
+    users = []
+    for obj in sorted(bpy.data.objects, key=lambda item: item.name):
+        for modifier in obj.modifiers:
+            if modifier.type == "NODES" and modifier.node_group == tree:
+                users.append({
+                    "kind": "MODIFIER",
+                    "name": f"{obj.name}/{modifier.name}",
+                    "object": obj.name,
+                    "modifier": modifier.name,
+                })
+    for owner_tree in sorted(bpy.data.node_groups, key=lambda item: item.name):
+        for node in sorted(owner_tree.nodes, key=lambda item: item.name):
+            if getattr(node, "node_tree", None) == tree:
+                users.append({
+                    "kind": "GROUP_NODE",
+                    "name": f"{owner_tree.name}/{node.name}",
+                    "tree": owner_tree.name,
+                    "node": node.name,
+                })
+    return users
+
+
+def _gn_canonical_json(value):
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _gn_snapshot_revision(snapshot):
+    revision_input = {
+        "schema": snapshot["schema"],
+        "view": snapshot["view"],
+        "tree": snapshot["tree"],
+    }
+    digest = hashlib.sha256(_gn_canonical_json(revision_input).encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
+    view = _gn_normalize_view(view)
+    include_semantic = view in {"semantic", "all"}
+    library = getattr(tree, "library", None)
+    try:
+        neighbor_depth = int(neighbor_depth)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("neighbor_depth must be an integer from 0 to 5") from exc
+    if not 0 <= neighbor_depth <= 5:
+        raise ValueError("neighbor_depth must be an integer from 0 to 5")
+
+    all_nodes = {
+        node.name: _gn_node_record(node, view)
+        for node in sorted(tree.nodes, key=lambda item: item.name)
+    }
+    all_links = (
+        sorted(
+            (_gn_link_record(link) for link in tree.links),
+            key=lambda link: (
+                link["from_node"], link["from_socket"],
+                link["to_node"], link["to_socket"],
+                link.get("multi_input_sort_id", -1),
+            ),
+        )
+        if include_semantic else []
+    )
+    interface = _gn_tree_interface(tree, include_semantic)
+
+    requested_nodes = sorted(set(node_names or ()))
+    missing_nodes = [name for name in requested_nodes if name not in all_nodes]
+    if missing_nodes:
+        raise ValueError(f"Nodes not found in {tree.name!r}: {', '.join(missing_nodes)}")
+
+    if requested_nodes:
+        included_nodes = set(requested_nodes)
+        for _iteration in range(neighbor_depth):
+            expanded = set(included_nodes)
+            for link in all_links:
+                if link["from_node"] in included_nodes or link["to_node"] in included_nodes:
+                    expanded.add(link["from_node"])
+                    expanded.add(link["to_node"])
+            included_nodes = expanded
+        nodes = {
+            name: all_nodes[name]
+            for name in sorted(included_nodes)
+        }
+        links = [
+            link for link in all_links
+            if link["from_node"] in included_nodes and link["to_node"] in included_nodes
+        ]
+        scope = {
+            "kind": "subgraph",
+            "requested_nodes": requested_nodes,
+            "neighbor_depth": neighbor_depth,
+            "included_nodes": sorted(included_nodes),
+        }
+    else:
+        nodes = all_nodes
+        links = all_links
+        scope = {
+            "kind": "full",
+            "requested_nodes": [],
+            "neighbor_depth": 0,
+            "included_nodes": sorted(all_nodes),
+        }
+
+    full_tree = {
+        "name": tree.name,
+        "bl_idname": tree.bl_idname,
+        "editable": bool(getattr(tree, "is_editable", library is None)),
+        "library": library.filepath if library else None,
+        "interface": interface,
+        "nodes": all_nodes,
+        "links": all_links,
+    }
+    snapshot = {
+        "schema": GEOMETRY_NODES_SNAPSHOT_SCHEMA,
+        "blender_version": list(bpy.app.version[:3]),
+        "view": view,
+        "tree": {
+            **{key: full_tree[key] for key in ("name", "bl_idname", "editable", "library")},
+            "interface": interface,
+            "nodes": nodes,
+            "links": links,
+        },
+        "scope": scope,
+        "users": _gn_tree_users(tree),
+        "stats": {
+            "node_count": len(nodes),
+            "link_count": len(links),
+            "interface_item_count": len(interface),
+            "total_node_count": len(all_nodes),
+            "total_link_count": len(all_links),
+            "json_bytes": 0,
+        },
+    }
+    full_snapshot = {**snapshot, "tree": full_tree}
+    snapshot["revision"] = _gn_snapshot_revision(full_snapshot)
+    scope["content_revision"] = _gn_snapshot_revision(snapshot)
+    for _iteration in range(3):
+        size = len(json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode("utf-8"))
+        if snapshot["stats"]["json_bytes"] == size:
+            break
+        snapshot["stats"]["json_bytes"] = size
+    return snapshot
+
+
+def _gn_geometry_trees():
+    return sorted(
+        (tree for tree in bpy.data.node_groups if tree.bl_idname == "GeometryNodeTree"),
+        key=lambda item: item.name,
+    )
+
+
+def _gn_property_schema(owner, prop):
+    record = {
+        "identifier": prop.identifier,
+        "type": prop.type,
+        "readonly": bool(getattr(prop, "is_readonly", False)),
+        "array_length": int(getattr(prop, "array_length", 0)),
+    }
+    for source, destination in (
+        ("name", "name"), ("description", "description"),
+        ("hard_min", "min"), ("hard_max", "max"),
+    ):
+        if hasattr(prop, source):
+            try:
+                record[destination] = _gn_json_value(getattr(prop, source))
+            except (TypeError, ValueError):
+                pass
+    try:
+        record["value"] = _gn_json_value(getattr(owner, prop.identifier))
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        pass
+    if prop.type == "ENUM":
+        try:
+            record["enum_items"] = [
+                {"identifier": item.identifier, "name": item.name, "description": item.description}
+                for item in prop.enum_items
+            ]
+        except (AttributeError, TypeError, RuntimeError):
+            pass
+    return record
 
 class BlenderMCPServer:
     def __init__(self, host='localhost', port=9876):
@@ -334,6 +739,9 @@ class BlenderMCPServer:
         handlers = {
             "get_scene_info": self.get_scene_info,
             "get_object_info": self.get_object_info,
+            "list_geometry_node_trees": self.list_geometry_node_trees,
+            "export_geometry_node_tree": self.export_geometry_node_tree,
+            "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
             "get_viewport_screenshot": self.get_viewport_screenshot,
             "execute_code": self.execute_code,
             "get_telemetry_consent": self.get_telemetry_consent,
@@ -429,6 +837,75 @@ class BlenderMCPServer:
             print(f"Error in get_scene_info: {str(e)}")
             traceback.print_exc()
             return {"error": str(e)}
+
+    def list_geometry_node_trees(self):
+        """List Geometry Node groups with revisions and user summaries."""
+        trees = []
+        for tree in _gn_geometry_trees():
+            snapshot = _gn_export_tree(tree, "semantic")
+            trees.append({
+                "name": tree.name,
+                "editable": snapshot["tree"]["editable"],
+                "library": snapshot["tree"]["library"],
+                "revision": snapshot["revision"],
+                "node_count": snapshot["stats"]["node_count"],
+                "link_count": snapshot["stats"]["link_count"],
+                "interface_item_count": snapshot["stats"]["interface_item_count"],
+                "users": snapshot["users"],
+            })
+        return {
+            "schema": GEOMETRY_NODES_SNAPSHOT_SCHEMA,
+            "blender_version": list(bpy.app.version[:3]),
+            "tree_count": len(trees),
+            "trees": trees,
+        }
+
+    def export_geometry_node_tree(self, tree_name, view="semantic", node_names=None, neighbor_depth=0):
+        """Export one Geometry Node group as normalized graph JSON."""
+        tree = bpy.data.node_groups.get(tree_name)
+        if tree is None or tree.bl_idname != "GeometryNodeTree":
+            raise ValueError(f"Geometry Node tree not found: {tree_name}")
+        return _gn_export_tree(tree, view, node_names, neighbor_depth)
+
+    def get_geometry_node_type_schema(self, node_type):
+        """Inspect a node type from this running Blender build."""
+        if not isinstance(node_type, str) or not node_type.strip():
+            raise ValueError("node_type must be a non-empty Blender node bl_idname")
+
+        tree = bpy.data.node_groups.new(".BlenderMCP_TypeSchema", "GeometryNodeTree")
+        try:
+            try:
+                node = tree.nodes.new(type=node_type.strip())
+            except RuntimeError as exc:
+                raise ValueError(
+                    f"Unsupported Geometry Node type in Blender {bpy.app.version_string}: {node_type}"
+                ) from exc
+
+            properties = []
+            for prop in node.bl_rna.properties:
+                if prop.identifier in _GN_NODE_PROPERTY_EXCLUDES or prop.identifier == "rna_type":
+                    continue
+                if prop.type == "COLLECTION" or getattr(prop, "is_hidden", False):
+                    continue
+                properties.append(_gn_property_schema(node, prop))
+
+            return {
+                "schema": GEOMETRY_NODES_SNAPSHOT_SCHEMA,
+                "blender_version": list(bpy.app.version[:3]),
+                "node_type": node.bl_idname,
+                "label": node.bl_label,
+                "properties": properties,
+                "inputs": [
+                    _gn_socket_record(socket, "INPUT", index)
+                    for index, socket in enumerate(node.inputs)
+                ],
+                "outputs": [
+                    _gn_socket_record(socket, "OUTPUT", index)
+                    for index, socket in enumerate(node.outputs)
+                ],
+            }
+        finally:
+            bpy.data.node_groups.remove(tree)
 
     @staticmethod
     def _get_aabb(obj):
@@ -1241,7 +1718,7 @@ class BlenderMCPServer:
         """Get the current telemetry consent status"""
         try:
             # Get addon preferences - use the module name
-            addon_prefs = bpy.context.preferences.addons.get(__name__)
+            addon_prefs = bpy.context.preferences.addons.get(ADDON_MODULE_ID)
             if addon_prefs:
                 consent = addon_prefs.preferences.telemetry_consent
             else:
@@ -2466,7 +2943,7 @@ class BlenderMCPServer:
 
 # ── Blender Addon Preferences (persistent across sessions) ──
 class BLENDERMCP_AddonPreferences(bpy.types.AddonPreferences):
-    bl_idname = __name__
+    bl_idname = ADDON_MODULE_ID
 
     # ── General ──
     telemetry_consent: BoolProperty(
@@ -2800,7 +3277,7 @@ def register():
     bpy.app.timers.register(_startup_sync, first_interval=0.5)
 
     print("BlenderMCP addon registered (auto-connect: " +
-          ("on" if bpy.context.preferences.addons[__name__].preferences.auto_connect else "off") + ")")
+          ("on" if bpy.context.preferences.addons[ADDON_MODULE_ID].preferences.auto_connect else "off") + ")")
 
 def unregister():
     # Remove load_post handler

@@ -1,0 +1,25 @@
+schema_version = "1.0.0"
+
+id = "blender_mcp"
+version = "1.6.0"
+name = "Blender MCP"
+tagline = "Connect Blender to Model Context Protocol clients"
+maintainer = "BlenderMCP Contributors"
+type = "add-on"
+
+website = "https://github.com/ahujasid/blender-mcp"
+tags = ["User Interface"]
+
+blender_version_min = "4.2.0"
+license = ["SPDX:MIT"]
+copyright = ["2025 Siddharth Ahuja"]
+
+[permissions]
+network = "Connect to MCP clients and optional asset services"
+files = "Import and export user-selected assets and data"
+
+[build]
+paths = [
+  "__init__.py",
+  "LICENSE",
+]
