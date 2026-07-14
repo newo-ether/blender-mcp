@@ -471,6 +471,12 @@ Run the Blender preference-preservation installer test:
   -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
 ```
 
+Run the MCP client-registration installer test:
+
+```powershell
+.\tests\test_installer_client_registration.ps1
+```
+
 Build the Blender Extension:
 
 ```powershell

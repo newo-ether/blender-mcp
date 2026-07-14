@@ -397,6 +397,12 @@ py -3 -m venv .venv
   -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
 ```
 
+运行 MCP 客户端注册安装器测试：
+
+```powershell
+.\tests\test_installer_client_registration.ps1
+```
+
 构建 Blender 扩展：
 
 ```powershell

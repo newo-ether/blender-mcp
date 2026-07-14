@@ -216,6 +216,39 @@ function Invoke-CheckedCommand {
     }
 }
 
+function Invoke-CapturedCommand {
+    param(
+        [string]$FilePath,
+        [string[]]$ArgumentList,
+        [switch]$IncludeErrorOutput
+    )
+
+    # Windows PowerShell 5.1 turns native stderr into error records. With the
+    # installer's Stop preference, an expected non-zero probe would otherwise
+    # terminate before the caller can inspect LASTEXITCODE.
+    $capturedOutput = @()
+    $exitCode = $null
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        if ($IncludeErrorOutput) {
+            $capturedOutput = @(& $FilePath @ArgumentList 2>&1)
+        }
+        else {
+            $capturedOutput = @(& $FilePath @ArgumentList 2>$null)
+        }
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    return [PSCustomObject]@{
+        ExitCode = $exitCode
+        Output = @($capturedOutput)
+    }
+}
+
 function Get-GitHubRelease {
     param(
         [string]$Repo,
@@ -1015,10 +1048,12 @@ function Register-CodexMcp {
     )
 
     $existing = $null
-    $existingJson = & $CodexExecutable mcp get blender_mcp --json 2>$null
-    if ($LASTEXITCODE -eq 0 -and $existingJson) {
+    $existingProbe = Invoke-CapturedCommand -FilePath $CodexExecutable -ArgumentList @(
+        "mcp", "get", "blender_mcp", "--json"
+    )
+    if ($existingProbe.ExitCode -eq 0 -and $existingProbe.Output.Count -gt 0) {
         try {
-            $existing = $existingJson | ConvertFrom-Json
+            $existing = ($existingProbe.Output -join "`n") | ConvertFrom-Json
         }
         catch {
             Write-WarningLine "Codex returned an unreadable existing blender_mcp configuration."
@@ -1093,8 +1128,10 @@ function Register-ClaudeCodeMcp {
         [bool]$PreserveExisting
     )
 
-    & $ClaudeExecutable mcp get blender_mcp *> $null
-    $wasExisting = $LASTEXITCODE -eq 0
+    $existingProbe = Invoke-CapturedCommand -FilePath $ClaudeExecutable -ArgumentList @(
+        "mcp", "get", "blender_mcp"
+    )
+    $wasExisting = $existingProbe.ExitCode -eq 0
     $removedUserEntry = $false
     if ($wasExisting -and $PreserveExisting) {
         Write-Ok "Claude Code already has a blender_mcp entry; it was preserved."
@@ -1107,16 +1144,17 @@ function Register-ClaudeCodeMcp {
             Write-Info "Would remove the previous Claude Code user-scope blender_mcp entry."
         }
         else {
-            $removeOutput = & $ClaudeExecutable mcp remove blender_mcp --scope user 2>&1
-            $removeExitCode = $LASTEXITCODE
-            if ($removeExitCode -eq 0) {
+            $removeProbe = Invoke-CapturedCommand -FilePath $ClaudeExecutable -ArgumentList @(
+                "mcp", "remove", "blender_mcp", "--scope", "user"
+            ) -IncludeErrorOutput
+            if ($removeProbe.ExitCode -eq 0) {
                 $removedUserEntry = $true
                 Write-Info "Removed the previous Claude Code user-scope blender_mcp entry."
             }
             else {
                 Write-WarningLine "Claude Code found blender_mcp outside user scope; that entry was not modified."
-                if ($removeOutput) {
-                    Write-Info ([string]($removeOutput | Select-Object -Last 1))
+                if ($removeProbe.Output.Count -gt 0) {
+                    Write-Info ([string]($removeProbe.Output | Select-Object -Last 1))
                 }
             }
         }
