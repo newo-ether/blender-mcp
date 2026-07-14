@@ -120,6 +120,46 @@ GEOMETRY_NODES_PATCH_SCHEMA = "blender-geometry-nodes-patch/1"
 GEOMETRY_NODES_PATCH_VALIDATION_SCHEMA = "blender-geometry-nodes-patch-validation/1"
 GEOMETRY_NODES_VIEWS = {"semantic", "layout", "all"}
 
+BLENDER_VERSION_CONTEXT_SCHEMA = "blender-version-context/1"
+
+
+def _blender_app_text(attribute):
+    """Read bpy.app build strings consistently across Blender releases."""
+    value = getattr(bpy.app, attribute, None)
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    value = str(value).strip()
+    return value or None
+
+
+def _blender_version_context():
+    """Return exact connected-build metadata without reading scene data."""
+    version = [int(part) for part in bpy.app.version[:3]]
+    version_string = str(bpy.app.version_string)
+    version_cycle = str(getattr(bpy.app, "version_cycle", "unknown")).lower()
+    commit_timestamp = getattr(bpy.app, "build_commit_timestamp", None)
+    if not isinstance(commit_timestamp, int):
+        commit_timestamp = None
+    return {
+        "schema": BLENDER_VERSION_CONTEXT_SCHEMA,
+        "version": version,
+        "version_string": version_string,
+        "version_cycle": version_cycle,
+        "is_prerelease": version_cycle not in {"release", "stable", "final"},
+        "is_lts": "LTS" in version_string.upper(),
+        "build": {
+            "branch": _blender_app_text("build_branch"),
+            "hash": _blender_app_text("build_hash"),
+            "date": _blender_app_text("build_commit_date") or _blender_app_text("build_date"),
+            "time": _blender_app_text("build_commit_time") or _blender_app_text("build_time"),
+            "platform": _blender_app_text("build_platform"),
+            "type": _blender_app_text("build_type"),
+            "commit_timestamp": commit_timestamp,
+        },
+    }
+
 _GN_NODE_PROPERTY_EXCLUDES = {
     "rna_type", "name", "label", "location", "width", "width_hidden",
     "height", "dimensions", "parent", "select", "show_options",
@@ -1889,6 +1929,7 @@ class BlenderMCPServer:
         handlers = {
             "get_scene_info": self.get_scene_info,
             "get_object_info": self.get_object_info,
+            "get_blender_version_context": self.get_blender_version_context,
             "list_geometry_node_trees": self.list_geometry_node_trees,
             "export_geometry_node_tree": self.export_geometry_node_tree,
             "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
@@ -1990,6 +2031,10 @@ class BlenderMCPServer:
             print(f"Error in get_scene_info: {str(e)}")
             traceback.print_exc()
             return {"error": str(e)}
+
+    def get_blender_version_context(self):
+        """Return exact version/build metadata for documentation resolution."""
+        return _blender_version_context()
 
     def list_geometry_node_trees(self):
         """List Geometry Node groups with revisions and user summaries."""

@@ -14,6 +14,12 @@ from pathlib import Path
 import base64
 from urllib.parse import urlparse
 
+from .blender_docs import (
+    BlenderDocumentationContextError,
+    resolve_documentation_context,
+    version_requires_blender,
+)
+
 from .geometry_nodes_schema import (
     GeometryNodesSchemaError,
     PATCH_APPLICATION_SCHEMA,
@@ -299,6 +305,47 @@ def get_object_info(ctx: Context, object_name: str, user_prompt: str = "") -> st
     except Exception as e:
         logger.error(f"Error getting object info from Blender: {str(e)}")
         return f"Error getting object info: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("get_blender_documentation_context")
+def get_blender_documentation_context(
+    ctx: Context,
+    version: str = "auto",
+    language: str = "en",
+    sources: List[str] = None,
+    user_prompt: str = "",
+) -> str:
+    """Resolve version-correct official Blender documentation sources.
+
+    This tool performs no documentation network request. With version="auto"
+    it reads exact build metadata from the connected Blender instance. Explicit
+    major.minor, current, and dev requests work without a Blender connection.
+
+    Parameters:
+    - version: auto, current, dev, or major.minor[.patch]
+    - language: Blender Manual language code, for example en or zh-hans
+    - sources: manual, python_api, and/or release_notes
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        detected = None
+        if version_requires_blender(version):
+            blender = get_blender_connection()
+            detected = blender.send_command("get_blender_version_context")
+        result = resolve_documentation_context(
+            version=version,
+            language=language,
+            sources=sources,
+            detected_blender=detected,
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except BlenderDocumentationContextError as e:
+        logger.error(f"Invalid Blender documentation context request: {str(e)}")
+        return f"Error resolving Blender documentation context: {str(e)}"
+    except Exception as e:
+        logger.error(f"Error resolving Blender documentation context: {str(e)}")
+        return f"Error resolving Blender documentation context: {str(e)}"
 
 
 @mcp.tool()
