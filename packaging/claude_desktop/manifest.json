@@ -3,7 +3,7 @@
   "manifest_version": "0.4",
   "name": "blender_mcp",
   "display_name": "Blender MCP",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "description": "Control Blender, edit Geometry, Shader, and Compositor nodes, and query version-aware documentation.",
   "long_description": "Launches the Blender MCP server installed by the PowerShell bootstrap. Open Blender before using scene or live runtime tools; official documentation searches can also use an explicit Blender version.",
   "author": {
