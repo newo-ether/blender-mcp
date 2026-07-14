@@ -76,19 +76,6 @@ def material_settings(material):
     }
 
 
-def create_compositor_tree(scene):
-    if hasattr(scene, "compositing_node_group"):
-        tree = bpy.data.node_groups.new(PREFIX + "CompositorTree", "CompositorNodeTree")
-        tree.interface.new_socket(
-            name="Image", in_out="OUTPUT", socket_type="NodeSocketColor"
-        )
-        tree.nodes.new("NodeGroupOutput")
-        scene.compositing_node_group = tree
-        return tree
-    scene.use_nodes = True
-    return scene.node_tree
-
-
 def run_test():
     cleanup()
     active_scene = bpy.context.scene
@@ -339,33 +326,6 @@ def run_test():
             f"working Material leaked at {failure_stage}",
         )
 
-    compositor_scene = bpy.data.scenes.new(PREFIX + "CompositorScene")
-    compositor_tree = create_compositor_tree(compositor_scene)
-    compositor_ref = {
-        "tree_type": "CompositorNodeTree",
-        "owner": {"kind": "SCENE", "name": compositor_scene.name},
-    }
-    compositor_before = server.export_node_tree(compositor_ref, "all")
-    compositor_patch = {
-        "schema": "blender-node-tree-patch/1",
-        "tree_ref": compositor_ref,
-        "base_revision": compositor_before["revision"],
-        "capabilities": ["graph"],
-        "operations": [{"op": "add_node", "id": "frame", "node_type": "NodeFrame"}],
-    }
-    compositor_result = server.apply_node_tree_patch(compositor_patch, keep_backup=True)
-    assert_true(compositor_result["status"] == "rejected", "N3 applied Compositor patch")
-    assert_true(
-        "apply_not_supported" in {
-            item["code"] for item in compositor_result["diagnostics"]
-        },
-        "Compositor N3 rejection reason missing",
-    )
-    assert_true(
-        server.export_node_tree(compositor_ref, "all") == compositor_before,
-        "rejected Compositor patch changed live graph",
-    )
-
     result = {
         "version": list(bpy.app.version[:3]),
         "material_applied": material_result["applied"],
@@ -373,7 +333,6 @@ def run_test():
         "light_shared_users": len(light_objects),
         "shader_group_applied": group_result["applied"],
         "rollback_stages": rollback_stages,
-        "compositor_rejected_in_n3": not compositor_result["applied"],
         "active_scene_unchanged": bpy.context.scene == active_scene,
     }
     assert_true(result["active_scene_unchanged"], "active Scene changed")

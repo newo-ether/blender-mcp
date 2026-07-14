@@ -36,6 +36,16 @@ def sample_patch() -> dict:
                 "layout": {"location": [-400.0, 100.0]},
             },
             {
+                "op": "set_node_property",
+                "node": "Render Layers",
+                "property": "layer",
+                "value": {
+                    "$type": "ViewLayer",
+                    "scene": "Shot 010",
+                    "name": "Foreground",
+                },
+            },
+            {
                 "op": "add_node",
                 "id": "frame",
                 "node_type": "NodeFrame",

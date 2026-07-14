@@ -318,7 +318,10 @@ def run_test():
         "File Output safety diagnostic missing",
     )
     assert_true(not cross_domain_validation["valid"], "cross-domain node validated")
-    assert_true("operation_rejected" in diagnostic_codes(cross_domain_validation), "domain error missing")
+    assert_true(
+        "unsupported_node_type" in diagnostic_codes(cross_domain_validation),
+        "version/domain node-type diagnostic missing",
+    )
     assert_true(before_files == after_files, "validation created an external file")
 
     result = {

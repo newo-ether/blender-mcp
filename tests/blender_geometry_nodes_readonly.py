@@ -350,6 +350,26 @@ def run_test():
         "Invalid socket diagnostic path is unstable",
     )
 
+    wrong_domain_result = server.validate_geometry_node_patch({
+        "schema": "blender-geometry-nodes-patch/1",
+        "tree_name": tree.name,
+        "base_revision": first["revision"],
+        "operations": [{
+            "op": "add_node",
+            "id": "wrong_domain",
+            "node_type": "ShaderNodeValue",
+        }],
+    })
+    wrong_domain_diagnostic = next(
+        item for item in wrong_domain_result["diagnostics"]
+        if item["code"] == "unsupported_node_type"
+    )
+    assert_true(
+        "GeometryNodeTree/NODE_GROUP" in wrong_domain_diagnostic["message"]
+        and "Blender" in wrong_domain_diagnostic["message"],
+        "Geometry node-type diagnostic lacks tree/version context",
+    )
+
     second_mesh = bpy.data.meshes.new(PREFIX + "SharedMesh")
     second_object = bpy.data.objects.new(PREFIX + "SharedObject", second_mesh)
     bpy.context.scene.collection.objects.link(second_object)

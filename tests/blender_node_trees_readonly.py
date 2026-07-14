@@ -146,7 +146,9 @@ def run_test():
     for expected in expected_refs:
         key = json.dumps(expected, sort_keys=True)
         assert_true(key in listed_refs, f"tree missing from generic list: {expected}")
-        expected_apply = expected["tree_type"] == "ShaderNodeTree"
+        expected_apply = expected["tree_type"] in {
+            "ShaderNodeTree", "CompositorNodeTree",
+        }
         assert_true(
             listed_refs[key]["capabilities"]["apply"] == expected_apply,
             f"unexpected apply capability for {expected}",

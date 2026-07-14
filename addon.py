@@ -822,11 +822,11 @@ def _node_target_capabilities(target):
     elif is_override:
         mutation_reason = "library_override_apply_not_supported"
         apply_supported = False
-    elif target["domain"] == "shader":
+    elif target["domain"] in {"shader", "compositor"}:
         mutation_reason = "available"
         apply_supported = True
     else:
-        mutation_reason = "compositor_apply_not_available_in_phase_n3"
+        mutation_reason = "geometry_uses_v1_apply_tool"
         apply_supported = False
     return {
         "read": True,
@@ -1543,6 +1543,16 @@ def _gn_decode_patch_value(value, node_refs=None):
             if resolved is None:
                 raise ValueError(f"Blender ID not found: {value.get('id_type')}/{value.get('name')}")
             return resolved
+        if value_type == "ViewLayer":
+            scene_name = value.get("scene")
+            layer_name = value.get("name")
+            scene = bpy.data.scenes.get(scene_name) if isinstance(scene_name, str) else None
+            layer = scene.view_layers.get(layer_name) if scene and isinstance(layer_name, str) else None
+            if layer is None:
+                raise ValueError(
+                    f"View Layer not found: {scene_name}/{layer_name}"
+                )
+            return layer.name
         if value_type == "NodeRef" and node_refs is not None:
             reference = node_refs.get(value.get("name"))
             if reference and not reference["removed"]:
@@ -1618,17 +1628,31 @@ def _gn_validate_value(
     elif prop.type == "STRING":
         valid = isinstance(value, str)
     elif prop.type == "ENUM":
-        try:
-            identifiers = {item.identifier for item in prop.enum_items}
-            valid = isinstance(value, str) and value in identifiers
-            if not valid:
+        enum_value = value
+        is_view_layer_reference = (
+            isinstance(value, dict) and value.get("$type") == "ViewLayer"
+        )
+        if is_view_layer_reference:
+            try:
+                enum_value = _gn_decode_patch_value(value, node_refs)
+            except ValueError as exc:
                 diagnostics.append(_gn_patch_diagnostic(
-                    "error", "invalid_enum_value", path,
-                    f"Expected one of: {', '.join(sorted(identifiers))}",
+                    "error", "invalid_view_layer_reference", path, str(exc),
                 ))
                 return False
-        except (AttributeError, RuntimeError, TypeError):
-            valid = isinstance(value, str)
+            valid = True
+        else:
+            try:
+                identifiers = {item.identifier for item in prop.enum_items}
+                valid = isinstance(enum_value, str) and enum_value in identifiers
+                if not valid:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "invalid_enum_value", path,
+                        f"Expected one of: {', '.join(sorted(identifiers))}",
+                    ))
+                    return False
+            except (AttributeError, RuntimeError, TypeError):
+                valid = isinstance(enum_value, str)
     elif prop.type == "POINTER":
         try:
             _gn_decode_patch_value(value, node_refs)
@@ -1809,9 +1833,15 @@ def _gn_validate_patch_runtime(tree, patch):
                     try:
                         node = temp_tree.nodes.new(operation["node_type"])
                     except RuntimeError as exc:
+                        version = ".".join(str(item) for item in bpy.app.version[:3])
                         diagnostics.append(_gn_patch_diagnostic(
                             "error", "unsupported_node_type", f"{path}/node_type", str(exc),
                         ))
+                        diagnostics[-1]["message"] = (
+                            f"{operation['node_type']} is unavailable for "
+                            f"{tree.bl_idname}/NODE_GROUP in Blender "
+                            f"{version}: {exc}"
+                        )
                         node = None
                     if node is not None:
                         projected_name = operation.get("name") or node.name
@@ -2747,9 +2777,26 @@ def _node_execute_patch_operations(target, patch):
                     diff["dynamic_structures_changed"] += 1
                     summary = f"Set Curve Mapping on {operation['node']}"
         except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+            unavailable_node_type = (
+                op == "add_node"
+                and isinstance(exc, RuntimeError)
+                and operation.get("id") not in node_refs
+            )
+            if unavailable_node_type:
+                version = ".".join(str(item) for item in bpy.app.version[:3])
+                code = "unsupported_node_type"
+                diagnostic_path = f"{path}/node_type"
+                message = (
+                    f"{operation['node_type']} is unavailable for "
+                    f"{target['tree_type']}/{target['owner_kind']} in Blender "
+                    f"{version}: {exc}"
+                )
+            else:
+                code = "operation_rejected"
+                diagnostic_path = path
+                message = f"{type(exc).__name__}: {exc}"
             diagnostics.append(_gn_patch_diagnostic(
-                "error", "operation_rejected", path,
-                f"{type(exc).__name__}: {exc}",
+                "error", code, diagnostic_path, message,
             ))
         errors_after = sum(item["severity"] == "error" for item in diagnostics)
         plan.append({
@@ -2870,9 +2917,252 @@ def _node_direct_user_pointers(value):
         return set()
 
 
+def _node_apply_scene_tree_transaction(
+    target, patch, keep_backup=True, _commit_guard=None,
+):
+    """Atomically switch one modern Scene to a patched compositor tree copy."""
+    validation = _node_validate_patch_runtime(target, patch)
+    if not validation["valid"]:
+        return {
+            "schema": "blender-node-tree-patch-application/1",
+            "status": "rejected",
+            "applied": False,
+            "mutated": False,
+            "tree_ref": target["tree_ref"],
+            "diagnostics": validation["diagnostics"],
+            "plan": validation["plan"],
+        }
+    capabilities = _node_target_capabilities(target)
+    if not capabilities["apply"]:
+        return {
+            "schema": "blender-node-tree-patch-application/1",
+            "status": "rejected",
+            "applied": False,
+            "mutated": False,
+            "tree_ref": target["tree_ref"],
+            "diagnostics": [_gn_patch_diagnostic(
+                "error", "apply_not_supported", "/tree_ref",
+                capabilities["mutation_reason"],
+            )],
+            "plan": validation["plan"],
+        }
+
+    scene = target["owner_id"]
+    original = target["tree"]
+    original_name = original.name
+    original_fake_user = bool(original.use_fake_user)
+    original_snapshot = _node_export_target(target, "all")
+    original_user_pointers = _node_direct_user_pointers(original)
+    scene_pointer = scene.as_pointer()
+    other_user_pointers = original_user_pointers - {scene_pointer}
+    working = None
+    pointer_switched = False
+    committed = False
+    execution = None
+
+    def guard(stage):
+        if _commit_guard is not None:
+            _commit_guard(stage, original, working)
+
+    try:
+        working = original.copy()
+        suffix = patch["base_revision"].split(":", 1)[-1][:8]
+        working.name = f"{original_name}.MCP Applied {suffix}"
+        working_target = dict(target)
+        working_target["tree"] = working
+        execution = _node_execute_patch_operations(working_target, patch)
+        execution_errors = [
+            item for item in execution["diagnostics"] if item["severity"] == "error"
+        ]
+        if execution_errors:
+            raise RuntimeError(
+                "Validated operations failed during commit: "
+                + "; ".join(item["message"] for item in execution_errors)
+            )
+        candidate_snapshot = _node_export_tree(
+            working,
+            "all",
+            schema=NODE_TREE_SNAPSHOT_SCHEMA,
+            tree_ref=target["tree_ref"],
+            owner=target["owner"],
+            capabilities=capabilities,
+        )
+        if candidate_snapshot["revision"] != validation.get("candidate_revision"):
+            raise RuntimeError(
+                "Commit candidate revision differs from the validated dry-run"
+            )
+        guard("after_working_verified")
+
+        if scene.compositing_node_group != original:
+            raise RuntimeError("The Scene compositor pointer changed before commit")
+        guard("before_scene_pointer_swap")
+        scene.compositing_node_group = working
+        pointer_switched = True
+        if scene.compositing_node_group != working:
+            raise RuntimeError("The Scene compositor pointer did not switch")
+        if not other_user_pointers.issubset(_node_direct_user_pointers(original)):
+            raise RuntimeError("Switching the selected Scene changed other tree users")
+        guard("after_scene_pointer_swapped")
+
+        resolved = _node_resolve_tree_ref(target["tree_ref"])
+        if resolved["owner_id"] != scene or resolved["tree"] != working:
+            raise RuntimeError("The canonical tree_ref did not resolve to the working tree")
+        guard("after_working_named")
+        committed_snapshot = _node_export_target(resolved, "all")
+        if committed_snapshot["revision"] != candidate_snapshot["revision"]:
+            raise RuntimeError("Post-commit graph differs from the validated candidate")
+        guard("after_post_commit_verified")
+
+        remaining_users = _node_direct_user_pointers(original)
+        if keep_backup:
+            if not remaining_users:
+                original.use_fake_user = True
+                retained_reason = "requested_fake_user"
+            else:
+                retained_reason = "existing_shared_users"
+            backup = {
+                "kept": True,
+                "requested": True,
+                "owner_kind": "NODE_GROUP",
+                "name": original.name,
+                "tree_revision": original_snapshot["revision"],
+                "retained_reason": retained_reason,
+            }
+        elif remaining_users:
+            backup = {
+                "kept": True,
+                "requested": False,
+                "owner_kind": "NODE_GROUP",
+                "name": original.name,
+                "tree_revision": original_snapshot["revision"],
+                "retained_reason": "existing_shared_users",
+            }
+        else:
+            bpy.data.node_groups.remove(original, do_unlink=True)
+            working.name = original_name
+            backup = {
+                "kept": False,
+                "requested": False,
+                "owner_kind": "NODE_GROUP",
+                "name": None,
+                "tree_revision": original_snapshot["revision"],
+                "retained_reason": None,
+            }
+            resolved = _node_resolve_tree_ref(target["tree_ref"])
+            committed_snapshot = _node_export_target(resolved, "all")
+        committed = True
+        return {
+            "schema": "blender-node-tree-patch-application/1",
+            "status": "applied",
+            "applied": True,
+            "mutated": True,
+            "tree_ref": target["tree_ref"],
+            "previous_owner_name": scene.name,
+            "base_revision": validation["current_revision"],
+            "new_revision": committed_snapshot["revision"],
+            "users_reassigned": [{
+                "kind": "SCENE_COMPOSITOR_POINTER",
+                "scene": scene.name,
+                "from_tree": original_name,
+                "to_tree": working.name,
+            }],
+            "backup": backup,
+            "created_nodes": execution["created_nodes"],
+            "created_interface_sockets": execution["created_interface"],
+            "operations": execution["plan"],
+            "semantic_diff": validation["semantic_diff"],
+            "actual_diff": _gn_actual_snapshot_diff(
+                original_snapshot, committed_snapshot
+            ),
+            "warnings": [
+                item for item in validation["diagnostics"]
+                if item["severity"] == "warning"
+            ],
+            "verification": {
+                "node_count": committed_snapshot["stats"]["node_count"],
+                "link_count": committed_snapshot["stats"]["link_count"],
+                "interface_item_count": committed_snapshot["stats"]["interface_item_count"],
+                "transaction_adapter": target["adapter"],
+                "other_users_preserved": len(other_user_pointers),
+            },
+        }
+    except Exception as exc:
+        rollback_errors = []
+        if pointer_switched:
+            try:
+                scene.compositing_node_group = original
+            except (AttributeError, RuntimeError) as rollback_exc:
+                rollback_errors.append(
+                    f"restore Scene compositor pointer: "
+                    f"{type(rollback_exc).__name__}: {rollback_exc}"
+                )
+        try:
+            original.use_fake_user = original_fake_user
+        except (AttributeError, RuntimeError) as rollback_exc:
+            rollback_errors.append(
+                f"restore fake-user state: {type(rollback_exc).__name__}: {rollback_exc}"
+            )
+        if not original_user_pointers.issubset(_node_direct_user_pointers(original)):
+            rollback_errors.append("not every original compositor-tree user was restored")
+        if working is not None and _node_direct_user_pointers(working):
+            rollback_errors.append("the working compositor tree still has direct users")
+        if working is not None:
+            try:
+                if working.name in bpy.data.node_groups:
+                    bpy.data.node_groups.remove(working, do_unlink=True)
+                working = None
+            except (AttributeError, RuntimeError) as rollback_exc:
+                rollback_errors.append(
+                    f"remove working compositor tree: "
+                    f"{type(rollback_exc).__name__}: {rollback_exc}"
+                )
+        try:
+            restored = _node_resolve_tree_ref(target["tree_ref"])
+            if restored["owner_id"] != scene or restored["tree"] != original:
+                rollback_errors.append("canonical tree_ref did not resolve to original Scene tree")
+            elif _node_export_target(restored, "all") != original_snapshot:
+                rollback_errors.append("restored graph or owner metadata differs from original")
+        except Exception as rollback_exc:
+            rollback_errors.append(
+                f"verify rollback: {type(rollback_exc).__name__}: {rollback_exc}"
+            )
+        diagnostics = [_gn_patch_diagnostic(
+            "error", "transaction_rolled_back", "",
+            f"{type(exc).__name__}: {exc}",
+        )]
+        diagnostics.extend(
+            _gn_patch_diagnostic("error", "rollback_incomplete", "", message)
+            for message in rollback_errors
+        )
+        return {
+            "schema": "blender-node-tree-patch-application/1",
+            "status": "rollback_failed" if rollback_errors else "rolled_back",
+            "applied": False,
+            "mutated": bool(rollback_errors),
+            "tree_ref": target["tree_ref"],
+            "base_revision": patch.get("base_revision"),
+            "current_revision": _node_export_target(
+                _node_resolve_tree_ref(target["tree_ref"]), "all"
+            )["revision"],
+            "diagnostics": diagnostics,
+            "plan": validation["plan"],
+        }
+    finally:
+        if not committed and working is not None:
+            try:
+                if working.name in bpy.data.node_groups:
+                    bpy.data.node_groups.remove(working, do_unlink=True)
+            except (AttributeError, RuntimeError):
+                pass
+
+
 def _node_apply_patch_transaction(
     target, patch, keep_backup=True, _commit_guard=None,
 ):
+    if target["adapter"] == "scene_compositing_node_group":
+        return _node_apply_scene_tree_transaction(
+            target, patch, keep_backup, _commit_guard,
+        )
     validation = _node_validate_patch_runtime(target, patch)
     if not validation["valid"]:
         return {

@@ -55,6 +55,16 @@
         },
         {
           "type": "object",
+          "properties": {
+            "$type": {"const": "ViewLayer"},
+            "scene": {"type": "string", "minLength": 1},
+            "name": {"type": "string", "minLength": 1}
+          },
+          "required": ["$type", "scene", "name"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
           "required": ["$type", "name"],
           "properties": {
             "$type": {"const": "NodeRef"},

@@ -152,6 +152,16 @@ def _validate_finite_json_value(
                     "invalid_string", f"{path}/library", "library must be a string or null"
                 ))
             return True
+        if value_type == "ViewLayer":
+            allowed = {"$type", "scene", "name"}
+            for field in sorted(set(value) - allowed):
+                diagnostics.append(diagnostic(
+                    "unknown_field", f"{path}/{_pointer_token(str(field))}",
+                    f"Unknown ViewLayer reference field: {field}",
+                ))
+            _require_string(value.get("scene"), f"{path}/scene", diagnostics)
+            _require_string(value.get("name"), f"{path}/name", diagnostics)
+            return True
         if value_type == "NodeRef":
             allowed = {"$type", "name"}
             for field in sorted(set(value) - allowed):
@@ -163,7 +173,7 @@ def _validate_finite_json_value(
             return False
         diagnostics.append(diagnostic(
             "unsupported_object_value", path,
-            "Object values must be typed as ID or NodeRef",
+            "Object values must be typed as ID, ViewLayer, or NodeRef",
         ))
         return False
     diagnostics.append(diagnostic(
