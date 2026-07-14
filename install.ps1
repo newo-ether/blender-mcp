@@ -6,7 +6,7 @@
 
 .DESCRIPTION
     When executed directly from GitHub Raw, this script downloads the latest
-    checksummed release assets, installs the Python MCP server into a stable
+    checksummed release assets, installs the Python MCP server into a versioned
     per-user virtual environment, and installs the Blender Extension.
 
     When executed from a repository checkout, it builds and installs the local
@@ -53,7 +53,7 @@ param(
     # Optional exact GitHub Release tag. Empty means the latest stable release.
     [string]$ReleaseTag = "",
 
-    # Stable per-user install directory for release mode.
+    # Stable per-user root containing versioned environments in release mode.
     [string]$InstallRoot = "",
 
     # Use GitHub Release assets even when running from a source checkout.
@@ -328,6 +328,51 @@ function Test-ReleaseChecksums {
         }
         Write-Ok "Verified $name"
     }
+}
+
+function Set-CurrentServerPointer {
+    param(
+        [string]$InstallBase,
+        [string]$ServerExecutable
+    )
+
+    $base = [System.IO.Path]::GetFullPath($InstallBase).TrimEnd('\')
+    $server = [System.IO.Path]::GetFullPath($ServerExecutable)
+    if (-not $server.StartsWith($base + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "MCP server executable escaped the install root: $server"
+    }
+    $relative = $server.Substring($base.Length + 1)
+    if ($relative -notmatch '^venv-[0-9]+\.[0-9]+\.[0-9]+\\Scripts\\blender-mcp\.exe$') {
+        throw "Unexpected versioned MCP server path: $relative"
+    }
+    $pointer = Join-Path $base "current-server.txt"
+    if ($script:DryRunEnabled) {
+        Write-Info "Would point $pointer to $relative"
+        return $pointer
+    }
+    $temporary = "$pointer.$([guid]::NewGuid().ToString('N')).tmp"
+    $backup = "$pointer.$([guid]::NewGuid().ToString('N')).bak"
+    try {
+        $ascii = New-Object System.Text.ASCIIEncoding
+        [System.IO.File]::WriteAllText($temporary, $relative + "`r`n", $ascii)
+        if (Test-Path -LiteralPath $pointer -PathType Leaf) {
+            [System.IO.File]::Replace($temporary, $pointer, $backup)
+            Remove-Item -LiteralPath $backup -Force
+        }
+        else {
+            [System.IO.File]::Move($temporary, $pointer)
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+        if (Test-Path -LiteralPath $backup -PathType Leaf) {
+            Remove-Item -LiteralPath $backup -Force
+        }
+    }
+    Write-Ok "Current server pointer targets $relative"
+    return $pointer
 }
 
 function Get-BlenderInstallations {
@@ -1156,7 +1201,7 @@ try {
             $InstallRoot = Join-Path $localAppData "BlenderMCP"
         }
         $installBase = Get-AbsolutePath -Path $InstallRoot -BasePath (Get-Location).Path
-        $venvRoot = Join-Path $installBase "venv"
+        $venvRoot = $null
         $downloadDirectory = Join-Path $installBase "downloads"
         if (-not $WorkspacePath) {
             $documents = [Environment]::GetFolderPath([Environment+SpecialFolder]::MyDocuments)
@@ -1176,8 +1221,12 @@ try {
 
     $workspace = Get-AbsolutePath -Path $WorkspacePath -BasePath $baseForWorkspace
     $blenderPort = 9876
-    $venvPython = Join-Path $venvRoot "Scripts\python.exe"
-    $serverExecutable = Join-Path $venvRoot "Scripts\blender-mcp.exe"
+    $venvPython = $null
+    $serverExecutable = $null
+    if (-not $releaseMode) {
+        $venvPython = Join-Path $venvRoot "Scripts\python.exe"
+        $serverExecutable = Join-Path $venvRoot "Scripts\blender-mcp.exe"
+    }
 
     Write-Step "Detection and target selection"
     $clientDetection = Get-ClientDetection
@@ -1264,6 +1313,7 @@ try {
     $wheelPath = $null
     $mcpbPath = $null
     $release = $null
+    $releaseVersion = $null
     if ($releaseMode) {
         Write-Step "Verified GitHub Release assets"
         $release = Get-GitHubRelease -Repo $Repository -Tag $ReleaseTag
@@ -1272,8 +1322,21 @@ try {
         }
         Write-Ok "Selected release $($release.tag_name)"
 
+        $releaseTagName = [string]$release.tag_name
+        if ($releaseTagName -notmatch '^v([0-9]+\.[0-9]+\.[0-9]+)$') {
+            throw "Stable Release tag must use vMAJOR.MINOR.PATCH: $releaseTagName"
+        }
+        $releaseVersion = $Matches[1]
+        $venvRoot = Join-Path $installBase ("venv-{0}" -f $releaseVersion)
+        $venvPython = Join-Path $venvRoot "Scripts\python.exe"
+        $serverExecutable = Join-Path $venvRoot "Scripts\blender-mcp.exe"
+
         $checksumAsset = Get-ReleaseAsset -Release $release -Pattern "SHA256SUMS.txt" -Purpose "checksum"
         $wheelAsset = Get-ReleaseAsset -Release $release -Pattern "blender_mcp-*.whl" -Purpose "Python wheel"
+        $expectedWheelName = "blender_mcp-{0}-py3-none-any.whl" -f $releaseVersion
+        if ([string]$wheelAsset.name -ne $expectedWheelName) {
+            throw "Release tag/package mismatch: expected $expectedWheelName, found $($wheelAsset.name)"
+        }
         $assetsToDownload = @($checksumAsset, $wheelAsset)
         if ($selectedBlenderPaths.Count -gt 0) {
             $assetsToDownload += Get-ReleaseAsset -Release $release -Pattern "blender_mcp-*.zip" -Purpose "Blender Extension ZIP"
@@ -1295,12 +1358,20 @@ try {
     }
 
     Write-Step "Python MCP server"
+    $serverInstallRequired = $true
     if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
         $pythonVersion = & $venvPython -c "import sys; assert sys.version_info >= (3, 10), 'Python 3.10+ required'; print(sys.version.split()[0])" 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "The existing environment must contain a working Python 3.10 or newer: $venvPython"
         }
         Write-Ok "Reusing Python $pythonVersion from $venvRoot"
+        if ($releaseMode) {
+            $installedReleaseVersion = & $venvPython -c "import importlib.metadata; print(importlib.metadata.version('blender-mcp'))" 2>$null
+            if ($LASTEXITCODE -eq 0 -and ([string]$installedReleaseVersion).Trim() -eq $releaseVersion) {
+                $serverInstallRequired = $false
+                Write-Ok "Blender MCP $releaseVersion is already installed in its versioned environment."
+            }
+        }
     }
     else {
         $launcher = Get-PythonLauncher -RequestedPath $PythonPath
@@ -1316,7 +1387,9 @@ try {
     else {
         $pipArguments = @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--editable", $repoRoot)
     }
-    Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $pipArguments -Description "Installing Blender MCP and Python dependencies..."
+    if ($serverInstallRequired) {
+        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $pipArguments -Description "Installing Blender MCP and Python dependencies..."
+    }
     Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @(
         "-c",
         "import asyncio; from blender_mcp.server import mcp; tools = asyncio.run(mcp.list_tools()); names = {tool.name for tool in tools}; required = {'get_blender_documentation_context', 'search_blender_docs', 'get_blender_doc_page', 'search_geometry_node_types', 'search_blender_node_assets'}; missing = sorted(required - names); print(f'Registered MCP tools: {len(tools)}'); print(f'Missing required tools: {missing}' if missing else 'Knowledge tools: ready'); assert len(tools) >= 33 and not missing"
@@ -1326,6 +1399,9 @@ try {
             throw "MCP console executable was not installed: $serverExecutable"
         }
         Write-Ok "Python MCP server is ready."
+    }
+    if ($releaseMode) {
+        Set-CurrentServerPointer -InstallBase $installBase -ServerExecutable $serverExecutable | Out-Null
     }
 
     Write-Step "Blender Extension"

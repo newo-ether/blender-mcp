@@ -46,7 +46,7 @@ human-readable: [install.ps1](install.ps1). For a reproducible, version-pinned
 install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.8.1/install.ps1))) -ReleaseTag v1.8.1
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.8.2/install.ps1))) -ReleaseTag v1.8.2
 ```
 
 Before changing the machine, the installer:
@@ -55,13 +55,19 @@ Before changing the machine, the installer:
 2. opens a terminal checklist;
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
 4. verifies the wheel, Extension ZIP, and optional MCPB against `SHA256SUMS.txt`;
-5. creates or reuses `%LOCALAPPDATA%\BlenderMCP\venv`;
+5. installs into a versioned environment such as
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.8.2`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients.
 
 Updates are idempotent: an exact matching Codex entry is left alone, while a
 different `blender_mcp` Codex or Claude Code user entry is replaced in place.
 Use `-PreserveExistingMcpEntries` when an existing custom entry must not change.
+Versioned environments allow an update while an older server is still running;
+the current session finishes on the old process and restarted clients use the
+new verified environment. Older `venv-<version>` directories are retained so a
+live process is never deleted; after all MCP clients are closed, obsolete ones
+may be removed manually.
 
 ### Target selector
 
@@ -279,7 +285,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.8.1-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.8.2-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -287,7 +293,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.8.1-py3-none-any.whl
+python -m pip install ./blender_mcp-1.8.2-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -383,6 +389,7 @@ MCP server telemetry.
 | A linked node group cannot be edited | Linked-library trees are intentionally read-only in Geometry Nodes v1. |
 | Documentation is unavailable offline | Warm the same source/version/language first. Only marked stale entries fall back during network or server failure; a 404 does not. |
 | A prerelease Manual page is missing | Check the structured fallback, then query live node types/schema and installed Essentials for the exact build. |
+| Old versioned environments remain | Close all MCP clients, then remove obsolete `%LOCALAPPDATA%\BlenderMCP\venv-<old-version>` directories. Keep the path named in `current-server.txt`. |
 
 Dry-run command:
 
