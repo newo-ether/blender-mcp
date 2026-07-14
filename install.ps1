@@ -420,7 +420,10 @@ function Get-BlenderInstallations {
             }
         }
         catch {
-            Write-WarningLine "Ignoring an unreadable Blender candidate: $resolved"
+            Write-WarningLine (
+                "Ignoring an unreadable Blender candidate: {0} ({1})" -f
+                $resolved, $_.Exception.Message
+            )
         }
     }
     return @($installations | Sort-Object -Property Version -Descending)
@@ -428,13 +431,41 @@ function Get-BlenderInstallations {
 
 function Get-BlenderVersion {
     param([string]$Executable)
-    $output = & $Executable --factory-startup --version 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not read Blender version from: $Executable"
+
+    # Capture native stdout/stderr independently. PowerShell 7 can promote any
+    # native stderr line to a terminating ErrorRecord under ErrorAction=Stop,
+    # even when Blender exits successfully and prints a valid version to
+    # stdout (for example a benign TBB allocator warning in portable 4.2).
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $Executable
+    $startInfo.Arguments = "--factory-startup --version"
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Could not start Blender: $Executable"
+        }
+        $standardOutput = $process.StandardOutput.ReadToEnd()
+        $standardError = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "Could not read Blender version from: $Executable (exit $($process.ExitCode))"
+        }
     }
-    $firstLine = [string]($output | Select-Object -First 1)
-    if ($firstLine -notmatch 'Blender\s+([0-9]+(?:\.[0-9]+){1,2})') {
-        throw "Could not parse Blender version from: $firstLine"
+    finally {
+        $process.Dispose()
+    }
+    $output = @($standardOutput -split "`r?`n") + @($standardError -split "`r?`n")
+    $versionLine = @($output | ForEach-Object { [string]$_ }) |
+        Where-Object { $_ -match 'Blender\s+[0-9]+(?:\.[0-9]+){1,2}' } |
+        Select-Object -First 1
+    if (-not $versionLine -or $versionLine -notmatch 'Blender\s+([0-9]+(?:\.[0-9]+){1,2})') {
+        $summary = (@($output | Select-Object -First 3) -join ' | ')
+        throw "Could not parse Blender version from: $summary"
     }
     return [version]$Matches[1]
 }

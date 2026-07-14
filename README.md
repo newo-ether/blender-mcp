@@ -46,7 +46,7 @@ human-readable: [install.ps1](install.ps1). For a reproducible, version-pinned
 install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.8.0/install.ps1))) -ReleaseTag v1.8.0
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.8.1/install.ps1))) -ReleaseTag v1.8.1
 ```
 
 Before changing the machine, the installer:
@@ -279,7 +279,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.8.0-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.8.1-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -287,7 +287,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.8.0-py3-none-any.whl
+python -m pip install ./blender_mcp-1.8.1-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
