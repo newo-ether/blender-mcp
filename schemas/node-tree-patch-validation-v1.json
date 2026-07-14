@@ -14,6 +14,7 @@
     "current_revision": {"type": "string"},
     "candidate_revision": {"type": "string"},
     "candidate_stats": {"type": "object"},
+    "timing_ms": {"type": "number", "minimum": 0},
     "capabilities": {"type": "object"},
     "users": {"type": "array", "items": {"type": "object"}},
     "diagnostics": {

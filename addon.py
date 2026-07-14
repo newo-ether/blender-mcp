@@ -127,6 +127,9 @@ NODE_TREE_INDEX_SCHEMA = "blender-node-tree-index/1"
 NODE_TYPE_SCHEMA = "blender-node-type-schema/1"
 NODE_TREE_TYPES = {"GeometryNodeTree", "ShaderNodeTree", "CompositorNodeTree"}
 NODE_TREE_OWNER_KINDS = {"MATERIAL", "WORLD", "LIGHT", "SCENE", "NODE_GROUP"}
+NODE_TREE_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+NODE_TREE_MAX_MUTATION_NODES = 10000
+NODE_TREE_MAX_VALIDATION_SECONDS = 30.0
 
 _GN_NODE_TYPE_CATALOG_CACHE = {}
 _GN_ESSENTIALS_CATALOG_CACHE = {}
@@ -839,6 +842,15 @@ def _node_target_capabilities(target):
         "mutation_reason": mutation_reason,
         "transaction_adapter": target["adapter"],
         "interface": getattr(tree, "interface", None) is not None,
+        "limits": {
+            "max_full_response_bytes": NODE_TREE_MAX_RESPONSE_BYTES,
+            "max_mutation_nodes": NODE_TREE_MAX_MUTATION_NODES,
+            "max_validation_seconds": NODE_TREE_MAX_VALIDATION_SECONDS,
+            "max_neighbor_depth": 5,
+            "max_index_page": 500,
+            "max_patch_operations": 500,
+            "max_patch_bytes": 2 * 1024 * 1024,
+        },
     }
 
 
@@ -2404,6 +2416,13 @@ def _node_interface_mutable(target):
 
 
 def _node_mutation_allowed(node, operation, path, diagnostics, property_name=None):
+    if getattr(node.__class__, "__module__", None) != "bpy.types":
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "custom_node_read_only", path,
+            f"{node.bl_idname} is provided by Python or an add-on and is read-only "
+            "until an explicit mutation capability is implemented",
+        ))
+        return False
     if node.bl_idname in _NODE_EFFECT_SENSITIVE_TYPES:
         diagnostics.append(_gn_patch_diagnostic(
             "error", "effect_sensitive_node_read_only", path,
@@ -2532,6 +2551,11 @@ def _node_execute_patch_operations(target, patch):
                     node = None
                 else:
                     node = tree.nodes.new(operation["node_type"])
+                    if not _node_mutation_allowed(
+                        node, op, f"{path}/node_type", diagnostics
+                    ):
+                        tree.nodes.remove(node)
+                        node = None
                 if node is not None:
                     requested_name = operation.get("name")
                     if (
@@ -2588,7 +2612,9 @@ def _node_execute_patch_operations(target, patch):
 
             elif op == "rename_node":
                 node = resolve_node(operation["node"], f"{path}/node")
-                if node is not None:
+                if node is not None and _node_mutation_allowed(
+                    node, op, path, diagnostics
+                ):
                     if operation["name"] != node.name and operation["name"] in tree.nodes:
                         raise ValueError(f"Node name already exists: {operation['name']}")
                     node.name = operation["name"]
@@ -2683,7 +2709,9 @@ def _node_execute_patch_operations(target, patch):
 
             elif op == "set_node_layout":
                 node = resolve_node(operation["node"], f"{path}/node")
-                if node is not None:
+                if node is not None and _node_mutation_allowed(
+                    node, op, path, diagnostics
+                ):
                     for field in ("location", "width", "height"):
                         if field in operation:
                             setattr(node, field, operation[field])
@@ -2701,7 +2729,9 @@ def _node_execute_patch_operations(target, patch):
 
             elif op == "set_annotation":
                 node = resolve_node(operation["node"], f"{path}/node")
-                if node is not None:
+                if node is not None and _node_mutation_allowed(
+                    node, op, path, diagnostics
+                ):
                     if node.bl_idname != "NodeFrame":
                         raise ValueError("Annotations may only be attached to Frame nodes")
                     if operation["text"]:
@@ -2815,6 +2845,7 @@ def _node_execute_patch_operations(target, patch):
 
 
 def _node_validate_patch_runtime(target, patch):
+    validation_started = time.perf_counter()
     current_snapshot = _node_export_target(target, "all")
     current_revision = current_snapshot["revision"]
     diagnostics = []
@@ -2841,6 +2872,12 @@ def _node_validate_patch_runtime(target, patch):
             "error", "tree_not_editable", "/tree_ref",
             "The selected owner or NodeTree is linked or otherwise read-only",
         ))
+    if len(target["tree"].nodes) > NODE_TREE_MAX_MUTATION_NODES:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "tree_node_limit_exceeded", "/tree_ref",
+            f"Mutation supports at most {NODE_TREE_MAX_MUTATION_NODES} nodes; "
+            f"the selected tree has {len(target['tree'].nodes)}",
+        ))
 
     execution = {
         "diagnostics": [],
@@ -2854,6 +2891,13 @@ def _node_validate_patch_runtime(target, patch):
             working_target, working_owner, standalone_tree = _node_validation_copy(target)
             execution = _node_execute_patch_operations(working_target, patch)
             diagnostics.extend(execution["diagnostics"])
+            projected_node_count = len(working_target["tree"].nodes)
+            if projected_node_count > NODE_TREE_MAX_MUTATION_NODES:
+                diagnostics.append(_gn_patch_diagnostic(
+                    "error", "projected_tree_node_limit_exceeded", "/operations",
+                    f"The patch would create {projected_node_count} nodes; the limit is "
+                    f"{NODE_TREE_MAX_MUTATION_NODES}",
+                ))
             if not any(item["severity"] == "error" for item in diagnostics):
                 invalid_links = [link for link in working_target["tree"].links if not link.is_valid]
                 if invalid_links:
@@ -2877,6 +2921,13 @@ def _node_validate_patch_runtime(target, patch):
             if working_owner is not None:
                 _node_remove_validation_copy(target, working_owner, standalone_tree)
 
+    elapsed_ms = (time.perf_counter() - validation_started) * 1000.0
+    if elapsed_ms > NODE_TREE_MAX_VALIDATION_SECONDS * 1000.0:
+        diagnostics.append(_gn_patch_diagnostic(
+            "error", "validation_time_limit_exceeded", "",
+            f"Validation took {elapsed_ms:.3f} ms; the limit is "
+            f"{NODE_TREE_MAX_VALIDATION_SECONDS * 1000.0:.0f} ms",
+        ))
     result = {
         "schema": "blender-node-tree-patch-validation/1",
         "valid": not any(item["severity"] == "error" for item in diagnostics),
@@ -2890,6 +2941,7 @@ def _node_validate_patch_runtime(target, patch):
         "diagnostics": diagnostics,
         "plan": execution["plan"],
         "semantic_diff": execution["semantic_diff"],
+        "timing_ms": round(elapsed_ms, 3),
     }
     if candidate_snapshot is not None:
         result["candidate_revision"] = candidate_snapshot["revision"]
@@ -4131,9 +4183,16 @@ class BlenderMCPServer:
     ):
         """Export an owner-addressed NodeTree as deterministic flat JSON."""
         target = _node_resolve_tree_ref(tree_ref)
-        return _node_export_target(
+        snapshot = _node_export_target(
             target, view, node_names or [], neighbor_depth,
         )
+        if not node_names and snapshot["stats"]["json_bytes"] > NODE_TREE_MAX_RESPONSE_BYTES:
+            raise ValueError(
+                f"Full node-tree response is {snapshot['stats']['json_bytes']} bytes; "
+                f"the limit is {NODE_TREE_MAX_RESPONSE_BYTES}. Use get_node_tree_index "
+                "and export_node_tree with node_names."
+            )
+        return snapshot
 
     def get_node_tree_index(self, tree_ref, query="", offset=0, limit=100):
         """Return a compact index for one owner-addressed NodeTree."""

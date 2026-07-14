@@ -109,6 +109,27 @@ def main():
         linked_application = server.apply_node_tree_patch(
             linked_patch, keep_backup=True
         )
+        override_shader = linked_shader.override_create(remap_local_usages=False)
+        override_shader.name = PREFIX + "OverrideShaderGroup"
+        override_ref = {
+            "tree_type": "ShaderNodeTree",
+            "owner": {"kind": "NODE_GROUP", "name": override_shader.name},
+        }
+        override_export = server.export_node_tree(override_ref, "all")
+        override_patch = {
+            "schema": "blender-node-tree-patch/1",
+            "tree_ref": override_ref,
+            "base_revision": override_export["revision"],
+            "capabilities": ["graph"],
+            "operations": [{
+                "op": "rename_node",
+                "node": next(iter(override_export["tree"]["nodes"])),
+                "name": "Must Not Change Override",
+            }],
+        }
+        override_application = server.apply_node_tree_patch(
+            override_patch, keep_backup=True
+        )
         result = {
             "version": list(bpy.app.version[:3]),
             "owners": {
@@ -132,6 +153,11 @@ def main():
                     item["code"] for item in linked_validation["diagnostics"]
                 ),
                 "application_status": linked_application["status"],
+                "override": {
+                    "record": record(override_shader, override_shader),
+                    "capabilities": override_export["capabilities"],
+                    "application_status": override_application["status"],
+                },
             },
         }
         for item in list(result["owners"].values()) + list(result["groups"].values()):
@@ -147,6 +173,16 @@ def main():
             raise AssertionError("linked generic validation did not fail closed")
         if linked_application["applied"] or linked_application["mutated"]:
             raise AssertionError("linked generic application did not fail closed")
+        if not override_export["capabilities"]["editable"]:
+            raise AssertionError("local override should remain readable and dry-run capable")
+        if (
+            override_export["capabilities"]["apply"]
+            or override_export["capabilities"]["mutation_reason"]
+            != "library_override_apply_not_supported"
+        ):
+            raise AssertionError("override capability did not fail closed")
+        if override_application["applied"] or override_application["mutated"]:
+            raise AssertionError("override application did not fail closed")
         cleanup()
         result["leaks"] = {
             collection_name: [

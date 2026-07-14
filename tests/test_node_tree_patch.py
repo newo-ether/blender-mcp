@@ -136,6 +136,20 @@ class NodeTreePatchTests(unittest.TestCase):
             {"unknown_field", "unsupported_operation"},
         )
 
+    def test_operation_count_limit_is_enforced(self):
+        value = sample_patch()
+        value["operations"] = [
+            {
+                "op": "rename_node",
+                "node": f"Node {index}",
+                "name": f"Renamed {index}",
+            }
+            for index in range(patch_schema.MAX_OPERATIONS + 1)
+        ]
+        value["capabilities"] = ["graph"]
+        diagnostics = patch_schema.validate_patch_structure(value)
+        self.assertIn("too_many_operations", {item["code"] for item in diagnostics})
+
 
 if __name__ == "__main__":
     unittest.main()
