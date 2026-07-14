@@ -269,6 +269,7 @@ Once the config file has been set on Claude, and the addon is running on Blender
 
 - Get scene and object information 
 - List and export Geometry Node trees as revisioned JSON (full graph or targeted subgraph)
+- Search a paginated node index before loading only the relevant subgraph
 - Inspect node sockets and properties from the running Blender version
 - Validate revision-guarded Geometry Nodes patch files with a non-mutating dry-run
 - Apply validated patches with copy-on-write commit, explicit shared-user policy, and rollback backups

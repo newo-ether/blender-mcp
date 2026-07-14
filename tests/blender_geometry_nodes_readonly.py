@@ -38,8 +38,12 @@ def geometry_interface(tree, include_scale=False):
     )
     scale = None
     if include_scale:
+        panel = tree.interface.new_panel(name="Controls")
         scale = tree.interface.new_socket(
-            name="Scale", in_out="INPUT", socket_type="NodeSocketFloat"
+            name="Scale",
+            in_out="INPUT",
+            socket_type="NodeSocketFloat",
+            parent=panel,
         )
         scale.default_value = 1.25
     return scale
@@ -94,6 +98,7 @@ def build_fixture():
         tree,
         nested,
         nested_node.name,
+        nested_transform.name,
         join.name,
         cube.name,
         zones,
@@ -119,6 +124,7 @@ def run_test():
         tree,
         nested,
         nested_node_name,
+        nested_transform_name,
         join_name,
         cube_name,
         zones,
@@ -468,8 +474,46 @@ def run_test():
     )
     assert_true(len(bpy.data.node_groups) == groups_before_rollback, "Rollback leaked working data")
 
+    nested_revision = server.export_geometry_node_tree(nested.name, "all")["revision"]
+    nested_patch = {
+        "schema": "blender-geometry-nodes-patch/1",
+        "tree_name": nested.name,
+        "base_revision": nested_revision,
+        "shared_tree_policy": "single_user_copy",
+        "target_user": {
+            "kind": "GROUP_NODE",
+            "tree": committed_tree.name,
+            "node": nested_node_name,
+        },
+        "operations": [
+            {
+                "op": "set_socket_default",
+                "node": nested_transform_name,
+                "socket": "input:2:Translation",
+                "value": [3.0, 2.0, 1.0],
+            },
+        ],
+    }
+    nested_application = server.apply_geometry_node_patch(nested_patch, keep_backup=True)
+    assert_true(nested_application["status"] == "applied", "Nested group patch failed")
+    nested_copy = bpy.data.node_groups[nested_application["tree_name"]]
+    assert_true(
+        committed_tree.nodes[nested_node_name].node_tree == nested_copy,
+        "Target group node did not move to nested copy",
+    )
+    assert_true(
+        backup_tree.nodes[nested_node_name].node_tree == nested,
+        "Unrelated backup group node was changed by nested copy",
+    )
+    nested_translation = nested_copy.nodes[nested_transform_name].inputs["Translation"].default_value
+    assert_true(
+        all(abs(value - expected) < 1e-6 for value, expected in zip(nested_translation, (3.0, 2.0, 1.0))),
+        "Nested localized socket edit was not committed",
+    )
+
     cleanup_tree = bpy.data.node_groups.new(PREFIX + "NoBackup", "GeometryNodeTree")
     cleanup_node = cleanup_tree.nodes.new("GeometryNodeMeshCube")
+    cleanup_width = float(cleanup_node.width)
     cleanup_revision = server.export_geometry_node_tree(cleanup_tree.name, "all")["revision"]
     cleanup_result = server.apply_geometry_node_patch(
         {
@@ -477,12 +521,17 @@ def run_test():
             "tree_name": cleanup_tree.name,
             "base_revision": cleanup_revision,
             "operations": [
-                {"op": "set_node_layout", "node": cleanup_node.name, "width": 175.0},
+                {"op": "set_node_layout", "node": cleanup_node.name, "width": cleanup_width},
             ],
         },
         keep_backup=False,
     )
     assert_true(cleanup_result["status"] == "applied", "No-backup application failed")
+    assert_true(cleanup_result["new_revision"] == cleanup_revision, "No-op patch changed revision")
+    assert_true(
+        sum(cleanup_result["actual_diff"]["summary"].values()) == 0,
+        "No-op patch reported unrelated graph changes",
+    )
     assert_true(cleanup_result["backup"] == {"kept": False, "tree_name": None}, "Backup cleanup failed")
     assert_true(
         bpy.data.node_groups.get(cleanup_result["tree_name"]) is not None,

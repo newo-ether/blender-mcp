@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ahujasid/blender-mcp/schemas/geometry-nodes-index-v1.json",
+  "title": "Blender MCP Geometry Nodes index page v1",
+  "type": "object",
+  "required": [
+    "schema", "blender_version", "tree_name", "revision", "query",
+    "offset", "limit", "total_nodes", "total_matches", "next_offset", "nodes"
+  ],
+  "properties": {
+    "schema": {"const": "blender-geometry-nodes-index/1"},
+    "blender_version": {
+      "type": "array",
+      "prefixItems": [{"type": "integer"}, {"type": "integer"}, {"type": "integer"}],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "tree_name": {"type": "string"},
+    "revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "query": {"type": "string"},
+    "offset": {"type": "integer", "minimum": 0},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+    "total_nodes": {"type": "integer", "minimum": 0},
+    "total_matches": {"type": "integer", "minimum": 0},
+    "next_offset": {"type": ["integer", "null"], "minimum": 0},
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "label", "bl_idname", "bl_label"],
+        "properties": {
+          "name": {"type": "string"},
+          "label": {"type": "string"},
+          "bl_idname": {"type": "string"},
+          "bl_label": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

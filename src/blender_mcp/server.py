@@ -404,6 +404,45 @@ def get_geometry_node_type_schema(
 
 
 @mcp.tool()
+@telemetry_tool("get_geometry_node_tree_index")
+def get_geometry_node_tree_index(
+    ctx: Context,
+    tree_name: str,
+    query: str = "",
+    offset: int = 0,
+    limit: int = 100,
+    user_prompt: str = "",
+) -> str:
+    """Search and page a compact node-name/type index before subgraph export.
+
+    Use this tool to discover stable node names without loading a full graph.
+    Then pass selected names to export_geometry_node_tree(node_names=[...]).
+
+    Parameters:
+    - tree_name: Exact Geometry Node group name
+    - query: Optional case-insensitive substring across name, label, and type
+    - offset: Zero-based result offset
+    - limit: Page size from 1 to 500
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "get_geometry_node_tree_index",
+            {
+                "tree_name": tree_name,
+                "query": query,
+                "offset": offset,
+                "limit": limit,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error indexing Geometry Node tree: {str(e)}")
+        return f"Error indexing Geometry Node tree: {str(e)}"
+
+
+@mcp.tool()
 @telemetry_tool("validate_geometry_node_patch")
 def validate_geometry_node_patch(
     ctx: Context,

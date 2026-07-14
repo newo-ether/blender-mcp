@@ -1888,6 +1888,7 @@ class BlenderMCPServer:
             "list_geometry_node_trees": self.list_geometry_node_trees,
             "export_geometry_node_tree": self.export_geometry_node_tree,
             "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
+            "get_geometry_node_tree_index": self.get_geometry_node_tree_index,
             "validate_geometry_node_patch": self.validate_geometry_node_patch,
             "apply_geometry_node_patch": self.apply_geometry_node_patch,
             "get_viewport_screenshot": self.get_viewport_screenshot,
@@ -2054,6 +2055,54 @@ class BlenderMCPServer:
             }
         finally:
             bpy.data.node_groups.remove(tree)
+
+    def get_geometry_node_tree_index(self, tree_name, query="", offset=0, limit=100):
+        """Return a searchable, paginated node-name/type index for subgraph discovery."""
+        tree = bpy.data.node_groups.get(tree_name)
+        if tree is None or tree.bl_idname != "GeometryNodeTree":
+            raise ValueError(f"Geometry Node tree not found: {tree_name}")
+        try:
+            offset = int(offset)
+            limit = int(limit)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("offset and limit must be integers") from exc
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be from 1 to 500")
+
+        query_value = "" if query is None else str(query)
+        query_text = query_value.strip().casefold()
+        matches = [
+            node for node in sorted(tree.nodes, key=lambda item: item.name)
+            if not query_text or query_text in " ".join(
+                (node.name, node.label, node.bl_idname, node.bl_label)
+            ).casefold()
+        ]
+        page = matches[offset:offset + limit]
+        revision = _gn_export_tree(tree, "all")["revision"]
+        next_offset = offset + len(page)
+        return {
+            "schema": "blender-geometry-nodes-index/1",
+            "blender_version": list(bpy.app.version[:3]),
+            "tree_name": tree.name,
+            "revision": revision,
+            "query": query_value,
+            "offset": offset,
+            "limit": limit,
+            "total_nodes": len(tree.nodes),
+            "total_matches": len(matches),
+            "next_offset": next_offset if next_offset < len(matches) else None,
+            "nodes": [
+                {
+                    "name": node.name,
+                    "label": node.label,
+                    "bl_idname": node.bl_idname,
+                    "bl_label": node.bl_label,
+                }
+                for node in page
+            ],
+        }
 
     def validate_geometry_node_patch(self, patch):
         """Build a runtime-resolved patch plan without mutating live Blender data."""
@@ -4471,8 +4520,13 @@ def register():
         _auto_connect_if_enabled()
     bpy.app.timers.register(_startup_sync, first_interval=0.5)
 
-    print("BlenderMCP addon registered (auto-connect: " +
-          ("on" if bpy.context.preferences.addons[ADDON_MODULE_ID].preferences.auto_connect else "off") + ")")
+    preferences = get_blendermcp_addon_preferences()
+    auto_connect = bool(preferences and preferences.auto_connect)
+    print(
+        "BlenderMCP addon registered (auto-connect: "
+        + ("on" if auto_connect else "off")
+        + ")"
+    )
 
 def unregister():
     # Remove load_post handler
