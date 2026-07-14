@@ -541,24 +541,58 @@ def export_geometry_node_tree(
 def get_geometry_node_type_schema(
     ctx: Context,
     node_type: str,
+    detail: str = "compact",
     user_prompt: str = "",
 ) -> str:
     """Inspect sockets and RNA properties for a node type in running Blender.
 
     Parameters:
     - node_type: Blender node bl_idname, for example GeometryNodeJoinGeometry
+    - detail: compact (default) or full inherited RNA detail
     - user_prompt: Original user prompt for telemetry
     """
     try:
         blender = get_blender_connection()
         result = blender.send_command(
             "get_geometry_node_type_schema",
-            {"node_type": node_type},
+            {"node_type": node_type, "detail": detail},
         )
         return json.dumps(result, ensure_ascii=False, indent=2)
     except Exception as e:
         logger.error(f"Error inspecting Geometry Node type: {str(e)}")
         return f"Error inspecting Geometry Node type: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("search_geometry_node_types")
+def search_geometry_node_types(
+    ctx: Context,
+    query: str = "",
+    offset: int = 0,
+    limit: int = 100,
+    user_prompt: str = "",
+) -> str:
+    """Search node types constructible in Geometry Nodes in running Blender.
+
+    Results are version/build-specific and include Geometry, Function, Shader
+    utility, layout, and group node types accepted by a GeometryNodeTree.
+
+    Parameters:
+    - query: Optional case-insensitive text across id, label, description, category
+    - offset: Zero-based result offset
+    - limit: Page size from 1 to 500
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "search_geometry_node_types",
+            {"query": query, "offset": offset, "limit": limit},
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error searching Geometry Node types: {str(e)}")
+        return f"Error searching Geometry Node types: {str(e)}"
 
 
 @mcp.tool()

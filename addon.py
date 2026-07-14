@@ -119,6 +119,10 @@ GEOMETRY_NODES_SNAPSHOT_SCHEMA = "blender-geometry-nodes/1"
 GEOMETRY_NODES_PATCH_SCHEMA = "blender-geometry-nodes-patch/1"
 GEOMETRY_NODES_PATCH_VALIDATION_SCHEMA = "blender-geometry-nodes-patch-validation/1"
 GEOMETRY_NODES_VIEWS = {"semantic", "layout", "all"}
+GEOMETRY_NODE_TYPE_SCHEMA_DETAILS = {"compact", "full"}
+GEOMETRY_NODE_TYPE_CATALOG_SCHEMA = "blender-geometry-node-type-catalog/1"
+
+_GN_NODE_TYPE_CATALOG_CACHE = {}
 
 BLENDER_VERSION_CONTEXT_SCHEMA = "blender-version-context/1"
 
@@ -606,6 +610,133 @@ def _gn_property_schema(owner, prop):
         except (AttributeError, TypeError, RuntimeError):
             pass
     return record
+
+
+def _gn_node_owned_properties(node):
+    """Return RNA properties declared by the concrete node type only."""
+    base = getattr(node.bl_rna, "base", None)
+    base_identifiers = {
+        prop.identifier for prop in base.properties
+    } if base is not None else set()
+    return [
+        prop for prop in node.bl_rna.properties
+        if prop.identifier not in base_identifiers and prop.identifier != "rna_type"
+    ]
+
+
+def _gn_dynamic_collection_schema(owner, prop, limit=50):
+    """Describe dynamic node-owned item collections without inherited RNA."""
+    record = {
+        "identifier": prop.identifier,
+        "type": "COLLECTION",
+        "readonly": bool(getattr(prop, "is_readonly", False)),
+        "item_rna_type": getattr(getattr(prop, "fixed_type", None), "identifier", None),
+        "count": 0,
+        "items": [],
+        "truncated": False,
+    }
+    try:
+        collection = getattr(owner, prop.identifier)
+        record["count"] = len(collection)
+        for item in list(collection)[:limit]:
+            values = {}
+            for item_prop in item.bl_rna.properties:
+                identifier = item_prop.identifier
+                if identifier == "rna_type" or item_prop.type == "COLLECTION":
+                    continue
+                if getattr(item_prop, "is_hidden", False):
+                    continue
+                try:
+                    values[identifier] = _gn_json_value(getattr(item, identifier))
+                except (AttributeError, TypeError, ValueError, RuntimeError):
+                    continue
+            record["items"].append({
+                "rna_type": item.bl_rna.identifier,
+                "values": values,
+            })
+        record["truncated"] = record["count"] > limit
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        record["unavailable"] = True
+    return record
+
+
+def _gn_socket_type_schema(socket, direction, index):
+    record = _gn_socket_record(socket, direction, index)
+    for source, destination in (
+        ("description", "description"),
+        ("hide_value", "hide_value"),
+        ("is_unavailable", "unavailable"),
+        ("default_attribute_name", "default_attribute_name"),
+    ):
+        if hasattr(socket, source):
+            try:
+                record[destination] = _gn_json_value(getattr(socket, source))
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                pass
+    default_prop = _gn_rna_property(socket, "default_value")
+    if default_prop is not None:
+        for source, destination in (("hard_min", "min"), ("hard_max", "max")):
+            if hasattr(default_prop, source):
+                try:
+                    record[destination] = _gn_json_value(getattr(default_prop, source))
+                except (TypeError, ValueError):
+                    pass
+    return record
+
+
+def _gn_node_catalog_cache_key():
+    return (
+        tuple(bpy.app.version[:3]),
+        _blender_app_text("build_hash"),
+    )
+
+
+def _gn_geometry_node_type_catalog():
+    """Probe all registered node types that can be created in Geometry Nodes."""
+    key = _gn_node_catalog_cache_key()
+    cached = _GN_NODE_TYPE_CATALOG_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    tree = bpy.data.node_groups.new(".BlenderMCP_NodeTypeCatalog", "GeometryNodeTree")
+    records = []
+    try:
+        for type_name in sorted(name for name in dir(bpy.types) if "Node" in name):
+            cls = getattr(bpy.types, type_name, None)
+            if cls is None or not hasattr(cls, "is_registered_node_type"):
+                continue
+            try:
+                if not cls.is_registered_node_type():
+                    continue
+                node = tree.nodes.new(type=type_name)
+            except (AttributeError, RuntimeError, TypeError, ValueError):
+                continue
+            try:
+                if type_name.startswith("GeometryNode"):
+                    category = "geometry"
+                elif type_name.startswith("ShaderNode"):
+                    category = "shader_utility"
+                elif type_name.startswith("FunctionNode"):
+                    category = "function"
+                else:
+                    category = "layout_or_group"
+                records.append({
+                    "bl_idname": node.bl_idname,
+                    "label": node.bl_label,
+                    "description": node.bl_description,
+                    "category": category,
+                    "input_count": len(node.inputs),
+                    "output_count": len(node.outputs),
+                })
+            finally:
+                tree.nodes.remove(node)
+    finally:
+        bpy.data.node_groups.remove(tree)
+
+    records.sort(key=lambda item: item["bl_idname"])
+    _GN_NODE_TYPE_CATALOG_CACHE.clear()
+    _GN_NODE_TYPE_CATALOG_CACHE[key] = records
+    return records
 
 
 def _gn_patch_diagnostic(severity, code, path, message):
@@ -1933,6 +2064,7 @@ class BlenderMCPServer:
             "list_geometry_node_trees": self.list_geometry_node_trees,
             "export_geometry_node_tree": self.export_geometry_node_tree,
             "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
+            "search_geometry_node_types": self.search_geometry_node_types,
             "get_geometry_node_tree_index": self.get_geometry_node_tree_index,
             "validate_geometry_node_patch": self.validate_geometry_node_patch,
             "apply_geometry_node_patch": self.apply_geometry_node_patch,
@@ -2065,10 +2197,13 @@ class BlenderMCPServer:
             raise ValueError(f"Geometry Node tree not found: {tree_name}")
         return _gn_export_tree(tree, view, node_names, neighbor_depth)
 
-    def get_geometry_node_type_schema(self, node_type):
+    def get_geometry_node_type_schema(self, node_type, detail="compact"):
         """Inspect a node type from this running Blender build."""
         if not isinstance(node_type, str) or not node_type.strip():
             raise ValueError("node_type must be a non-empty Blender node bl_idname")
+        detail = str(detail or "compact").strip().lower()
+        if detail not in GEOMETRY_NODE_TYPE_SCHEMA_DETAILS:
+            raise ValueError("detail must be 'compact' or 'full'")
 
         tree = bpy.data.node_groups.new(".BlenderMCP_TypeSchema", "GeometryNodeTree")
         try:
@@ -2079,31 +2214,88 @@ class BlenderMCPServer:
                     f"Unsupported Geometry Node type in Blender {bpy.app.version_string}: {node_type}"
                 ) from exc
 
+            property_source = (
+                _gn_node_owned_properties(node)
+                if detail == "compact"
+                else node.bl_rna.properties
+            )
             properties = []
-            for prop in node.bl_rna.properties:
+            dynamic_items = []
+            for prop in property_source:
                 if prop.identifier in _GN_NODE_PROPERTY_EXCLUDES or prop.identifier == "rna_type":
                     continue
-                if prop.type == "COLLECTION" or getattr(prop, "is_hidden", False):
+                if getattr(prop, "is_hidden", False):
+                    continue
+                if prop.type == "COLLECTION":
+                    if detail == "compact":
+                        dynamic_items.append(_gn_dynamic_collection_schema(node, prop))
                     continue
                 properties.append(_gn_property_schema(node, prop))
 
-            return {
+            result = {
                 "schema": GEOMETRY_NODES_SNAPSHOT_SCHEMA,
                 "blender_version": list(bpy.app.version[:3]),
+                "blender_version_string": bpy.app.version_string,
+                "build_hash": _blender_app_text("build_hash"),
+                "detail": detail,
                 "node_type": node.bl_idname,
                 "label": node.bl_label,
+                "description": node.bl_description,
                 "properties": properties,
                 "inputs": [
-                    _gn_socket_record(socket, "INPUT", index)
+                    (_gn_socket_type_schema if detail == "compact" else _gn_socket_record)(
+                        socket, "INPUT", index
+                    )
                     for index, socket in enumerate(node.inputs)
                 ],
                 "outputs": [
-                    _gn_socket_record(socket, "OUTPUT", index)
+                    (_gn_socket_type_schema if detail == "compact" else _gn_socket_record)(
+                        socket, "OUTPUT", index
+                    )
                     for index, socket in enumerate(node.outputs)
                 ],
             }
+            if detail == "compact":
+                result["dynamic_items"] = dynamic_items
+            return result
         finally:
             bpy.data.node_groups.remove(tree)
+
+    def search_geometry_node_types(self, query="", offset=0, limit=100):
+        """Search registered node types constructible in Geometry Nodes."""
+        try:
+            offset = int(offset)
+            limit = int(limit)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("offset and limit must be integers") from exc
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be from 1 to 500")
+        query_value = "" if query is None else str(query)
+        query_text = query_value.strip().casefold()
+        catalog = _gn_geometry_node_type_catalog()
+        matches = [
+            item for item in catalog
+            if not query_text or query_text in " ".join((
+                item["bl_idname"], item["label"], item["description"], item["category"],
+            )).casefold()
+        ]
+        page = matches[offset:offset + limit]
+        next_offset = offset + len(page)
+        return {
+            "schema": GEOMETRY_NODE_TYPE_CATALOG_SCHEMA,
+            "blender_version": list(bpy.app.version[:3]),
+            "blender_version_string": bpy.app.version_string,
+            "build_hash": _blender_app_text("build_hash"),
+            "query": query_value,
+            "offset": offset,
+            "limit": limit,
+            "total_types": len(catalog),
+            "total_matches": len(matches),
+            "next_offset": next_offset if next_offset < len(matches) else None,
+            "node_types": page,
+        }
 
     def get_geometry_node_tree_index(self, tree_name, query="", offset=0, limit=100):
         """Return a searchable, paginated node-name/type index for subgraph discovery."""
