@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import ast
 import json
-from pathlib import Path
 import re
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "skills" / "blender-mcp"
-SERVER_PATH = ROOT / "src" / "blender_mcp" / "server.py"
+HOST_PATH = ROOT / "src" / "blender_mcp" / "host.py"
+PROVIDERS_PATH = ROOT / "src" / "blender_mcp" / "tools" / "providers.py"
 
 
 def assigned_string(module: ast.Module, name: str) -> str:
@@ -140,10 +140,11 @@ class BlenderMcpSkillTests(unittest.TestCase):
 class McpGuidanceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.module = ast.parse(SERVER_PATH.read_text(encoding="utf-8"))
+        cls.host_module = ast.parse(HOST_PATH.read_text(encoding="utf-8"))
+        cls.providers_module = ast.parse(PROVIDERS_PATH.read_text(encoding="utf-8"))
 
     def test_server_instructions_are_short_and_safe(self):
-        guidance = assigned_string(self.module, "BLENDER_MCP_INSTRUCTIONS")
+        guidance = assigned_string(self.host_module, "BLENDER_MCP_INSTRUCTIONS")
         lower = guidance.lower()
         self.assertLess(len(guidance), 1200)
         for required in (
@@ -162,7 +163,7 @@ class McpGuidanceTests(unittest.TestCase):
                 self.assertNotIn(forbidden, lower)
 
     def test_asset_prompt_is_optional_and_conditional(self):
-        prompt = returned_string(self.module, "asset_creation_strategy")
+        prompt = returned_string(self.providers_module, "asset_creation_strategy")
         lower = prompt.lower()
         self.assertLess(len(prompt), 3000)
         self.assertIn("do not probe every integration", lower)

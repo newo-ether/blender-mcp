@@ -306,8 +306,9 @@ python -m pip install ./blender_mcp-1.11.1-py3-none-any.whl
 3. 选择 `blender_mcp-<version>.zip`，无需解压。
 4. 启用 **Blender MCP**。
 
-旧版源码安装仍可用于 Blender 3.x，但需要将 [addon.py](addon.py) 与
-[blender_mcp_addon_runtime.py](blender_mcp_addon_runtime.py) 放在同一目录；该方式不支持几何节点 v1 协议，本项目也不保证这部分功能与新版一致。
+插件仅以 Blender 4.2+ Extension ZIP 作为正式分发方式。旧的 Blender 3.x
+单文件源码安装已经移除，使 Blender 运行时代码可以按经过测试的领域模块维护，
+不再生成一个巨型插件文件。
 
 ### 手动安装 Agent Skill
 
@@ -428,13 +429,14 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([str
 git clone https://github.com/newo-ether/blender-mcp.git
 cd blender-mcp
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --editable .
+.\.venv\Scripts\python.exe -m pip install --editable ".[test]"
 ```
 
-运行 JSON Schema 测试：
+运行 Python 单元与结构测试：
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+.\.venv\Scripts\ruff.exe check blender_extension src scripts tests --select F401,F821,F822,F823
+.\.venv\Scripts\python.exe -m pytest
 ```
 
 运行 Blender 偏好设置保留测试：
@@ -461,14 +463,17 @@ py -3 -m venv .venv
 
 ```powershell
 .\scripts\build_release.ps1 `
-  -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+  -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" `
+  -PythonPath .\.venv\Scripts\python.exe
 ```
 
 | 路径 | 用途 |
 | --- | --- |
-| [addon.py](addon.py) | Blender 插件与扩展主源码。 |
-| [blender_mcp_addon_runtime.py](blender_mcp_addon_runtime.py) | 实例注册与 AI 占用提示运行时辅助模块。 |
-| [src/blender_mcp/server.py](src/blender_mcp/server.py) | Python MCP 服务端。 |
+| [blender_extension](blender_extension) | Blender 4.2+ Extension 源码、manifest、桥接、节点、供应商和 UI 模块。 |
+| [src/blender_mcp/app.py](src/blender_mcp/app.py) | Python MCP stdio 应用组合入口。 |
+| [src/blender_mcp/tools](src/blender_mcp/tools) | 按实例、场景、文档、节点和供应商分组的 MCP 工具。 |
+| [src/blender_mcp/transport](src/blender_mcp/transport) | 本地 Blender Socket 传输与实例路由。 |
+| [src/blender_mcp/protocol](src/blender_mcp/protocol) | 纯 Python 错误类型与结构化节点协议。 |
 | [bootstrap.ps1](bootstrap.ps1) | 纯 ASCII 的一行安装入口，用于取得本地化安装器。 |
 | [install.ps1](install.ps1) | 可直接阅读的 Windows Release 安装器。 |
 | [scripts/build_release.ps1](scripts/build_release.ps1) | Release 文件构建脚本。 |
@@ -482,7 +487,7 @@ py -3 -m venv .venv
 
 ## 上游与致谢
 
-本仓库基于 [ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp) 开发，原项目由 [Siddharth Ahuja](https://x.com/sidahuj) 创建。
+本项目最初基于 [ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp)，原项目由 [Siddharth Ahuja](https://x.com/sidahuj) 创建。当前 Extension、MCP 主机、安装器、协议与发布结构均独立维护，构建和运行时不依赖上游仓库。
 
 上游资源：
 

@@ -10,7 +10,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$BlenderPath,
 
-    [string]$OutputDirectory = ""
+    [string]$OutputDirectory = "",
+
+    [string]$PythonPath = ""
 )
 
 Set-StrictMode -Version 2.0
@@ -21,9 +23,18 @@ if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $root "dist"
 }
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
-$python = Join-Path $root ".venv\Scripts\python.exe"
+if ($PythonPath) {
+    $python = [System.IO.Path]::GetFullPath($PythonPath)
+}
+else {
+    $pythonCommand = Get-Command python -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $pythonCommand) {
+        throw "Python was not found on PATH. Pass -PythonPath with a Python 3.10+ executable."
+    }
+    $python = $pythonCommand.Source
+}
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
-    throw "Create .venv before building release assets: $python"
+    throw "Python executable not found: $python"
 }
 if (-not (Test-Path -LiteralPath $BlenderPath -PathType Leaf)) {
     throw "Blender executable not found: $BlenderPath"
@@ -48,7 +59,7 @@ Write-Host "[1/5] Building Blender Extension ZIP..." -ForegroundColor Cyan
 if ($LASTEXITCODE -ne 0) { throw "Blender Extension build failed." }
 
 Write-Host "[2/5] Building Python wheel..." -ForegroundColor Cyan
-& $python -m pip wheel --quiet --no-deps --wheel-dir $output $root
+& $python -m build --wheel --outdir $output $root
 if ($LASTEXITCODE -ne 0) { throw "Python wheel build failed." }
 
 Write-Host "[3/5] Building portable Agent Skill ZIP..." -ForegroundColor Cyan
@@ -71,7 +82,7 @@ try {
     $schemaStage = Join-Path $mcpbStage "server\schemas"
     New-Item -ItemType Directory -Path $pythonStage -Force | Out-Null
     New-Item -ItemType Directory -Path $schemaStage -Force | Out-Null
-    Copy-Item -Path (Join-Path $root "src\blender_mcp\*.py") -Destination $pythonStage -Force
+    Copy-Item -Path (Join-Path $root "src\blender_mcp\*") -Destination $pythonStage -Recurse -Force
     Copy-Item -Path (Join-Path $root "schemas\*.json") -Destination $schemaStage -Force
 
     $stagedManifest = Join-Path $mcpbStage "manifest.json"

@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-from pathlib import Path
 import sys
 import tempfile
+from pathlib import Path
 
 import bpy
 
@@ -24,7 +24,12 @@ def load_addon(path):
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load add-on: {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 

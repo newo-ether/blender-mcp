@@ -1,0 +1,1 @@
+"""Blender MCP nodes package."""

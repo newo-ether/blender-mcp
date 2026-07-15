@@ -7,7 +7,6 @@ import sys
 
 import bpy
 
-
 MODULE_ID = "bl_ext.user_default.blender_mcp"
 
 

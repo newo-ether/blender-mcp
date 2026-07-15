@@ -10,7 +10,6 @@ from pathlib import Path
 
 import bpy
 
-
 PREFIX = "__BLENDER_MCP_SC_LINKED__"
 RESULT_PREFIX = "BLENDER_MCP_SC_LINKED_RESULT="
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -79,7 +78,7 @@ def main():
         linked_shader = bpy.data.node_groups[names["shader_group"]]
         linked_compositor = bpy.data.node_groups[names["compositor_group"]]
         namespace = runpy.run_path(
-            str(REPO_ROOT / "addon.py"),
+            str(REPO_ROOT / "tests" / "blender_extension_namespace.py"),
             run_name="blender_mcp_node_linked_test",
         )
         server = namespace["BlenderMCPServer"]()

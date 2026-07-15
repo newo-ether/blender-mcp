@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import runpy
 import sys
 import time
 import traceback
+from pathlib import Path
 
 import bpy
-
 
 PREFIX = "__BLENDER_MCP_GN_SCALE_TEST__"
 RESULT_PREFIX = "BLENDER_MCP_GN_SCALE_RESULT="
@@ -80,7 +79,7 @@ def build_chain_tree(suffix, transform_count):
 def run_test():
     cleanup()
     namespace = runpy.run_path(
-        str(REPO_ROOT / "addon.py"),
+        str(REPO_ROOT / "tests" / "blender_extension_namespace.py"),
         run_name="blender_mcp_addon_scale_test",
     )
     server = namespace["BlenderMCPServer"]()
@@ -92,17 +91,25 @@ def run_test():
 
     medium_tree, _medium_transforms = build_chain_tree("Medium", 50)
     medium, medium_ms = timed(
-        lambda: server.export_geometry_node_tree(medium_tree.name, "semantic")
+        lambda: server.export_geometry_node_tree(
+            medium_tree.name, "semantic", allow_large_response=True
+        )
     )
     tree, transforms = build_chain_tree("Large", TRANSFORM_COUNT)
     semantic, semantic_ms = timed(
-        lambda: server.export_geometry_node_tree(tree.name, "semantic")
+        lambda: server.export_geometry_node_tree(
+            tree.name, "semantic", allow_large_response=True
+        )
     )
     semantic_repeat, semantic_repeat_ms = timed(
-        lambda: server.export_geometry_node_tree(tree.name, "semantic")
+        lambda: server.export_geometry_node_tree(
+            tree.name, "semantic", allow_large_response=True
+        )
     )
     all_view, all_ms = timed(
-        lambda: server.export_geometry_node_tree(tree.name, "all")
+        lambda: server.export_geometry_node_tree(
+            tree.name, "all", allow_large_response=True
+        )
     )
     center = transforms[len(transforms) // 2].name
     translation = tree.nodes[center].inputs["Translation"]

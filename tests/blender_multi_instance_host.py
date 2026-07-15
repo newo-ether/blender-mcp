@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
-from pathlib import Path
 import sys
 import time
+from pathlib import Path
 
 import bpy
 
@@ -28,7 +28,12 @@ def load_addon(path):
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load add-on: {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
     return module
 
 
@@ -36,6 +41,7 @@ def main():
     args = parse_args()
     os.environ["BLENDER_MCP_RUNTIME_DIR"] = str(Path(args.runtime_dir).resolve())
     addon = load_addon(Path(args.addon).resolve())
+    assert not hasattr(addon, "bl_info"), "Extension runtime must not expose legacy bl_info"
     addon.register()
     bpy.context.scene.name = f"MCP {args.label}"
     bpy.context.scene["multi_instance_label"] = args.label

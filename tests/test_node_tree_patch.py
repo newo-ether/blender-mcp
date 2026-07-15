@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
 import sys
 import tempfile
 import unittest
-
+from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from blender_mcp import node_tree_patch as patch_schema  # noqa: E402
+from blender_mcp.protocol import node_patch as patch_schema  # noqa: E402
 
 
 def sample_patch() -> dict:

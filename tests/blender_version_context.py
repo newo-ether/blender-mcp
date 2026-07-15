@@ -2,7 +2,7 @@
 
 Run with:
     blender --background --factory-startup --python tests/blender_version_context.py -- \
-        --addon addon.py --resolver src/blender_mcp/blender_docs.py
+        --addon blender_extension/__init__.py --resolver src/blender_mcp/documentation/context.py
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import bpy
 
@@ -34,7 +34,12 @@ def main() -> None:
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load add-on module from {addon_path}")
     addon = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(addon)
+    sys.modules[spec.name] = addon
+    try:
+        spec.loader.exec_module(addon)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
 
     resolver_path = Path(args.resolver).resolve()
     resolver_spec = importlib.util.spec_from_file_location(

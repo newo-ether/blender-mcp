@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
 import unittest
-
+from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from blender_mcp import server  # noqa: E402
-from blender_mcp import telemetry_decorator  # noqa: E402
+from blender_mcp.observability import decorators as telemetry_decorator  # noqa: E402
+from blender_mcp.tools import geometry_nodes as server  # noqa: E402
+from blender_mcp.tools import scene as scene_server  # noqa: E402
 
 
 class _SilentTelemetry:
@@ -31,13 +31,16 @@ class _FakeBlenderConnection:
 class RuntimeKnowledgeToolTests(unittest.TestCase):
     def setUp(self):
         self.original_connection = server.get_blender_connection
+        self.original_scene_connection = scene_server.get_blender_connection
         self.original_telemetry = telemetry_decorator.get_telemetry
         self.fake = _FakeBlenderConnection()
         server.get_blender_connection = lambda: self.fake
+        scene_server.get_blender_connection = lambda: self.fake
         telemetry_decorator.get_telemetry = lambda: _SilentTelemetry()
 
     def tearDown(self):
         server.get_blender_connection = self.original_connection
+        scene_server.get_blender_connection = self.original_scene_connection
         telemetry_decorator.get_telemetry = self.original_telemetry
 
     def test_schema_defaults_to_compact_and_forwards_full(self):
@@ -68,7 +71,7 @@ class RuntimeKnowledgeToolTests(unittest.TestCase):
         })
 
     def test_runtime_automation_context_uses_read_only_bridge_command(self):
-        response = json.loads(server.get_runtime_automation_context(None))
+        response = json.loads(scene_server.get_runtime_automation_context(None))
         self.assertEqual(response["command"], "get_runtime_automation_context")
         self.assertIsNone(response["params"])
 

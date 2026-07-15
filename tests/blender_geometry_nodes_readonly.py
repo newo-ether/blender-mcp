@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import runpy
 import sys
 import traceback
+from pathlib import Path
 
 import bpy
-
 
 PREFIX = "__BLENDER_MCP_GN_READONLY_TEST__"
 RESULT_PREFIX = "BLENDER_MCP_GN_READONLY_RESULT="
@@ -131,7 +130,7 @@ def assert_true(condition, message):
 def run_test():
     remove_fixtures()
     namespace = runpy.run_path(
-        str(REPO_ROOT / "addon.py"),
+        str(REPO_ROOT / "tests" / "blender_extension_namespace.py"),
         run_name="blender_mcp_addon_readonly_test",
     )
     server = namespace["BlenderMCPServer"]()

@@ -7,7 +7,6 @@ import traceback
 
 import bpy
 
-
 PREFIX = "__BLENDER_MCP_SC_DYNAMIC__"
 RESULT_PREFIX = "BLENDER_MCP_SC_DYNAMIC_RESULT="
 

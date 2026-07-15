@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from blender_mcp.node_tree_patch import validate_patch_structure
-from blender_mcp.node_tree_schema import validate_snapshot_structure
+from blender_mcp.protocol.node_patch import validate_patch_structure
+from blender_mcp.protocol.node_tree import validate_snapshot_structure
 
 
 class PublicNodeExampleTests(unittest.TestCase):

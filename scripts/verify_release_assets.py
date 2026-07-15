@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-from pathlib import Path, PurePosixPath
 import re
+from pathlib import Path, PurePosixPath
+
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 import zipfile
-
 
 ROOT = Path(__file__).resolve().parents[1]
 HASH_LINE = re.compile(r"^([0-9a-f]{64})  (\S+)$")
@@ -79,8 +79,9 @@ def verify(dist: Path, version: str) -> list[Path]:
     require_member(extension_names, "schemas/node-tree-patch-v1.json", assets[0])
 
     wheel_names = archive_files(assets[1])
-    require_member(wheel_names, "blender_mcp/server.py", assets[1])
-    require_member(wheel_names, "blender_mcp/node_tree_patch.py", assets[1])
+    require_member(wheel_names, "blender_mcp/app.py", assets[1])
+    require_member(wheel_names, "blender_mcp/tools/nodes.py", assets[1])
+    require_member(wheel_names, "blender_mcp/protocol/node_patch.py", assets[1])
     require_suffix(
         wheel_names, "/blender_mcp/schemas/node-tree-v1.json", assets[1]
     )
@@ -91,7 +92,8 @@ def verify(dist: Path, version: str) -> list[Path]:
     mcpb_names = archive_files(assets[2])
     require_suffix(mcpb_names, "/manifest.json", assets[2])
     require_suffix(mcpb_names, "/server/run.cmd", assets[2])
-    require_suffix(mcpb_names, "/server/python/blender_mcp/server.py", assets[2])
+    require_suffix(mcpb_names, "/server/python/blender_mcp/app.py", assets[2])
+    require_suffix(mcpb_names, "/server/python/blender_mcp/tools/nodes.py", assets[2])
     require_suffix(mcpb_names, "/server/schemas/node-tree-v1.json", assets[2])
 
     skill_root = ROOT / "skills" / "blender-mcp"

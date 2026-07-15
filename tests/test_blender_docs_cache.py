@@ -1,24 +1,24 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
 import tempfile
 import unittest
-
+from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from blender_mcp import blender_docs_cache as cache  # noqa: E402
-from blender_mcp.blender_docs_retrieval import (  # noqa: E402
+from blender_mcp.documentation import cache  # noqa: E402
+from blender_mcp.documentation.context import (
+    resolve_documentation_context,  # noqa: E402
+)
+from blender_mcp.documentation.retrieval import (  # noqa: E402
     BlenderDocumentationClient,
     BlenderDocumentationRetrievalError,
     FetchedDocument,
 )
-from blender_mcp.blender_docs import resolve_documentation_context  # noqa: E402
-
 
 URL_51 = "https://docs.blender.org/manual/en/5.1/index.html"
 URL_52 = "https://docs.blender.org/manual/en/dev/index.html"

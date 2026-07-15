@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
 import unittest
-
+from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from blender_mcp import server  # noqa: E402
-from blender_mcp import telemetry_decorator  # noqa: E402
+from blender_mcp.observability import decorators as telemetry_decorator  # noqa: E402
+from blender_mcp.protocol.errors import BlenderMCPError  # noqa: E402
+from blender_mcp.tools import documentation as server  # noqa: E402
 
 
 class _SilentTelemetry:
@@ -90,7 +90,7 @@ class BlenderDocumentationToolTests(unittest.TestCase):
         server.get_blender_connection = lambda: (_ for _ in ()).throw(
             AssertionError("invalid request unexpectedly connected to Blender")
         )
-        with self.assertRaises(server.BlenderMCPError) as captured:
+        with self.assertRaises(BlenderMCPError) as captured:
             server.get_blender_documentation_context(
                 None,
                 version="https://example.com",

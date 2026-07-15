@@ -1,12 +1,13 @@
-"""Blender integration through the Model Context Protocol."""
+"""Blender MCP host package."""
 
 from importlib.metadata import PackageNotFoundError, version
 
 try:
     __version__ = version("blender-mcp")
 except PackageNotFoundError:
-    # Package is not installed (e.g. running from a source checkout)
     __version__ = "unknown"
 
-# Expose key classes and functions for easier imports
-from .server import BlenderConnection, get_blender_connection
+from .host import get_blender_connection
+from .transport.connection import BlenderConnection
+
+__all__ = ["BlenderConnection", "__version__", "get_blender_connection"]

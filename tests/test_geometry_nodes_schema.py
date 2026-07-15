@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from pathlib import Path
 import tempfile
 import unittest
-
+from pathlib import Path
 
 MODULE_PATH = (
     Path(__file__).resolve().parents[1]
     / "src"
     / "blender_mcp"
-    / "geometry_nodes_schema.py"
+    / "protocol"
+    / "geometry_nodes.py"
 )
 SPEC = importlib.util.spec_from_file_location("geometry_nodes_schema_test", MODULE_PATH)
 schema = importlib.util.module_from_spec(SPEC)

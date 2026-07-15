@@ -1,0 +1,80 @@
+{
+  "schema": "blender-mcp-test-runtimes/1",
+  "versions": {
+    "4.2": {
+      "version": "4.2.22",
+      "artifacts": {
+        "windows-x86_64": {
+          "filename": "blender-4.2.22-windows-x64.zip",
+          "sha256": "8ecc0531bbe6e154e9e680aaf417de9fa8882cf81ee7221706ce01e6163b4744",
+          "executable": "blender-4.2.22-windows-x64/blender.exe"
+        },
+        "linux-x86_64": {
+          "filename": "blender-4.2.22-linux-x64.tar.xz",
+          "sha256": "b0064f2879b269787375f6b9021fefa6ae478e1d16aca839f5c63ac36fb02fe3",
+          "executable": "blender-4.2.22-linux-x64/blender"
+        },
+        "darwin-arm64": {
+          "filename": "blender-4.2.22-macos-arm64.dmg",
+          "sha256": "d177dc0f99024a51c6cc770e7920b302b2740ccc177ae8437c9294fdbd749e8f",
+          "executable": "Blender.app/Contents/MacOS/Blender"
+        },
+        "darwin-x86_64": {
+          "filename": "blender-4.2.22-macos-x64.dmg",
+          "sha256": "b25f8fe3a16fe5b82beabad0c5dbe9ed310b16a9d9016bb4bac390bc172a8117",
+          "executable": "Blender.app/Contents/MacOS/Blender"
+        }
+      }
+    },
+    "5.1": {
+      "version": "5.1.2",
+      "artifacts": {
+        "windows-x86_64": {
+          "filename": "blender-5.1.2-windows-x64.zip",
+          "sha256": "345bedea7b0acf7cc9666423d8553f9129622aea34ded65c23e8cb70f83f14ff",
+          "executable": "blender-5.1.2-windows-x64/blender.exe"
+        },
+        "windows-arm64": {
+          "filename": "blender-5.1.2-windows-arm64.zip",
+          "sha256": "91d39ca72ed4862724eb4398ccfc11913e0650654175efed72023efd7748960e",
+          "executable": "blender-5.1.2-windows-arm64/blender.exe"
+        },
+        "linux-x86_64": {
+          "filename": "blender-5.1.2-linux-x64.tar.xz",
+          "sha256": "aaccb355f50183979b698bcce7467103a76261b5fa59f4972295842662a285fb",
+          "executable": "blender-5.1.2-linux-x64/blender"
+        },
+        "darwin-arm64": {
+          "filename": "blender-5.1.2-macos-arm64.dmg",
+          "sha256": "f104ffee2ba6aee32328e5c203b7e4608d8a1745f7bbcf2766f3b9777e8fbe17",
+          "executable": "Blender.app/Contents/MacOS/Blender"
+        }
+      }
+    },
+    "5.2": {
+      "version": "5.2.0",
+      "artifacts": {
+        "windows-x86_64": {
+          "filename": "blender-5.2.0-windows-x64.zip",
+          "sha256": "2d184b626c001692c362291911293b6a297179d618d95e9e9192c3a80318adc4",
+          "executable": "blender-5.2.0-windows-x64/blender.exe"
+        },
+        "windows-arm64": {
+          "filename": "blender-5.2.0-windows-arm64.zip",
+          "sha256": "c00b6a5d80456d9299865ab4db730b7c93b0af4ae77d707548f886692786d881",
+          "executable": "blender-5.2.0-windows-arm64/blender.exe"
+        },
+        "linux-x86_64": {
+          "filename": "blender-5.2.0-linux-x64.tar.xz",
+          "sha256": "96f6c181a30f4950607839dc84d42a354b250d8a0231b098b59b7bc69c351c48",
+          "executable": "blender-5.2.0-linux-x64/blender"
+        },
+        "darwin-arm64": {
+          "filename": "blender-5.2.0-macos-arm64.dmg",
+          "sha256": "ed4d8390166dec5ea0a2813a03db6221f206ce016442be7f59f41d760972568a",
+          "executable": "Blender.app/Contents/MacOS/Blender"
+        }
+      }
+    }
+  }
+}

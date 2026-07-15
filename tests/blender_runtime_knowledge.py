@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-from pathlib import Path
 import sys
 import tempfile
+from pathlib import Path
 
 import bpy
 
@@ -28,7 +28,12 @@ def main() -> None:
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load add-on module from {addon_path}")
     addon = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(addon)
+    sys.modules[spec.name] = addon
+    try:
+        spec.loader.exec_module(addon)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
     server = object.__new__(addon.BlenderMCPServer)
 
     before_scenes = len(bpy.data.scenes)

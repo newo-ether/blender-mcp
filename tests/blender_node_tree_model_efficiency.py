@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import math
-from pathlib import Path
 import runpy
 import time
 import traceback
+from pathlib import Path
 
 import bpy
-
 
 PREFIX = "__BLENDER_MCP_NODE_EFFICIENCY__"
 RESULT_PREFIX = "BLENDER_MCP_NODE_EFFICIENCY_RESULT="
@@ -301,7 +300,7 @@ def run_test():
     cleanup()
     active_scene = bpy.context.scene
     namespace = runpy.run_path(
-        str(REPO_ROOT / "addon.py"),
+        str(REPO_ROOT / "tests" / "blender_extension_namespace.py"),
         run_name="blender_mcp_node_efficiency_test",
     )
     server = namespace["BlenderMCPServer"]()

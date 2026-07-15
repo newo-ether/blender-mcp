@@ -5,30 +5,32 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from blender_mcp.errors import BlenderMCPError  # noqa: E402
-from blender_mcp.instance_registry import (  # noqa: E402
+from blender_mcp.protocol.errors import BlenderMCPError  # noqa: E402
+from blender_mcp.transport.connection import BlenderConnection  # noqa: E402
+from blender_mcp.transport.instances import (  # noqa: E402
     InstanceConnectionManager,
     discover_registry_records,
 )
-from blender_mcp.server import BlenderConnection  # noqa: E402
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--blender", action="append", required=True)
-    parser.add_argument("--addon", default=str(ROOT / "addon.py"))
+    parser.add_argument(
+        "--addon",
+        default=str(ROOT / "blender_extension" / "__init__.py"),
+    )
     parser.add_argument("--timeout", type=float, default=30.0)
     return parser.parse_args()
 
@@ -65,15 +67,32 @@ def main():
         raise ValueError("Pass exactly two --blender executables")
     host_script = Path(__file__).with_name("blender_multi_instance_host.py")
     processes = []
-    with tempfile.TemporaryDirectory(prefix="blender-mcp-multi-") as directory:
+    state_root_value = os.environ.get("BLENDER_MCP_TEST_STATE_ROOT")
+    state_root = Path(state_root_value).resolve() if state_root_value else None
+    if state_root is not None:
+        state_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="blender-mcp-multi-", dir=state_root
+    ) as directory:
+        directory_path = Path(directory)
         runtime = Path(directory) / "registry"
         runtime.mkdir()
         stop_files = [Path(directory) / f"stop-{index}" for index in range(2)]
+        log_paths = [directory_path / f"blender-{index}.log" for index in range(2)]
+        log_handles = []
+        failure = None
         try:
             for index, blender in enumerate(args.blender):
+                isolated_config = directory_path / f"config-{index}"
+                isolated_config.mkdir()
+                environment = os.environ.copy()
+                environment["BLENDER_USER_CONFIG"] = str(isolated_config)
+                log_handle = log_paths[index].open("w", encoding="utf-8")
+                log_handles.append(log_handle)
                 command = [
                     str(Path(blender).resolve()),
                     "--factory-startup",
+                    "--disable-autoexec",
                     "--python",
                     str(host_script),
                     "--",
@@ -91,8 +110,9 @@ def main():
                 processes.append(subprocess.Popen(
                     command,
                     cwd=ROOT,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    env=environment,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 ))
 
@@ -107,6 +127,7 @@ def main():
                 "two ready Blender registrations",
             )
             raw_records = [item.record for item in discovered]
+            assert not list(runtime.glob("*.tmp")), "Registry publication left temporary files behind"
             assert len({item["instance_id"] for item in raw_records}) == 2
             assert len({item["file_session_id"] for item in raw_records}) == 2
             assert len({item["port"] for item in raw_records}) == 2
@@ -161,6 +182,8 @@ def main():
                 "wrong_target_mutations": 0,
                 "isolated_values": ["first-only", "second-only"],
             }, sort_keys=True))
+        except Exception as error:
+            failure = error
         finally:
             for stop_file in stop_files:
                 stop_file.touch(exist_ok=True)
@@ -170,6 +193,16 @@ def main():
                 except subprocess.TimeoutExpired:
                     process.terminate()
                     process.wait(timeout=5)
+            for log_handle in log_handles:
+                log_handle.close()
+        if failure is not None:
+            diagnostics = []
+            for index, log_path in enumerate(log_paths):
+                output = log_path.read_text(encoding="utf-8", errors="replace")
+                diagnostics.append(f"Blender {index + 1}:\n{output[-8000:]}")
+            raise RuntimeError(
+                f"{failure}\n\n" + "\n\n".join(diagnostics)
+            ) from failure
 
 
 if __name__ == "__main__":

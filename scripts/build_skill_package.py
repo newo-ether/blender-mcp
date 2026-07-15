@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path, PurePosixPath
+
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 import zipfile
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = ROOT / "skills" / "blender-mcp"

@@ -7,7 +7,6 @@ import traceback
 
 import bpy
 
-
 PREFIX = "__BLENDER_MCP_SC_N0__"
 RESULT_PREFIX = "BLENDER_MCP_SC_N0_RESULT="
 

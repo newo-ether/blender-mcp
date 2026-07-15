@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import runpy
 import sys
 import tempfile
 import traceback
+from pathlib import Path
 
 import bpy
-
 
 PREFIX = "__BLENDER_MCP_GN_LINKED_TEST__"
 RESULT_PREFIX = "BLENDER_MCP_GN_LINKED_RESULT="
@@ -31,7 +30,7 @@ def assert_true(condition, message):
 def run_test():
     cleanup()
     namespace = runpy.run_path(
-        str(REPO_ROOT / "addon.py"),
+        str(REPO_ROOT / "tests" / "blender_extension_namespace.py"),
         run_name="blender_mcp_addon_linked_test",
     )
     server = namespace["BlenderMCPServer"]()

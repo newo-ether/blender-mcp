@@ -4,42 +4,43 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
+
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 import zipfile
 
-
 ROOT = Path(__file__).resolve().parents[1]
-ADDON_SOURCE = ROOT / "addon.py"
-RUNTIME_SOURCE = ROOT / "blender_mcp_addon_runtime.py"
-MANIFEST_SOURCE = ROOT / "packaging" / "blender_extension" / "blender_manifest.toml"
+EXTENSION_SOURCE = ROOT / "blender_extension"
+VERSION_SOURCE = EXTENSION_SOURCE / "version.py"
+MANIFEST_SOURCE = EXTENSION_SOURCE / "blender_manifest.toml"
 LICENSE_SOURCE = ROOT / "LICENSE"
 PROJECT_SOURCE = ROOT / "pyproject.toml"
 SCHEMA_SOURCE = ROOT / "schemas"
 
 
 def expected_archive_members() -> set[str]:
-    return {
-        "__init__.py",
-        "blender_mcp_addon_runtime.py",
-        "blender_manifest.toml",
-        "LICENSE",
-    } | {
+    python_sources = {
+        path.relative_to(EXTENSION_SOURCE).as_posix()
+        for path in EXTENSION_SOURCE.rglob("*.py")
+    }
+    return python_sources | {"blender_manifest.toml", "LICENSE"} | {
         f"schemas/{path.name}" for path in SCHEMA_SOURCE.glob("*.json")
     }
 
 
 def stage_sources(staging: Path) -> None:
     """Prepare the exact source tree consumed by Blender's official builder."""
-    shutil.copy2(ADDON_SOURCE, staging / "__init__.py")
-    shutil.copy2(RUNTIME_SOURCE, staging / "blender_mcp_addon_runtime.py")
+    for source in EXTENSION_SOURCE.rglob("*.py"):
+        destination = staging / source.relative_to(EXTENSION_SOURCE)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
     shutil.copy2(MANIFEST_SOURCE, staging / "blender_manifest.toml")
     shutil.copy2(LICENSE_SOURCE, staging / "LICENSE")
     shutil.copytree(SCHEMA_SOURCE, staging / "schemas")
@@ -82,6 +83,7 @@ def run_blender(blender: Path, *arguments: str) -> None:
     command = [
         str(blender),
         "--factory-startup",
+        "--disable-autoexec",
         "--command",
         "extension",
         *arguments,

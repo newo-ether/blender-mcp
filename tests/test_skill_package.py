@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sys
 import tempfile
 import unittest
 import zipfile
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -73,8 +72,9 @@ class SkillPackageTests(unittest.TestCase):
             write_archive(
                 wheel,
                 [
-                    "blender_mcp/server.py",
-                    "blender_mcp/node_tree_patch.py",
+                    "blender_mcp/app.py",
+                    "blender_mcp/tools/nodes.py",
+                    "blender_mcp/protocol/node_patch.py",
                     "blender_mcp/schemas/node-tree-v1.json",
                     "blender_mcp/schemas/node-tree-patch-v1.json",
                 ],
@@ -84,7 +84,8 @@ class SkillPackageTests(unittest.TestCase):
                 [
                     "manifest.json",
                     "server/run.cmd",
-                    "server/python/blender_mcp/server.py",
+                    "server/python/blender_mcp/app.py",
+                    "server/python/blender_mcp/tools/nodes.py",
                     "server/schemas/node-tree-v1.json",
                 ],
             )

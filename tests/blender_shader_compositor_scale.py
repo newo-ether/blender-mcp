@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import runpy
 import time
 import traceback
+from pathlib import Path
 
 import bpy
-
 
 PREFIX = "__BLENDER_MCP_SC_PERF__"
 RESULT_PREFIX = "BLENDER_MCP_SC_PERF_RESULT="
@@ -128,7 +127,10 @@ def generic_benchmark(server, tree):
 def main():
     cleanup()
     active_scene = bpy.context.scene
-    namespace = runpy.run_path(str(REPO_ROOT / "addon.py"), run_name="n0_perf_addon")
+    namespace = runpy.run_path(
+        str(REPO_ROOT / "tests" / "blender_extension_namespace.py"),
+        run_name="n0_perf_addon",
+    )
     export_tree = namespace["_gn_export_tree"]
     node_record = namespace["_gn_node_record"]
     server = object.__new__(namespace["BlenderMCPServer"])

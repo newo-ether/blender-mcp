@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 
 import httpx
-
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from blender_mcp.blender_docs import resolve_documentation_context  # noqa: E402
-from blender_mcp import blender_docs_retrieval as retrieval  # noqa: E402
-
+from blender_mcp.documentation import retrieval  # noqa: E402
+from blender_mcp.documentation import search as retrieval_search  # noqa: E402
+from blender_mcp.documentation.context import (
+    resolve_documentation_context,  # noqa: E402
+)
 
 MANUAL_INDEX = b"Search.setIndex(" + json.dumps({
     "docnames": [
@@ -353,7 +354,7 @@ class BlenderDocumentationRetrievalTests(unittest.TestCase):
             "terms": {"几何节点": 0},
             "titleterms": {"几何节点": 0},
         }
-        ranked = retrieval._rank_sphinx_index(index, "几何节点")
+        ranked = retrieval_search._rank_sphinx_index(index, "几何节点")
         self.assertEqual(ranked[0]["title"], "几何节点")
         self.assertGreater(ranked[0]["score"], 0)
 

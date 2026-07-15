@@ -389,10 +389,9 @@ Install the Extension in Blender 4.2+:
 3. Select `blender_mcp-<version>.zip` without extracting it.
 4. Enable **Blender MCP**.
 
-The legacy [addon.py](addon.py) source install remains available for Blender 3.x
-when [blender_mcp_addon_runtime.py](blender_mcp_addon_runtime.py) is installed
-beside it, but the
-Geometry Nodes v1 protocol is not supported or claimed there.
+The supported add-on distribution is the Blender 4.2+ Extension ZIP. The former
+single-file Blender 3.x source install was removed so the Blender runtime can be
+maintained as tested domain modules instead of one generated add-on file.
 
 ### Install the Agent Skill manually
 
@@ -547,13 +546,14 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([str
 git clone https://github.com/newo-ether/blender-mcp.git
 cd blender-mcp
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --editable .
+.\.venv\Scripts\python.exe -m pip install --editable ".[test]"
 ```
 
-Run the schema tests:
+Run the Python unit and structure tests:
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+.\.venv\Scripts\ruff.exe check blender_extension src scripts tests --select F401,F821,F822,F823
+.\.venv\Scripts\python.exe -m pytest
 ```
 
 Run the Blender preference-preservation installer test:
@@ -580,14 +580,17 @@ Build all Release assets:
 
 ```powershell
 .\scripts\build_release.ps1 `
-  -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+  -BlenderPath "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" `
+  -PythonPath .\.venv\Scripts\python.exe
 ```
 
 | Path | Purpose |
 | --- | --- |
-| [addon.py](addon.py) | Main Blender add-on and Extension source. |
-| [blender_mcp_addon_runtime.py](blender_mcp_addon_runtime.py) | Instance registry and occupancy UI runtime helpers. |
-| [src/blender_mcp/server.py](src/blender_mcp/server.py) | Python MCP server. |
+| [blender_extension](blender_extension) | Blender 4.2+ Extension source, manifest, bridge, node, provider, and UI modules. |
+| [src/blender_mcp/app.py](src/blender_mcp/app.py) | Python MCP stdio application composition root. |
+| [src/blender_mcp/tools](src/blender_mcp/tools) | MCP tools grouped by instances, scene, documentation, nodes, and providers. |
+| [src/blender_mcp/transport](src/blender_mcp/transport) | Local Blender socket transport and instance routing. |
+| [src/blender_mcp/protocol](src/blender_mcp/protocol) | Pure-Python errors and structured node contracts. |
 | [bootstrap.ps1](bootstrap.ps1) | ASCII one-line entry point that fetches the localized installer. |
 | [install.ps1](install.ps1) | Human-readable Windows Release installer. |
 | [scripts/build_release.ps1](scripts/build_release.ps1) | Release asset builder. |
@@ -601,9 +604,11 @@ Contributions and issue reports are welcome.
 
 ## Upstream and credits
 
-This repository is a fork of
+This project originated as a fork of
 [ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp), created by
-[Siddharth Ahuja](https://x.com/sidahuj).
+[Siddharth Ahuja](https://x.com/sidahuj). Its current Extension, MCP host,
+installer, protocol, and release structure are maintained independently and do
+not require the upstream repository at build time or runtime.
 
 Upstream resources:
 

@@ -17,3 +17,16 @@ src/blender_mcp/config.py
 
 # Local Codex plans and execution logs
 .codex/
+
+# Repository-local test runtimes and scratch output
+.test-runtime/
+.tmp*/
+*.tmp
+*.log
+
+# Test and analysis caches
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

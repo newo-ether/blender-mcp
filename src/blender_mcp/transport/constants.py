@@ -1,0 +1,6 @@
+"""Stable defaults for the local Blender bridge transport."""
+
+DEFAULT_BRIDGE_HOST = "127.0.0.1"
+DEFAULT_BRIDGE_PORT = 9876
+BRIDGE_RESPONSE_TIMEOUT_SECONDS = 180.0
+BRIDGE_RECEIVE_BUFFER_BYTES = 8192

@@ -169,7 +169,7 @@ benchmark or a guaranteed task success rate.
 | 4.2 LTS | Manifest minimum; intended version boundary | Not locally verified |
 | 5.1.2 | Build, validate, fresh install, enable/disable pass | Full acceptance pass |
 | 5.2 LTS RC | Validate, fresh install, enable/disable pass | Full acceptance pass |
-| 3.x | Legacy `addon.py` installation remains available | Not supported or claimed for this protocol |
+| 3.x | Not packaged; use the Blender 4.2+ Extension | Not supported |
 
 The implementation uses runtime feature detection for modifier interface values:
 Blender 5.1 uses legacy modifier ID properties, while Blender 5.2 exposes the

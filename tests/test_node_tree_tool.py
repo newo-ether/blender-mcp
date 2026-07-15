@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import sys
 import unittest
-
+from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from blender_mcp import server  # noqa: E402
-from blender_mcp import telemetry_decorator  # noqa: E402
+from blender_mcp.observability import decorators as telemetry_decorator  # noqa: E402
+from blender_mcp.tools import node_trees as server  # noqa: E402
+from blender_mcp.transport.connection import _redact_command_params  # noqa: E402
 
 
 class _SilentTelemetry:
@@ -80,7 +80,7 @@ class NodeTreeToolTests(unittest.TestCase):
         })
 
     def test_bridge_log_redaction_hides_claims_code_and_nested_credentials(self):
-        redacted = server._redact_command_params({
+        redacted = _redact_command_params({
             "_claim_token": "claim-secret",
             "code": "print('private')",
             "nested": {"api_key": "provider-secret", "name": "safe"},

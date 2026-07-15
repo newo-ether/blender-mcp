@@ -7,17 +7,18 @@ offline; this smoke test detects upstream Sphinx/MkDocs layout changes.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import sys
 import unittest
-
+from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from blender_mcp.blender_docs import resolve_documentation_context  # noqa: E402
-from blender_mcp.blender_docs_retrieval import BlenderDocumentationClient  # noqa: E402
+from blender_mcp.documentation.context import (
+    resolve_documentation_context,  # noqa: E402
+)
+from blender_mcp.documentation.retrieval import BlenderDocumentationClient  # noqa: E402
 
 
 @unittest.skipUnless(

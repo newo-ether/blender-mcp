@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import base64
 import json
-from pathlib import Path
 import runpy
 import traceback
+from pathlib import Path
 
 import bpy
-
 
 PREFIX = "__BLENDER_MCP_NODE_CORNERS__"
 RESULT_PREFIX = "BLENDER_MCP_NODE_CORNERS_RESULT="
@@ -76,11 +75,12 @@ def run_test():
     bpy.utils.register_class(BlenderMCPTestCustomShaderNode)
     CUSTOM_REGISTERED = True
     namespace = runpy.run_path(
-        str(REPO_ROOT / "addon.py"),
+        str(REPO_ROOT / "tests" / "blender_extension_namespace.py"),
         run_name="blender_mcp_node_corner_cases_test",
     )
     server = namespace["BlenderMCPServer"]()
     runtime_globals = namespace["BlenderMCPServer"].export_node_tree.__globals__
+    from blender_extension.nodes import node_validation as patch_runtime
 
     unicode_name = PREFIX + "着色器_ノード_🎨"
     shader = bpy.data.node_groups.new(unicode_name, "ShaderNodeTree")
@@ -293,18 +293,18 @@ def run_test():
         [{"op": "add_node", "id": "limit", "node_type": "NodeFrame"}],
         ["graph"],
     )
-    mutation_limit = runtime_globals["NODE_TREE_MAX_MUTATION_NODES"]
-    runtime_globals["NODE_TREE_MAX_MUTATION_NODES"] = len(committed_concurrency.nodes)
+    mutation_limit = patch_runtime.NODE_TREE_MAX_MUTATION_NODES
+    patch_runtime.NODE_TREE_MAX_MUTATION_NODES = len(committed_concurrency.nodes)
     projected_limit = server.validate_node_tree_patch(limit_patch)
-    runtime_globals["NODE_TREE_MAX_MUTATION_NODES"] = mutation_limit
+    patch_runtime.NODE_TREE_MAX_MUTATION_NODES = mutation_limit
     assert_true(
         "projected_tree_node_limit_exceeded" in diagnostic_codes(projected_limit),
         "projected graph-size limit was not enforced",
     )
-    validation_limit = runtime_globals["NODE_TREE_MAX_VALIDATION_SECONDS"]
-    runtime_globals["NODE_TREE_MAX_VALIDATION_SECONDS"] = 0.0
+    validation_limit = patch_runtime.NODE_TREE_MAX_VALIDATION_SECONDS
+    patch_runtime.NODE_TREE_MAX_VALIDATION_SECONDS = 0.0
     timed_limit = server.validate_node_tree_patch(limit_patch)
-    runtime_globals["NODE_TREE_MAX_VALIDATION_SECONDS"] = validation_limit
+    patch_runtime.NODE_TREE_MAX_VALIDATION_SECONDS = validation_limit
     assert_true(
         "validation_time_limit_exceeded" in diagnostic_codes(timed_limit),
         "validation time limit was not reported",

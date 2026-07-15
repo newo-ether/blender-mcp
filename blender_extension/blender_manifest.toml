@@ -1,0 +1,77 @@
+schema_version = "1.0.0"
+
+id = "blender_mcp"
+version = "1.11.1"
+name = "Blender MCP"
+tagline = "Connect Blender to Model Context Protocol clients"
+maintainer = "BlenderMCP Contributors"
+type = "add-on"
+
+website = "https://github.com/newo-ether/blender-mcp"
+tags = ["User Interface"]
+
+blender_version_min = "4.2.0"
+license = ["SPDX:MIT"]
+copyright = ["2025 Siddharth Ahuja"]
+
+[permissions]
+network = "Connect to MCP clients and optional asset services"
+files = "Import and export user-selected assets and data"
+
+[build]
+paths = [
+  "__init__.py",
+  "automation.py",
+  "errors.py",
+  "lifecycle.py",
+  "preferences.py",
+  "runtime.py",
+  "state.py",
+  "ui.py",
+  "version.py",
+  "bridge/__init__.py",
+  "bridge/constants.py",
+  "bridge/lifecycle.py",
+  "bridge/nodes.py",
+  "bridge/scene.py",
+  "bridge/server.py",
+  "nodes/__init__.py",
+  "nodes/common.py",
+  "nodes/compositor.py",
+  "nodes/constants.py",
+  "nodes/diagnostics.py",
+  "nodes/export.py",
+  "nodes/geometry_operations.py",
+  "nodes/geometry_transactions.py",
+  "nodes/geometry_validation.py",
+  "nodes/modifiers.py",
+  "nodes/node_transactions.py",
+  "nodes/node_validation.py",
+  "nodes/patch.py",
+  "nodes/patch_operations.py",
+  "nodes/patch_values.py",
+  "nodes/query.py",
+  "nodes/schema.py",
+  "nodes/serialization.py",
+  "nodes/targets.py",
+  "nodes/workflow.py",
+  "providers/__init__.py",
+  "providers/generation.py",
+  "providers/hunyuan.py",
+  "providers/hyper3d.py",
+  "providers/polyhaven.py",
+  "providers/sketchfab.py",
+  "providers/status.py",
+  "LICENSE",
+  "schemas/geometry-nodes-index-v1.json",
+  "schemas/geometry-nodes-patch-application-v1.json",
+  "schemas/geometry-nodes-patch-v1.json",
+  "schemas/geometry-nodes-patch-validation-v1.json",
+  "schemas/geometry-nodes-v1.json",
+  "schemas/node-tree-index-v1.json",
+  "schemas/node-tree-patch-application-v1.json",
+  "schemas/node-tree-patch-v1.json",
+  "schemas/node-tree-patch-validation-v1.json",
+  "schemas/node-tree-v1.json",
+  "schemas/node-type-schema-v1.json",
+]

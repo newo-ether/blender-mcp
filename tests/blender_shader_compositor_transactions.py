@@ -10,7 +10,6 @@ from pathlib import Path
 
 import bpy
 
-
 PREFIX = "__BLENDER_MCP_SC_TX__"
 RESULT_PREFIX = "BLENDER_MCP_SC_TX_RESULT="
 

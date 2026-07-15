@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import runpy
 import tempfile
 import traceback
+from pathlib import Path
 
 import bpy
-
 
 PREFIX = "__BLENDER_MCP_NODE_VALIDATE__"
 RESULT_PREFIX = "BLENDER_MCP_NODE_VALIDATE_RESULT="
@@ -100,7 +99,7 @@ def run_test():
     cleanup()
     active_scene = bpy.context.scene
     namespace = runpy.run_path(
-        str(REPO_ROOT / "addon.py"),
+        str(REPO_ROOT / "tests" / "blender_extension_namespace.py"),
         run_name="blender_mcp_node_validation_test",
     )
     server = namespace["BlenderMCPServer"]()

@@ -5,12 +5,11 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-from pathlib import Path
 import sys
 import traceback
+from pathlib import Path
 
 import bpy
-
 
 PREFIX = "BlenderMCP_CompositorInit_"
 
@@ -46,7 +45,12 @@ def load_addon():
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load add-on module from {addon_path}")
     addon = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(addon)
+    sys.modules[spec.name] = addon
+    try:
+        spec.loader.exec_module(addon)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
     return addon
 
 
