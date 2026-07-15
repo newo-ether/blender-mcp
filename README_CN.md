@@ -52,7 +52,7 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([str
 5. 安装到 `%LOCALAPPDATA%\BlenderMCP\venv-1.11.0` 这样的版本专用环境；
 6. 将服务端和扩展安装到每个选中的 Blender 版本，同时保留原有的 Blender 偏好设置；
 7. 为选中的客户端添加或更新名为 `blender_mcp` 的配置项；
-8. 为选中的 Codex 和 Claude Code 安装同一份可移植 Skill，并为 Claude Desktop 准备已校验的上传 ZIP。
+8. 为选中的 Codex 和 Claude Code 安装同一份可移植 Skill，并为 Claude Desktop 准备已校验的上传 ZIP；安装结束时明确提醒仍需手动上传，不会把它报告为已安装。
 
 安装器可以反复运行，不会重复添加配置。Codex 中完全一致的配置会保持不变；如果用户配置中已有同名但内容不同的 `blender_mcp`，Codex、Claude Code 和 Claude Desktop 都会直接更新原配置。如需保留自定义设置，请使用 `-PreserveExistingMcpEntries`。
 

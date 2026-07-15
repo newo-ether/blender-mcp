@@ -68,7 +68,8 @@ Before changing the machine, the installer:
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients;
 8. installs the same portable Skill for selected Codex and Claude Code clients,
-   and prepares a verified upload ZIP for Claude Desktop.
+   and prepares a verified upload ZIP for Claude Desktop with an explicit
+   action-required reminder; Desktop upload is not reported as installed.
 
 Updates are idempotent: an exact matching Codex entry is left alone, while a
 different `blender_mcp` Codex, Claude Code, or Claude Desktop user entry is replaced in place.

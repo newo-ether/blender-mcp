@@ -202,6 +202,38 @@ function Write-WarningLine {
     Write-Host "  [!]  $Message" -ForegroundColor Yellow
 }
 
+function Write-ClaudeDesktopSkillUploadReminder {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ArchivePath
+    )
+
+    $script:ClaudeDesktopSkillStatus = "manual upload required"
+    Write-WarningLine (L `
+        "Claude Desktop Skill is not installed automatically." `
+        "Claude Desktop Skill 不会自动安装。")
+    Write-Info (L `
+        "Verified upload ZIP: $ArchivePath" `
+        "已校验的上传 ZIP：$ArchivePath")
+    Write-WarningLine (L `
+        "ACTION REQUIRED: in Claude Desktop, open Customize > Skills, choose Create skill, then Upload a skill and select this ZIP." `
+        "需要操作：在 Claude Desktop 中打开「Customize > Skills」，选择「Create skill」，再选择「Upload a skill」并上传此 ZIP。")
+}
+
+function Write-InstallerCompletionHeadline {
+    if ($script:DryRunEnabled) {
+        Write-Host (L "  Dry run completed successfully." "  试运行已成功完成。") -ForegroundColor Green
+        return
+    }
+    if ($script:ClaudeDesktopSkillStatus -eq "manual upload required") {
+        Write-Host (L `
+            "  Blender MCP core installation completed; Claude Desktop Skill upload is still required." `
+            "  Blender MCP 核心安装已完成；Claude Desktop Skill 仍需手动上传。") -ForegroundColor Yellow
+        return
+    }
+    Write-Host (L "  Blender MCP installation completed successfully." "  Blender MCP 安装成功。") -ForegroundColor Green
+}
+
 function Get-AbsolutePath {
     param(
         [string]$Path,
@@ -2492,21 +2524,14 @@ try {
                 Write-Info (L "Would prepare Claude Desktop Skill upload: $skillArchivePath" "将准备 Claude Desktop Skill 上传包：$skillArchivePath")
             }
             else {
-                $script:ClaudeDesktopSkillStatus = "manual upload required"
-                Write-Ok (L "Verified Claude Desktop Skill ZIP: $skillArchivePath" "已校验 Claude Desktop Skill ZIP：$skillArchivePath")
-                Write-Info (L "In Claude Desktop, open Customize > Skills, choose Create skill, then Upload a skill and select this ZIP." "在 Claude Desktop 中打开「Customize > Skills」，选择「Create skill」，再选择「Upload a skill」并上传此 ZIP。")
+                Write-ClaudeDesktopSkillUploadReminder -ArchivePath $skillArchivePath
             }
         }
     }
 
     Write-Step (L "Finished" "完成")
     Write-Host ""
-    if ($script:DryRunEnabled) {
-        Write-Host (L "  Dry run completed successfully." "  试运行已成功完成。") -ForegroundColor Green
-    }
-    else {
-        Write-Host (L "  Blender MCP installation completed successfully." "  Blender MCP 安装成功。") -ForegroundColor Green
-    }
+    Write-InstallerCompletionHeadline
     Write-Info (L "Server        : $serverExecutable" "服务端        ：$serverExecutable")
     Write-Info (L "Blender       : $script:BlenderStatus" "Blender       ：$script:BlenderStatus")
     Write-Info (L "Codex         : $script:CodexStatus" "Codex         ：$script:CodexStatus")
@@ -2548,8 +2573,10 @@ try {
     if ($script:SelectedCodexCli -or $script:SelectedCodexDesktop -or $script:SelectedClaudeCode) {
         Write-Info (L "Start a new client task, or restart the client if the installed Skill is not discovered immediately." "请新建客户端任务；若没有立即发现已安装的 Skill，请重启客户端。")
     }
-    if ($script:SelectedClaudeDesktop -and -not $SkipSkillInstallation) {
-        Write-Info (L "Complete the Blender MCP Skill upload in Claude Desktop." "请在 Claude Desktop 中完成 Blender MCP Skill 上传。")
+    if ($script:ClaudeDesktopSkillStatus -eq "manual upload required") {
+        Write-WarningLine (L `
+            "ACTION REQUIRED: upload the Blender MCP Skill in Claude Desktop from $skillArchivePath" `
+            "需要操作：请在 Claude Desktop 中上传 Blender MCP Skill：$skillArchivePath")
     }
     Write-Host ""
 }

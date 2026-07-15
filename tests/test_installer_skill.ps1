@@ -22,6 +22,23 @@ try {
     Assert-True -Condition ($mainIndex -ge 0) -Message "Could not isolate installer function definitions."
     . ([scriptblock]::Create($source.Substring(0, $mainIndex)))
 
+    $script:UseChinese = $false
+    $script:ClaudeDesktopSkillStatus = "not tested"
+    $desktopReminder = & {
+        Write-ClaudeDesktopSkillUploadReminder -ArchivePath "C:\verified\blender-mcp-skill-test.zip"
+    } 6>&1 | Out-String
+    Assert-True -Condition ($script:ClaudeDesktopSkillStatus -eq "manual upload required") -Message "Claude Desktop reminder did not preserve the pending status."
+    Assert-True -Condition ($desktopReminder -match "not installed automatically") -Message "Claude Desktop reminder does not say that installation is incomplete."
+    Assert-True -Condition ($desktopReminder -match "ACTION REQUIRED") -Message "Claude Desktop reminder does not identify the required user action."
+    Assert-True -Condition ($desktopReminder -match "blender-mcp-skill-test\.zip") -Message "Claude Desktop reminder does not include the verified ZIP path."
+    Assert-True -Condition ($desktopReminder -notmatch "\[OK\]") -Message "Claude Desktop pending upload was incorrectly reported as OK."
+
+    $script:DryRunEnabled = $false
+    $desktopCompletion = & { Write-InstallerCompletionHeadline } 6>&1 | Out-String
+    Assert-True -Condition ($desktopCompletion -match "core installation completed") -Message "Final installer status does not distinguish core completion from pending Desktop Skill upload."
+    Assert-True -Condition ($desktopCompletion -match "still required") -Message "Final installer status does not retain the required Desktop action."
+    Assert-True -Condition ($desktopCompletion -notmatch "installation completed successfully") -Message "Final installer status incorrectly reports complete success while Desktop upload is pending."
+
     New-Item -ItemType Directory -Path $caseRoot -Force | Out-Null
     $testHome = Join-Path $caseRoot "home"
     $project = Join-Path $caseRoot "project"
