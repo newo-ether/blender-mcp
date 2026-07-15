@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 
 <#
 .SYNOPSIS
@@ -13,8 +13,8 @@
     source instead. Use -UseRelease to test the published release path locally.
 
     The installer configures Codex CLI/Desktop and Claude Code when their CLIs
-    are available. Claude Desktop uses the official MCPB package and keeps its
-    required user confirmation.
+    are available. Claude Desktop is configured through its documented JSON
+    file, with the official MCPB flow retained as a confirmation fallback.
 
     It is safe to run repeatedly. Matching Codex entries are retained, managed
     user entries named blender_mcp are updated by default, and Blender treats
@@ -74,7 +74,7 @@ param(
     # Do not add the MCP server to Claude Code's user scope.
     [switch]$SkipClaudeCodeRegistration,
 
-    # Do not download or open the Claude Desktop MCPB package.
+    # Do not configure Claude Desktop or download its fallback MCPB package.
     [switch]$SkipClaudeDesktop,
 
     # Show detected paths and commands without changing the machine.
@@ -84,7 +84,11 @@ param(
     [switch]$Gui,
 
     # Skip the interactive target selector and use detected/default targets.
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+
+    # Installer display language. Auto uses the Windows UI language.
+    [ValidateSet("Auto", "en-US", "zh-CN")]
+    [string]$Language = "Auto"
 )
 
 Set-StrictMode -Version 2.0
@@ -101,16 +105,60 @@ $script:SelectedCodexCli = $false
 $script:SelectedCodexDesktop = $false
 $script:SelectedClaudeCode = $false
 $script:SelectedClaudeDesktop = $false
+$script:ClaudeDesktopMcpbFallbackUsed = $false
+
+function Resolve-InstallerLanguage {
+    param(
+        [string]$RequestedLanguage = "Auto",
+        [string]$UiCultureName = ""
+    )
+
+    if ($RequestedLanguage -ne "Auto") {
+        return $RequestedLanguage
+    }
+    if (-not $UiCultureName) {
+        try {
+            $override = Get-WinUILanguageOverride -ErrorAction SilentlyContinue
+            if ($null -ne $override) { $UiCultureName = [string]$override.Name }
+        }
+        catch {}
+    }
+    if (-not $UiCultureName) {
+        $UiCultureName = [System.Globalization.CultureInfo]::CurrentUICulture.Name
+    }
+    if ($UiCultureName -match '^(?i:zh-(?:CN|Hans)(?:-|$))') {
+        return "zh-CN"
+    }
+    return "en-US"
+}
+
+$script:InstallerLanguage = Resolve-InstallerLanguage -RequestedLanguage $Language
+$script:UseChinese = $script:InstallerLanguage -eq "zh-CN"
+
+function L {
+    param(
+        [Parameter(Mandatory = $true)][string]$English,
+        [Parameter(Mandatory = $true)][string]$Chinese
+    )
+    if ($script:UseChinese) { return $Chinese }
+    return $English
+}
 
 if ($PreserveExistingMcpEntries -and $ForceCodexRegistration) {
-    throw "-PreserveExistingMcpEntries and -ForceCodexRegistration cannot be used together."
+    throw (L `
+        "-PreserveExistingMcpEntries and -ForceCodexRegistration cannot be used together." `
+        "-PreserveExistingMcpEntries 与 -ForceCodexRegistration 不能同时使用。")
 }
 
 function Write-Banner {
     Write-Host ""
     Write-Host "  +----------------------------------------------------------+" -ForegroundColor DarkCyan
-    Write-Host "  |                    Blender MCP Installer                 |" -ForegroundColor Cyan
-    Write-Host "  |       Server + Blender Extension + MCP client setup      |" -ForegroundColor DarkCyan
+    Write-Host (L `
+        "  |                    Blender MCP Installer                 |" `
+        "  |                    Blender MCP 安装器                    |") -ForegroundColor Cyan
+    Write-Host (L `
+        "  |       Server + Blender Extension + MCP client setup      |" `
+        "  |          服务端 + Blender 扩展 + MCP 客户端配置          |") -ForegroundColor DarkCyan
     Write-Host "  +----------------------------------------------------------+" -ForegroundColor DarkCyan
     Write-Host ""
 }
@@ -175,7 +223,7 @@ function Invoke-CheckedCommand {
     )
     $display = Format-CommandLine -FilePath $FilePath -ArgumentList $ArgumentList
     if ($script:DryRunEnabled) {
-        Write-Info "Would run: $display"
+        Write-Info (L "Would run: $display" "将运行：$display")
         return
     }
 
@@ -200,7 +248,9 @@ function Invoke-CheckedCommand {
         $exitCode = $LASTEXITCODE
     }
     if ($null -ne $exitCode -and $exitCode -ne 0) {
-        $message = "Command failed with exit code ${exitCode}: $display"
+        $message = L `
+            "Command failed with exit code ${exitCode}: $display" `
+            "命令执行失败，退出代码 ${exitCode}：$display"
         if ($Quiet -and $capturedOutput.Count -gt 0) {
             $outputLimit = 80
             $outputLines = @($capturedOutput | ForEach-Object { [string]$_ })
@@ -210,7 +260,9 @@ function Invoke-CheckedCommand {
                     $outputLines | Select-Object -Last $outputLimit
                 )
             }
-            $message += "`nCaptured command output:`n$($outputLines -join "`n")"
+            $message += L `
+                "`nCaptured command output:`n$($outputLines -join "`n")" `
+                "`n捕获的命令输出：`n$($outputLines -join "`n")"
         }
         throw $message
     }
@@ -255,7 +307,7 @@ function Get-GitHubRelease {
         [string]$Tag
     )
     if ($Repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
-        throw "GitHub repository must use the owner/name form: $Repo"
+        throw (L "GitHub repository must use the owner/name form: $Repo" "GitHub 仓库必须使用 owner/name 格式：$Repo")
     }
     $headers = @{
         Accept = "application/vnd.github+json"
@@ -272,17 +324,19 @@ function Get-GitHubRelease {
     else {
         $url = "https://api.github.com/repos/$Repo/releases/latest"
     }
-    Write-Info "Querying GitHub Release: $url"
+    Write-Info (L "Querying GitHub Release: $url" "正在查询 GitHub Release：$url")
     try {
         $release = Invoke-RestMethod -Uri $url -Headers $headers -UseBasicParsing
     }
     catch {
-        throw "GitHub Release discovery failed for $Repo. Check the repository, release tag, network, or API rate limit. $($_.Exception.Message)"
+        throw (L `
+            "GitHub Release discovery failed for $Repo. Check the repository, release tag, network, or API rate limit. $($_.Exception.Message)" `
+            "无法查询 $Repo 的 GitHub Release。请检查仓库、版本标签、网络或 API 速率限制。$($_.Exception.Message)")
     }
     $tagNameProperty = $release.PSObject.Properties["tag_name"]
     $assetsProperty = $release.PSObject.Properties["assets"]
     if ($null -eq $tagNameProperty -or -not $tagNameProperty.Value -or $null -eq $assetsProperty) {
-        throw "GitHub returned an incomplete Release response for $Repo."
+        throw (L "GitHub returned an incomplete Release response for $Repo." "GitHub 为 $Repo 返回了不完整的 Release 响应。")
     }
     return $release
 }
@@ -295,7 +349,9 @@ function Get-ReleaseAsset {
     )
     $matches = @($Release.assets | Where-Object { $_.name -like $Pattern })
     if ($matches.Count -ne 1) {
-        throw "Expected one $Purpose asset matching '$Pattern'; found $($matches.Count)."
+        throw (L `
+            "Expected one $Purpose asset matching '$Pattern'; found $($matches.Count)." `
+            "应当找到一个与 '$Pattern' 匹配的 $Purpose 资源，实际找到 $($matches.Count) 个。")
     }
     return $matches[0]
 }
@@ -307,13 +363,13 @@ function Save-ReleaseAsset {
     )
     $destination = Join-Path $Directory ([string]$Asset.name)
     if ($script:DryRunEnabled) {
-        Write-Info "Would download: $($Asset.browser_download_url)"
+        Write-Info (L "Would download: $($Asset.browser_download_url)" "将下载：$($Asset.browser_download_url)")
         return $destination
     }
     $temporaryPath = "$destination.download"
     for ($attempt = 1; $attempt -le 3; $attempt += 1) {
         try {
-            Write-Info "Downloading $($Asset.name) (attempt $attempt/3)..."
+            Write-Info (L "Downloading $($Asset.name) (attempt $attempt/3)..." "正在下载 $($Asset.name)（第 $attempt/3 次）……")
             Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile $temporaryPath -UseBasicParsing -Headers @{
                 "User-Agent" = "blender-mcp-installer"
             }
@@ -325,9 +381,11 @@ function Save-ReleaseAsset {
                 Remove-Item -LiteralPath $temporaryPath -Force
             }
             if ($attempt -eq 3) {
-                throw "Could not download $($Asset.name) after 3 attempts: $($_.Exception.Message)"
+                throw (L `
+                    "Could not download $($Asset.name) after 3 attempts: $($_.Exception.Message)" `
+                    "尝试 3 次后仍无法下载 $($Asset.name)：$($_.Exception.Message)")
             }
-            Write-WarningLine "Download attempt $attempt failed; retrying."
+            Write-WarningLine (L "Download attempt $attempt failed; retrying." "第 $attempt 次下载失败，正在重试。")
             Start-Sleep -Seconds $attempt
         }
     }
@@ -339,7 +397,7 @@ function Test-ReleaseChecksums {
         [string[]]$AssetPaths
     )
     if ($script:DryRunEnabled) {
-        Write-Info "Would verify SHA-256 for all release assets."
+        Write-Info (L "Would verify SHA-256 for all release assets." "将校验所有 Release 资源的 SHA-256。")
         return
     }
 
@@ -353,13 +411,13 @@ function Test-ReleaseChecksums {
     foreach ($assetPath in $AssetPaths) {
         $name = Split-Path -Leaf $assetPath
         if (-not $expected.ContainsKey($name)) {
-            throw "SHA256SUMS.txt does not contain $name."
+            throw (L "SHA256SUMS.txt does not contain $name." "SHA256SUMS.txt 中没有 $name。")
         }
         $actual = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actual -ne $expected[$name]) {
-            throw "SHA-256 verification failed for $name."
+            throw (L "SHA-256 verification failed for $name." "$name 的 SHA-256 校验失败。")
         }
-        Write-Ok "Verified $name"
+        Write-Ok (L "Verified $name" "已校验 $name")
     }
 }
 
@@ -372,15 +430,15 @@ function Set-CurrentServerPointer {
     $base = [System.IO.Path]::GetFullPath($InstallBase).TrimEnd('\')
     $server = [System.IO.Path]::GetFullPath($ServerExecutable)
     if (-not $server.StartsWith($base + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "MCP server executable escaped the install root: $server"
+        throw (L "MCP server executable escaped the install root: $server" "MCP 服务端可执行文件位于安装根目录之外：$server")
     }
     $relative = $server.Substring($base.Length + 1)
     if ($relative -notmatch '^venv-[0-9]+\.[0-9]+\.[0-9]+\\Scripts\\blender-mcp\.exe$') {
-        throw "Unexpected versioned MCP server path: $relative"
+        throw (L "Unexpected versioned MCP server path: $relative" "MCP 服务端版本路径不符合预期：$relative")
     }
     $pointer = Join-Path $base "current-server.txt"
     if ($script:DryRunEnabled) {
-        Write-Info "Would point $pointer to $relative"
+        Write-Info (L "Would point $pointer to $relative" "将把 $pointer 指向 $relative")
         return $pointer
     }
     $temporary = "$pointer.$([guid]::NewGuid().ToString('N')).tmp"
@@ -404,8 +462,98 @@ function Set-CurrentServerPointer {
             Remove-Item -LiteralPath $backup -Force
         }
     }
-    Write-Ok "Current server pointer targets $relative"
+    Write-Ok (L "Current server pointer targets $relative" "当前服务端指针已指向 $relative")
     return $pointer
+}
+
+function Set-CurrentWorkspacePointer {
+    param(
+        [string]$InstallBase,
+        [string]$Workspace
+    )
+
+    $base = [System.IO.Path]::GetFullPath($InstallBase)
+    $workspacePath = [System.IO.Path]::GetFullPath($Workspace)
+    $pointer = Join-Path $base "current-workspace.txt"
+    if ($script:DryRunEnabled) {
+        Write-Info (L "Would point $pointer to $workspacePath" "将把 $pointer 指向 $workspacePath")
+        return $pointer
+    }
+    $temporary = "$pointer.$([guid]::NewGuid().ToString('N')).tmp"
+    $backup = "$pointer.$([guid]::NewGuid().ToString('N')).bak"
+    try {
+        $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($temporary, $workspacePath + "`r`n", $utf8WithoutBom)
+        if (Test-Path -LiteralPath $pointer -PathType Leaf) {
+            [System.IO.File]::Replace($temporary, $pointer, $backup)
+            Remove-Item -LiteralPath $backup -Force
+        }
+        else {
+            [System.IO.File]::Move($temporary, $pointer)
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+        if (Test-Path -LiteralPath $backup -PathType Leaf) {
+            Remove-Item -LiteralPath $backup -Force
+        }
+    }
+    Write-Ok (L "Current workspace pointer targets $workspacePath" "当前工作区指针已指向 $workspacePath")
+    return $pointer
+}
+
+function Set-ClaudeDesktopFallbackPointers {
+    param(
+        [string]$ServerExecutable,
+        [string]$Workspace,
+        [string]$BridgeRoot = ""
+    )
+
+    if (-not $BridgeRoot) {
+        $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+        if (-not $localAppData) { $localAppData = $env:LOCALAPPDATA }
+        if (-not $localAppData) {
+            throw (L "Could not locate LocalAppData for Claude Desktop fallback pointers." "无法找到用于 Claude Desktop 备用指针的 LocalAppData。")
+        }
+        $BridgeRoot = Join-Path $localAppData "BlenderMCP"
+    }
+    $bridgeRoot = [System.IO.Path]::GetFullPath($BridgeRoot)
+    $values = [ordered]@{
+        "claude-server.txt" = [System.IO.Path]::GetFullPath($ServerExecutable)
+        "claude-workspace.txt" = [System.IO.Path]::GetFullPath($Workspace)
+    }
+    if ($script:DryRunEnabled) {
+        foreach ($name in $values.Keys) {
+            Write-Info (L "Would write $name in $bridgeRoot" "将在 $bridgeRoot 中写入 $name")
+        }
+        return
+    }
+    if (-not (Test-Path -LiteralPath $bridgeRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $bridgeRoot -Force | Out-Null
+    }
+    $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+    foreach ($name in $values.Keys) {
+        $pointer = Join-Path $bridgeRoot $name
+        $temporary = "$pointer.$([guid]::NewGuid().ToString('N')).tmp"
+        $backup = "$pointer.$([guid]::NewGuid().ToString('N')).bak"
+        try {
+            [System.IO.File]::WriteAllText($temporary, [string]$values[$name] + "`r`n", $utf8WithoutBom)
+            if (Test-Path -LiteralPath $pointer -PathType Leaf) {
+                [System.IO.File]::Replace($temporary, $pointer, $backup)
+                Remove-Item -LiteralPath $backup -Force
+            }
+            else {
+                [System.IO.File]::Move($temporary, $pointer)
+            }
+        }
+        finally {
+            if (Test-Path -LiteralPath $temporary -PathType Leaf) { Remove-Item -LiteralPath $temporary -Force }
+            if (Test-Path -LiteralPath $backup -PathType Leaf) { Remove-Item -LiteralPath $backup -Force }
+        }
+    }
+    Write-Ok (L "Claude Desktop fallback pointers are ready." "Claude Desktop 备用指针已就绪。")
 }
 
 function Get-BlenderInstallations {
@@ -418,10 +566,10 @@ function Get-BlenderInstallations {
             $resolved = Get-AbsolutePath -Path $requested -BasePath (Get-Location).Path
         }
         catch {
-            throw "Invalid Blender executable path '$requested': $($_.Exception.Message)"
+            throw (L "Invalid Blender executable path '$requested': $($_.Exception.Message)" "Blender 可执行文件路径无效 '$requested'：$($_.Exception.Message)")
         }
         if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
-            throw "Blender executable was not found: $resolved"
+            throw (L "Blender executable was not found: $resolved" "未找到 Blender 可执行文件：$resolved")
         }
         $candidatePaths += $resolved
     }
@@ -499,7 +647,7 @@ function Get-BlenderInstallations {
         }
         catch {
             Write-WarningLine (
-                "Ignoring an unreadable Blender candidate: {0} ({1})" -f
+                (L "Ignoring an unreadable Blender candidate: {0} ({1})" "已忽略无法读取的 Blender 候选项：{0}（{1}）") -f
                 $resolved, $_.Exception.Message
             )
         }
@@ -525,13 +673,15 @@ function Get-BlenderVersion {
     $process.StartInfo = $startInfo
     try {
         if (-not $process.Start()) {
-            throw "Could not start Blender: $Executable"
+            throw (L "Could not start Blender: $Executable" "无法启动 Blender：$Executable")
         }
         $standardOutput = $process.StandardOutput.ReadToEnd()
         $standardError = $process.StandardError.ReadToEnd()
         $process.WaitForExit()
         if ($process.ExitCode -ne 0) {
-            throw "Could not read Blender version from: $Executable (exit $($process.ExitCode))"
+            throw (L `
+                "Could not read Blender version from: $Executable (exit $($process.ExitCode))" `
+                "无法读取 Blender 版本：$Executable（退出代码 $($process.ExitCode)）")
         }
     }
     finally {
@@ -543,7 +693,7 @@ function Get-BlenderVersion {
         Select-Object -First 1
     if (-not $versionLine -or $versionLine -notmatch 'Blender\s+([0-9]+(?:\.[0-9]+){1,2})') {
         $summary = (@($output | Select-Object -First 3) -join ' | ')
-        throw "Could not parse Blender version from: $summary"
+        throw (L "Could not parse Blender version from: $summary" "无法从以下内容解析 Blender 版本：$summary")
     }
     return [version]$Matches[1]
 }
@@ -555,9 +705,15 @@ function Find-DesktopApplication {
     )
 
     $evidence = @()
+    $launchKind = ""
+    $launchTarget = ""
     foreach ($path in @($KnownPaths)) {
         if ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) {
             $evidence += $path
+            if (-not $launchTarget) {
+                $launchKind = "Executable"
+                $launchTarget = $path
+            }
         }
     }
 
@@ -565,6 +721,10 @@ function Find-DesktopApplication {
     if ($null -ne $getStartApps) {
         foreach ($app in Get-StartApps -ErrorAction SilentlyContinue | Where-Object { $_.Name -match $NamePattern }) {
             $evidence += "Start menu: $($app.Name)"
+            if (-not $launchTarget -and $app.AppID) {
+                $launchKind = "StartApp"
+                $launchTarget = [string]$app.AppID
+            }
         }
     }
 
@@ -586,13 +746,34 @@ function Find-DesktopApplication {
         $displayNameProperty = $entry.PSObject.Properties["DisplayName"]
         if ($null -ne $displayNameProperty -and [string]$displayNameProperty.Value -match $NamePattern) {
             $evidence += "Installed app: $($displayNameProperty.Value)"
+            if (-not $launchTarget) {
+                $launchCandidates = @()
+                $displayIconProperty = $entry.PSObject.Properties["DisplayIcon"]
+                if ($null -ne $displayIconProperty -and $displayIconProperty.Value) {
+                    $iconPath = ([string]$displayIconProperty.Value -split ',', 2)[0].Trim().Trim('"')
+                    if ($iconPath) { $launchCandidates += $iconPath }
+                }
+                $installLocationProperty = $entry.PSObject.Properties["InstallLocation"]
+                if ($null -ne $installLocationProperty -and $installLocationProperty.Value) {
+                    $launchCandidates += Join-Path ([string]$installLocationProperty.Value) "Claude.exe"
+                }
+                foreach ($candidate in $launchCandidates) {
+                    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                        $launchKind = "Executable"
+                        $launchTarget = $candidate
+                        break
+                    }
+                }
+            }
         }
     }
 
     $unique = @($evidence | Select-Object -Unique)
     return [PSCustomObject]@{
         Found = ($unique.Count -gt 0)
-        Evidence = if ($unique.Count) { $unique[0] } else { "not detected" }
+        Evidence = if ($unique.Count) { $unique[0] } else { L "not detected" "未检测到" }
+        LaunchKind = $launchKind
+        LaunchTarget = $launchTarget
     }
 }
 
@@ -623,7 +804,9 @@ function Get-ClientDetection {
     )
     $claudeDesktop = Find-DesktopApplication -NamePattern '^Claude$|^Claude Desktop$|AnthropicClaude|com\.anthropic\.claude' -KnownPaths @(
         (Join-Path $env:LOCALAPPDATA "Programs\Claude\Claude.exe"),
-        (Join-Path $env:LOCALAPPDATA "AnthropicClaude\Claude.exe")
+        (Join-Path $env:LOCALAPPDATA "AnthropicClaude\Claude.exe"),
+        (Join-Path $env:LOCALAPPDATA "Claude\Claude.exe"),
+        (Join-Path $env:ProgramFiles "Claude\Claude.exe")
     )
 
     return [PSCustomObject]@{
@@ -635,7 +818,23 @@ function Get-ClientDetection {
         ClaudeCodeFound = [bool]$claudeCommand
         ClaudeDesktopFound = [bool]$claudeDesktop.Found
         ClaudeDesktopEvidence = [string]$claudeDesktop.Evidence
+        ClaudeDesktopLaunchKind = [string]$claudeDesktop.LaunchKind
+        ClaudeDesktopLaunchTarget = [string]$claudeDesktop.LaunchTarget
     }
+}
+
+function Get-DefaultBlenderPaths {
+    param(
+        [object[]]$BlenderInstallations,
+        [bool]$DisableBlender
+    )
+
+    if ($DisableBlender) { return @() }
+    return @(
+        $BlenderInstallations |
+            Where-Object { $_.Supported } |
+            ForEach-Object { [string]$_.Path }
+    )
 }
 
 function Select-InstallTargetsTui {
@@ -650,55 +849,61 @@ function Select-InstallTargetsTui {
 
     $entries = @()
     $entries += [PSCustomObject]@{
-        Group = "MCP clients"
-        Label = if ($Detection.CodexCliFound) { "Codex CLI - $($Detection.CodexCommand)" } else { "Codex CLI - not detected" }
+        Group = L "MCP clients" "MCP 客户端"
+        Label = if ($Detection.CodexCliFound) {
+            L `
+                "Codex / ChatGPT - shared MCP config - $($Detection.CodexCommand)" `
+                "Codex / ChatGPT - 共用 MCP 配置 - $($Detection.CodexCommand)"
+        }
+        else { L "Codex / ChatGPT - configuration command not detected" "Codex / ChatGPT - 未检测到配置命令" }
         Enabled = [bool]($Detection.CodexCliFound -and -not $DisableCodex)
         Selected = [bool]($Detection.CodexCliFound -and -not $DisableCodex)
-        Kind = "CodexCli"
+        Kind = "Codex"
         Value = $null
     }
     $entries += [PSCustomObject]@{
-        Group = "MCP clients"
-        Label = "Codex Desktop (ChatGPT) - $($Detection.CodexDesktopEvidence) - shares Codex MCP config"
-        Enabled = [bool]($Detection.CodexDesktopFound -and $Detection.CodexCliFound -and -not $DisableCodex)
-        Selected = [bool]($Detection.CodexDesktopFound -and $Detection.CodexCliFound -and -not $DisableCodex)
-        Kind = "CodexDesktop"
-        Value = $null
-    }
-    $entries += [PSCustomObject]@{
-        Group = "MCP clients"
-        Label = if ($Detection.ClaudeCodeFound) { "Claude Code CLI - $($Detection.ClaudeCommand)" } else { "Claude Code CLI - not detected" }
+        Group = L "MCP clients" "MCP 客户端"
+        Label = if ($Detection.ClaudeCodeFound) {
+            "Claude Code CLI - $($Detection.ClaudeCommand)"
+        }
+        else { L "Claude Code CLI - not detected" "Claude Code CLI - 未检测到" }
         Enabled = [bool]($Detection.ClaudeCodeFound -and -not $DisableClaudeCode)
         Selected = [bool]($Detection.ClaudeCodeFound -and -not $DisableClaudeCode)
         Kind = "ClaudeCode"
         Value = $null
     }
     $entries += [PSCustomObject]@{
-        Group = "MCP clients"
-        Label = "Claude Desktop - $($Detection.ClaudeDesktopEvidence) - opens an MCPB for confirmation"
+        Group = L "MCP clients" "MCP 客户端"
+        Label = L `
+            "Claude Desktop - $($Detection.ClaudeDesktopEvidence) - automatic JSON registration (MCPB fallback)" `
+            "Claude Desktop - $($Detection.ClaudeDesktopEvidence) - 自动写入 JSON（MCPB 备用）"
         Enabled = [bool]($Detection.ClaudeDesktopFound -and -not $DisableClaudeDesktop)
         Selected = [bool]($Detection.ClaudeDesktopFound -and -not $DisableClaudeDesktop)
         Kind = "ClaudeDesktop"
         Value = $null
     }
 
-    $supportedIndex = 0
+    $defaultBlenderPaths = @(Get-DefaultBlenderPaths -BlenderInstallations $BlenderInstallations -DisableBlender $DisableBlender)
     foreach ($blender in $BlenderInstallations) {
-        $supportText = if ($blender.Supported) { "supported" } else { "requires Blender 4.2+" }
+        $supportText = if ($blender.Supported) {
+            L "supported" "支持"
+        }
+        else { L "requires Blender 4.2+" "需要 Blender 4.2+" }
         $entries += [PSCustomObject]@{
-            Group = "Blender installations"
+            Group = L "Blender installations" "Blender 安装版本"
             Label = "$($blender.Name) - $supportText - $($blender.Path)"
             Enabled = [bool]($blender.Supported -and -not $DisableBlender)
-            Selected = [bool]($blender.Supported -and $supportedIndex -eq 0 -and -not $DisableBlender)
+            Selected = [bool]($defaultBlenderPaths -contains [string]$blender.Path)
             Kind = "Blender"
             Value = [string]$blender.Path
         }
-        if ($blender.Supported) { $supportedIndex += 1 }
     }
     if ($BlenderInstallations.Count -eq 0) {
         $entries += [PSCustomObject]@{
-            Group = "Blender installations"
-            Label = "No Blender detected - install Blender 4.2+ or use -BlenderPath"
+            Group = L "Blender installations" "Blender 安装版本"
+            Label = L `
+                "No Blender detected - install Blender 4.2+ or use -BlenderPath" `
+                "未检测到 Blender - 请安装 Blender 4.2+，或使用 -BlenderPath"
             Enabled = $false
             Selected = $false
             Kind = "BlenderMissing"
@@ -718,9 +923,11 @@ function Select-InstallTargetsTui {
         [Console]::CursorVisible = $false
         while ($true) {
             [Console]::Clear()
-            Write-Host "Blender MCP - Select installation targets" -ForegroundColor Cyan
-            Write-Host "Use Up/Down to move, Space to toggle, A to toggle all, Enter to install, Esc to cancel." -ForegroundColor DarkGray
-            Write-Host "The Python MCP server is always installed." -ForegroundColor DarkGray
+            Write-Host (L "Blender MCP - Select installation targets" "Blender MCP - 选择安装目标") -ForegroundColor Cyan
+            Write-Host (L `
+                "Use Up/Down to move, Space to toggle, A to toggle all, Enter to install, Esc to cancel." `
+                "方向键上下移动，空格切换，A 全选/全不选，Enter 安装，Esc 取消。") -ForegroundColor DarkGray
+            Write-Host (L "The Python MCP server is always installed." "Python MCP 服务端始终会安装。") -ForegroundColor DarkGray
 
             $currentGroup = ""
             for ($index = 0; $index -lt $entries.Count; $index += 1) {
@@ -743,10 +950,11 @@ function Select-InstallTargetsTui {
 
             $key = [Console]::ReadKey($true)
             if ($key.Key -eq [ConsoleKey]::Enter) {
+                $codexSelected = [bool](@($entries | Where-Object { $_.Kind -eq "Codex" -and $_.Selected }).Count)
                 return [PSCustomObject]@{
                     Cancelled = $false
-                    CodexCli = [bool](@($entries | Where-Object { $_.Kind -eq "CodexCli" -and $_.Selected }).Count)
-                    CodexDesktop = [bool](@($entries | Where-Object { $_.Kind -eq "CodexDesktop" -and $_.Selected }).Count)
+                    CodexCli = $codexSelected
+                    CodexDesktop = $codexSelected
                     ClaudeCode = [bool](@($entries | Where-Object { $_.Kind -eq "ClaudeCode" -and $_.Selected }).Count)
                     ClaudeDesktop = [bool](@($entries | Where-Object { $_.Kind -eq "ClaudeDesktop" -and $_.Selected }).Count)
                     BlenderPaths = @($entries | Where-Object { $_.Kind -eq "Blender" -and $_.Selected } | ForEach-Object { $_.Value })
@@ -797,15 +1005,16 @@ function Select-InstallTargets {
         [bool]$DisableClaudeDesktop = $false
     )
 
-    $supportedBlenders = @($BlenderInstallations | Where-Object { $_.Supported })
+    $defaultBlenderPaths = @(Get-DefaultBlenderPaths -BlenderInstallations $BlenderInstallations -DisableBlender $DisableBlender)
     if ($NoGui) {
+        $codexSelected = [bool]($Detection.CodexCliFound -and -not $DisableCodex)
         return [PSCustomObject]@{
             Cancelled = $false
-            CodexCli = [bool]($Detection.CodexCliFound -and -not $DisableCodex)
-            CodexDesktop = [bool]($Detection.CodexDesktopFound -and -not $DisableCodex)
+            CodexCli = $codexSelected
+            CodexDesktop = $codexSelected
             ClaudeCode = [bool]($Detection.ClaudeCodeFound -and -not $DisableClaudeCode)
             ClaudeDesktop = [bool]($Detection.ClaudeDesktopFound -and -not $DisableClaudeDesktop)
-            BlenderPaths = if ($supportedBlenders.Count -and -not $DisableBlender) { @($supportedBlenders[0].Path) } else { @() }
+            BlenderPaths = @($defaultBlenderPaths)
         }
     }
 
@@ -814,7 +1023,7 @@ function Select-InstallTargets {
             return Select-InstallTargetsTui -Detection $Detection -BlenderInstallations $BlenderInstallations -DisableBlender $DisableBlender -DisableCodex $DisableCodex -DisableClaudeCode $DisableClaudeCode -DisableClaudeDesktop $DisableClaudeDesktop
         }
         catch {
-            Write-WarningLine "Terminal selector unavailable; trying the graphical selector."
+            Write-WarningLine (L "Terminal selector unavailable; trying the graphical selector." "终端选择器不可用，正在尝试图形选择器。")
             Write-Info $_.Exception.Message
             return Select-InstallTargets -Detection $Detection -BlenderInstallations $BlenderInstallations -NoGui $false -UseGui $true -DisableBlender $DisableBlender -DisableCodex $DisableCodex -DisableClaudeCode $DisableClaudeCode -DisableClaudeDesktop $DisableClaudeDesktop
         }
@@ -825,71 +1034,69 @@ function Select-InstallTargets {
         Add-Type -AssemblyName System.Drawing
 
         $form = New-Object System.Windows.Forms.Form
-        $form.Text = "Blender MCP - Select installation targets"
+        $form.Text = L "Blender MCP - Select installation targets" "Blender MCP - 选择安装目标"
         $form.StartPosition = "CenterScreen"
         $form.Size = New-Object System.Drawing.Size(780, 650)
         $form.MinimumSize = New-Object System.Drawing.Size(700, 560)
         $form.Font = New-Object System.Drawing.Font("Segoe UI", 9)
 
         $title = New-Object System.Windows.Forms.Label
-        $title.Text = "Choose where Blender MCP should be installed"
+        $title.Text = L "Choose where Blender MCP should be installed" "选择 Blender MCP 的安装目标"
         $title.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 15)
         $title.AutoSize = $true
         $title.Location = New-Object System.Drawing.Point(22, 18)
         $form.Controls.Add($title)
 
         $subtitle = New-Object System.Windows.Forms.Label
-        $subtitle.Text = "Detected targets are selected by default. Codex CLI and ChatGPT share one MCP configuration."
+        $subtitle.Text = L `
+            "Detected targets are selected by default. Codex and ChatGPT are one shared configuration target." `
+            "默认选中检测到的目标；Codex 与 ChatGPT 共用同一项配置。"
         $subtitle.AutoSize = $true
         $subtitle.ForeColor = [System.Drawing.Color]::DimGray
         $subtitle.Location = New-Object System.Drawing.Point(25, 54)
         $form.Controls.Add($subtitle)
 
         $clientGroup = New-Object System.Windows.Forms.GroupBox
-        $clientGroup.Text = "MCP clients"
+        $clientGroup.Text = L "MCP clients" "MCP 客户端"
         $clientGroup.Location = New-Object System.Drawing.Point(22, 84)
         $clientGroup.Size = New-Object System.Drawing.Size(720, 205)
         $clientGroup.Anchor = "Top,Left,Right"
         $form.Controls.Add($clientGroup)
 
-        $codexCliCheck = New-Object System.Windows.Forms.CheckBox
-        $codexCliCheck.Text = if ($Detection.CodexCliFound) {
-            "Codex CLI - detected: $($Detection.CodexCommand)"
-        } else { "Codex CLI - not detected" }
-        $codexCliCheck.Checked = [bool]($Detection.CodexCliFound -and -not $DisableCodex)
-        $codexCliCheck.Enabled = [bool]($Detection.CodexCliFound -and -not $DisableCodex)
-        $codexCliCheck.AutoSize = $true
-        $codexCliCheck.Location = New-Object System.Drawing.Point(18, 30)
-        $clientGroup.Controls.Add($codexCliCheck)
-
-        $codexDesktopCheck = New-Object System.Windows.Forms.CheckBox
-        $codexDesktopCheck.Text = "Codex Desktop (ChatGPT) - $($Detection.CodexDesktopEvidence) - shares Codex MCP config"
-        $codexDesktopCheck.Checked = [bool]($Detection.CodexDesktopFound -and $Detection.CodexCliFound -and -not $DisableCodex)
-        $codexDesktopCheck.Enabled = [bool]($Detection.CodexCliFound -and -not $DisableCodex)
-        $codexDesktopCheck.AutoSize = $true
-        $codexDesktopCheck.Location = New-Object System.Drawing.Point(18, 70)
-        $clientGroup.Controls.Add($codexDesktopCheck)
+        $codexCheck = New-Object System.Windows.Forms.CheckBox
+        $codexCheck.Text = if ($Detection.CodexCliFound) {
+            L `
+                "Codex / ChatGPT - shared MCP config: $($Detection.CodexCommand)" `
+                "Codex / ChatGPT - 共用 MCP 配置：$($Detection.CodexCommand)"
+        } else { L "Codex / ChatGPT - configuration command not detected" "Codex / ChatGPT - 未检测到配置命令" }
+        $codexCheck.Checked = [bool]($Detection.CodexCliFound -and -not $DisableCodex)
+        $codexCheck.Enabled = [bool]($Detection.CodexCliFound -and -not $DisableCodex)
+        $codexCheck.AutoSize = $true
+        $codexCheck.Location = New-Object System.Drawing.Point(18, 30)
+        $clientGroup.Controls.Add($codexCheck)
 
         $claudeCodeCheck = New-Object System.Windows.Forms.CheckBox
         $claudeCodeCheck.Text = if ($Detection.ClaudeCodeFound) {
-            "Claude Code CLI - detected: $($Detection.ClaudeCommand)"
-        } else { "Claude Code CLI - not detected" }
+            L "Claude Code CLI - detected: $($Detection.ClaudeCommand)" "Claude Code CLI - 已检测：$($Detection.ClaudeCommand)"
+        } else { L "Claude Code CLI - not detected" "Claude Code CLI - 未检测到" }
         $claudeCodeCheck.Checked = [bool]($Detection.ClaudeCodeFound -and -not $DisableClaudeCode)
         $claudeCodeCheck.Enabled = [bool]($Detection.ClaudeCodeFound -and -not $DisableClaudeCode)
         $claudeCodeCheck.AutoSize = $true
-        $claudeCodeCheck.Location = New-Object System.Drawing.Point(18, 110)
+        $claudeCodeCheck.Location = New-Object System.Drawing.Point(18, 75)
         $clientGroup.Controls.Add($claudeCodeCheck)
 
         $claudeDesktopCheck = New-Object System.Windows.Forms.CheckBox
-        $claudeDesktopCheck.Text = "Claude Desktop - $($Detection.ClaudeDesktopEvidence) - opens an MCPB for confirmation"
+        $claudeDesktopCheck.Text = L `
+            "Claude Desktop - $($Detection.ClaudeDesktopEvidence) - automatic JSON registration (MCPB fallback)" `
+            "Claude Desktop - $($Detection.ClaudeDesktopEvidence) - 自动写入 JSON（MCPB 备用）"
         $claudeDesktopCheck.Checked = [bool]($Detection.ClaudeDesktopFound -and -not $DisableClaudeDesktop)
         $claudeDesktopCheck.Enabled = [bool]($Detection.ClaudeDesktopFound -and -not $DisableClaudeDesktop)
         $claudeDesktopCheck.AutoSize = $true
-        $claudeDesktopCheck.Location = New-Object System.Drawing.Point(18, 150)
+        $claudeDesktopCheck.Location = New-Object System.Drawing.Point(18, 120)
         $clientGroup.Controls.Add($claudeDesktopCheck)
 
         $blenderGroup = New-Object System.Windows.Forms.GroupBox
-        $blenderGroup.Text = "Blender installations"
+        $blenderGroup.Text = L "Blender installations" "Blender 安装版本"
         $blenderGroup.Location = New-Object System.Drawing.Point(22, 304)
         $blenderGroup.Size = New-Object System.Drawing.Size(720, 220)
         $blenderGroup.Anchor = "Top,Bottom,Left,Right"
@@ -902,14 +1109,12 @@ function Select-InstallTargets {
 
         $blenderChecks = @()
         $row = 14
-        $supportedIndex = 0
         foreach ($blender in $BlenderInstallations) {
             $check = New-Object System.Windows.Forms.CheckBox
-            $supportText = if ($blender.Supported) { "supported" } else { "requires Blender 4.2+" }
+            $supportText = if ($blender.Supported) { L "supported" "支持" } else { L "requires Blender 4.2+" "需要 Blender 4.2+" }
             $check.Text = "$($blender.Name) - $supportText - $($blender.Path)"
             $check.Enabled = [bool]($blender.Supported -and -not $DisableBlender)
-            $check.Checked = [bool]($blender.Supported -and $supportedIndex -eq 0 -and -not $DisableBlender)
-            if ($blender.Supported) { $supportedIndex += 1 }
+            $check.Checked = [bool]($defaultBlenderPaths -contains [string]$blender.Path)
             $check.AutoSize = $true
             $check.Location = New-Object System.Drawing.Point(14, $row)
             $check.Tag = $blender.Path
@@ -919,7 +1124,9 @@ function Select-InstallTargets {
         }
         if ($BlenderInstallations.Count -eq 0) {
             $none = New-Object System.Windows.Forms.Label
-            $none.Text = "No Blender installation was detected. Install Blender 4.2+ or use -BlenderPath."
+            $none.Text = L `
+                "No Blender installation was detected. Install Blender 4.2+ or use -BlenderPath." `
+                "未检测到 Blender。请安装 Blender 4.2+，或使用 -BlenderPath。"
             $none.AutoSize = $true
             $none.ForeColor = [System.Drawing.Color]::DarkOrange
             $none.Location = New-Object System.Drawing.Point(14, 18)
@@ -927,7 +1134,7 @@ function Select-InstallTargets {
         }
 
         $installButton = New-Object System.Windows.Forms.Button
-        $installButton.Text = "Install selected"
+        $installButton.Text = L "Install selected" "安装所选项目"
         $installButton.Size = New-Object System.Drawing.Size(135, 36)
         $installButton.Location = New-Object System.Drawing.Point(607, 545)
         $installButton.Anchor = "Bottom,Right"
@@ -936,7 +1143,7 @@ function Select-InstallTargets {
         $form.Controls.Add($installButton)
 
         $cancelButton = New-Object System.Windows.Forms.Button
-        $cancelButton.Text = "Cancel"
+        $cancelButton.Text = L "Cancel" "取消"
         $cancelButton.Size = New-Object System.Drawing.Size(100, 36)
         $cancelButton.Location = New-Object System.Drawing.Point(495, 545)
         $cancelButton.Anchor = "Bottom,Right"
@@ -950,15 +1157,15 @@ function Select-InstallTargets {
         }
         return [PSCustomObject]@{
             Cancelled = $false
-            CodexCli = [bool]$codexCliCheck.Checked
-            CodexDesktop = [bool]$codexDesktopCheck.Checked
+            CodexCli = [bool]$codexCheck.Checked
+            CodexDesktop = [bool]$codexCheck.Checked
             ClaudeCode = [bool]$claudeCodeCheck.Checked
             ClaudeDesktop = [bool]$claudeDesktopCheck.Checked
             BlenderPaths = @($blenderChecks | Where-Object { $_.Checked } | ForEach-Object { $_.Tag })
         }
     }
     catch {
-        Write-WarningLine "Graphical selector unavailable; using detected defaults."
+        Write-WarningLine (L "Graphical selector unavailable; using detected defaults." "图形选择器不可用，将使用检测到的默认目标。")
         Write-Info $_.Exception.Message
         return Select-InstallTargets -Detection $Detection -BlenderInstallations $BlenderInstallations -NoGui $true -DisableBlender $DisableBlender -DisableCodex $DisableCodex -DisableClaudeCode $DisableClaudeCode -DisableClaudeDesktop $DisableClaudeDesktop
     }
@@ -970,7 +1177,7 @@ function Get-PythonLauncher {
     if ($RequestedPath) {
         $resolved = Get-AbsolutePath -Path $RequestedPath -BasePath (Get-Location).Path
         if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
-            throw "Python executable was not found: $resolved"
+            throw (L "Python executable was not found: $resolved" "未找到 Python 可执行文件：$resolved")
         }
         return [PSCustomObject]@{ Command = $resolved; Prefix = @() }
     }
@@ -985,7 +1192,9 @@ function Get-PythonLauncher {
         return [PSCustomObject]@{ Command = $python.Source; Prefix = @() }
     }
 
-    throw "Python 3.10 or newer was not found. Install Python and run this script again."
+    throw (L `
+        "Python 3.10 or newer was not found. Install Python and run this script again." `
+        "未找到 Python 3.10 或更高版本。请先安装 Python，再重新运行此脚本。")
 }
 
 function Test-PythonLauncher {
@@ -996,7 +1205,7 @@ function Test-PythonLauncher {
     )
     $version = & $Launcher.Command @arguments 2>&1
     if ($LASTEXITCODE -ne 0) {
-        throw "The selected Python must be version 3.10 or newer."
+        throw (L "The selected Python must be version 3.10 or newer." "所选 Python 必须为 3.10 或更高版本。")
     }
     return [string]($version | Select-Object -Last 1)
 }
@@ -1090,7 +1299,7 @@ function Get-CodexLegacyBlenderMcpEntries {
         "mcp", "list", "--json"
     ) -IncludeErrorOutput
     if ($probe.ExitCode -ne 0) {
-        Write-WarningLine "Could not list Codex MCP entries for legacy Blender MCP migration."
+        Write-WarningLine (L "Could not list Codex MCP entries for legacy Blender MCP migration." "无法列出 Codex MCP 配置，不能迁移旧版 Blender MCP。")
         return @()
     }
     try {
@@ -1100,7 +1309,7 @@ function Get-CodexLegacyBlenderMcpEntries {
         $entries = @($parsedEntries)
     }
     catch {
-        Write-WarningLine "Codex returned an unreadable MCP list; legacy entries were not changed."
+        Write-WarningLine (L "Codex returned an unreadable MCP list; legacy entries were not changed." "Codex 返回的 MCP 列表无法读取；未更改旧配置。")
         return @()
     }
     $results = @()
@@ -1130,7 +1339,7 @@ function Get-ClaudeLegacyBlenderMcpEntries {
         "mcp", "list"
     ) -IncludeErrorOutput
     if ($probe.ExitCode -ne 0) {
-        Write-WarningLine "Could not list Claude Code MCP entries for legacy Blender MCP migration."
+        Write-WarningLine (L "Could not list Claude Code MCP entries for legacy Blender MCP migration." "无法列出 Claude Code MCP 配置，不能迁移旧版 Blender MCP。")
         return @()
     }
     $results = @()
@@ -1162,14 +1371,16 @@ function Remove-CodexLegacyBlenderMcpEntries {
     $entries = @(Get-CodexLegacyBlenderMcpEntries -CodexExecutable $CodexExecutable)
     foreach ($entry in $entries) {
         if ($PreserveExisting) {
-            Write-WarningLine "Preserving legacy Codex MCP entry '$($entry.Name)': $($entry.Command) $($entry.Arguments -join ' ')"
+            Write-WarningLine (L `
+                "Preserving legacy Codex MCP entry '$($entry.Name)': $($entry.Command) $($entry.Arguments -join ' ')" `
+                "保留旧版 Codex MCP 配置 '$($entry.Name)'：$($entry.Command) $($entry.Arguments -join ' ')")
             continue
         }
         Invoke-CheckedCommand -FilePath $CodexExecutable -ArgumentList @(
             "mcp", "remove", $entry.Name
-        ) -Description "Removing legacy Codex Blender MCP entry '$($entry.Name)'..."
+        ) -Description (L "Removing legacy Codex Blender MCP entry '$($entry.Name)'..." "正在移除旧版 Codex Blender MCP 配置 '$($entry.Name)'……")
         if (-not $script:DryRunEnabled) {
-            Write-Ok "Removed legacy Codex Blender MCP entry '$($entry.Name)'."
+            Write-Ok (L "Removed legacy Codex Blender MCP entry '$($entry.Name)'." "已移除旧版 Codex Blender MCP 配置 '$($entry.Name)'。")
         }
     }
 }
@@ -1182,21 +1393,25 @@ function Remove-ClaudeLegacyBlenderMcpEntries {
     $entries = @(Get-ClaudeLegacyBlenderMcpEntries -ClaudeExecutable $ClaudeExecutable)
     foreach ($entry in $entries) {
         if ($PreserveExisting) {
-            Write-WarningLine "Preserving legacy Claude Code MCP entry '$($entry.Name)': $($entry.CommandLine)"
+            Write-WarningLine (L `
+                "Preserving legacy Claude Code MCP entry '$($entry.Name)': $($entry.CommandLine)" `
+                "保留旧版 Claude Code MCP 配置 '$($entry.Name)'：$($entry.CommandLine)")
             continue
         }
         if ($script:DryRunEnabled) {
-            Write-Info "Would remove legacy Claude Code user-scope entry '$($entry.Name)'."
+            Write-Info (L "Would remove legacy Claude Code user-scope entry '$($entry.Name)'." "将移除旧版 Claude Code 用户级配置 '$($entry.Name)'。")
             continue
         }
         $remove = Invoke-CapturedCommand -FilePath $ClaudeExecutable -ArgumentList @(
             "mcp", "remove", $entry.Name, "--scope", "user"
         ) -IncludeErrorOutput
         if ($remove.ExitCode -eq 0) {
-            Write-Ok "Removed legacy Claude Code Blender MCP entry '$($entry.Name)'."
+            Write-Ok (L "Removed legacy Claude Code Blender MCP entry '$($entry.Name)'." "已移除旧版 Claude Code Blender MCP 配置 '$($entry.Name)'。")
         }
         else {
-            Write-WarningLine "Could not remove legacy Claude Code entry '$($entry.Name)' from user scope; it was retained."
+            Write-WarningLine (L `
+                "Could not remove legacy Claude Code entry '$($entry.Name)' from user scope; it was retained." `
+                "无法从用户级配置中移除旧版 Claude Code 项 '$($entry.Name)'，现予保留。")
         }
     }
 }
@@ -1223,7 +1438,7 @@ function Register-CodexMcp {
             $existing = ($existingProbe.Output -join "`n") | ConvertFrom-Json
         }
         catch {
-            Write-WarningLine "Codex returned an unreadable existing blender_mcp configuration."
+            Write-WarningLine (L "Codex returned an unreadable existing blender_mcp configuration." "Codex 返回的现有 blender_mcp 配置无法读取。")
         }
     }
 
@@ -1244,14 +1459,14 @@ function Register-CodexMcp {
     }
 
     if ($matches) {
-        Write-Ok "Codex already has the matching blender_mcp configuration."
+        Write-Ok (L "Codex already has the matching blender_mcp configuration." "Codex 已有完全一致的 blender_mcp 配置。")
         $script:CodexStatus = "already configured"
         return
     }
 
     if ($null -ne $existing -and $PreserveExisting) {
-        Write-WarningLine "Codex already has a different blender_mcp entry; it was preserved."
-        Write-Info "Re-run without -PreserveExistingMcpEntries to update that entry."
+        Write-WarningLine (L "Codex already has a different blender_mcp entry; it was preserved." "Codex 已有不同的 blender_mcp 配置，现按要求保留。")
+        Write-Info (L "Re-run without -PreserveExistingMcpEntries to update that entry." "如需更新，请不要使用 -PreserveExistingMcpEntries，重新运行安装器。")
         $script:CodexStatus = "existing different entry preserved"
         return
     }
@@ -1260,7 +1475,7 @@ function Register-CodexMcp {
     if ($null -ne $existing) {
         Invoke-CheckedCommand -FilePath $CodexExecutable -ArgumentList @(
             "mcp", "remove", "blender_mcp"
-        ) -Description "Removing the previous Codex blender_mcp entry..."
+        ) -Description (L "Removing the previous Codex blender_mcp entry..." "正在移除原有 Codex blender_mcp 配置……")
     }
 
     Invoke-CheckedCommand -FilePath $CodexExecutable -ArgumentList @(
@@ -1269,18 +1484,18 @@ function Register-CodexMcp {
         "--env", "BLENDER_HOST=localhost",
         "--env", "BLENDER_PORT=$Port",
         "--", $ServerExecutable
-    ) -Description "Registering blender_mcp with Codex..."
+    ) -Description (L "Registering blender_mcp with Codex..." "正在为 Codex 注册 blender_mcp……")
 
     if ($script:DryRunEnabled) {
         $script:CodexStatus = if ($wasExisting) { "would be updated" } else { "would be configured" }
     }
     else {
         if ($wasExisting) {
-            Write-Ok "Codex global MCP entry blender_mcp was updated."
+            Write-Ok (L "Codex global MCP entry blender_mcp was updated." "已更新 Codex 全局 MCP 配置 blender_mcp。")
             $script:CodexStatus = "updated"
         }
         else {
-            Write-Ok "Codex global MCP entry blender_mcp is configured."
+            Write-Ok (L "Codex global MCP entry blender_mcp is configured." "已配置 Codex 全局 MCP 项 blender_mcp。")
             $script:CodexStatus = "configured"
         }
     }
@@ -1305,14 +1520,14 @@ function Register-ClaudeCodeMcp {
     $wasExisting = $existingProbe.ExitCode -eq 0
     $removedUserEntry = $false
     if ($wasExisting -and $PreserveExisting) {
-        Write-Ok "Claude Code already has a blender_mcp entry; it was preserved."
+        Write-Ok (L "Claude Code already has a blender_mcp entry; it was preserved." "Claude Code 已有 blender_mcp 配置，现按要求保留。")
         $script:ClaudeCodeStatus = "existing entry preserved"
         return
     }
 
     if ($wasExisting) {
         if ($script:DryRunEnabled) {
-            Write-Info "Would remove the previous Claude Code user-scope blender_mcp entry."
+            Write-Info (L "Would remove the previous Claude Code user-scope blender_mcp entry." "将移除原有 Claude Code 用户级 blender_mcp 配置。")
         }
         else {
             $removeProbe = Invoke-CapturedCommand -FilePath $ClaudeExecutable -ArgumentList @(
@@ -1320,10 +1535,10 @@ function Register-ClaudeCodeMcp {
             ) -IncludeErrorOutput
             if ($removeProbe.ExitCode -eq 0) {
                 $removedUserEntry = $true
-                Write-Info "Removed the previous Claude Code user-scope blender_mcp entry."
+                Write-Info (L "Removed the previous Claude Code user-scope blender_mcp entry." "已移除原有 Claude Code 用户级 blender_mcp 配置。")
             }
             else {
-                Write-WarningLine "Claude Code found blender_mcp outside user scope; that entry was not modified."
+                Write-WarningLine (L "Claude Code found blender_mcp outside user scope; that entry was not modified." "Claude Code 在用户级之外找到 blender_mcp；该配置未作更改。")
                 if ($removeProbe.Output.Count -gt 0) {
                     Write-Info ([string]($removeProbe.Output | Select-Object -Last 1))
                 }
@@ -1337,18 +1552,18 @@ function Register-ClaudeCodeMcp {
         "--env", "BLENDER_HOST=localhost",
         "--env", "BLENDER_PORT=$Port",
         "--", $ServerExecutable
-    ) -Description "Registering blender_mcp in Claude Code user scope..."
+    ) -Description (L "Registering blender_mcp in Claude Code user scope..." "正在 Claude Code 用户级配置中注册 blender_mcp……")
 
     if ($script:DryRunEnabled) {
         $script:ClaudeCodeStatus = if ($wasExisting) { "would configure/update user scope" } else { "would be configured" }
     }
     else {
         if ($removedUserEntry) {
-            Write-Ok "Claude Code user-scope MCP entry was updated."
+            Write-Ok (L "Claude Code user-scope MCP entry was updated." "已更新 Claude Code 用户级 MCP 配置。")
             $script:ClaudeCodeStatus = "updated"
         }
         else {
-            Write-Ok "Claude Code user-scope MCP entry is configured."
+            Write-Ok (L "Claude Code user-scope MCP entry is configured." "已配置 Claude Code 用户级 MCP 项。")
             $script:ClaudeCodeStatus = if ($wasExisting) {
                 "configured; higher-priority entry retained"
             }
@@ -1359,34 +1574,249 @@ function Register-ClaudeCodeMcp {
     }
 }
 
+function Get-ClaudeDesktopConfigPath {
+    $applicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
+    if (-not $applicationData) { $applicationData = $env:APPDATA }
+    if (-not $applicationData) {
+        throw (L `
+            "Could not locate the current user's AppData directory for Claude Desktop." `
+            "无法找到当前用户供 Claude Desktop 使用的 AppData 目录。")
+    }
+    return Join-Path $applicationData "Claude\claude_desktop_config.json"
+}
+
+function Register-ClaudeDesktopMcp {
+    param(
+        [string]$ConfigPath,
+        [string]$ServerExecutable,
+        [string]$Workspace,
+        [int]$Port,
+        [bool]$PreserveExisting
+    )
+
+    if (-not $ConfigPath) { $ConfigPath = Get-ClaudeDesktopConfigPath }
+    $existingFile = Test-Path -LiteralPath $ConfigPath -PathType Leaf
+    $config = [PSCustomObject]@{}
+    if ($existingFile) {
+        try {
+            $configText = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8
+            if (-not [string]::IsNullOrWhiteSpace($configText)) {
+                $config = $configText | ConvertFrom-Json
+            }
+        }
+        catch {
+            Write-WarningLine (L `
+                "Claude Desktop config is not valid JSON; it was left unchanged: $ConfigPath" `
+                "Claude Desktop 配置不是有效的 JSON，已保持原样：$ConfigPath")
+            Write-Info $_.Exception.Message
+            $script:ClaudeDesktopStatus = "invalid JSON; MCPB fallback required"
+            return $false
+        }
+    }
+    if ($null -eq $config -or $config -is [System.Array]) {
+        Write-WarningLine (L `
+            "Claude Desktop config must contain a top-level JSON object; it was left unchanged: $ConfigPath" `
+            "Claude Desktop 配置的顶层必须是 JSON 对象，已保持原样：$ConfigPath")
+        $script:ClaudeDesktopStatus = "invalid JSON shape; MCPB fallback required"
+        return $false
+    }
+
+    $mcpServersProperty = $config.PSObject.Properties["mcpServers"]
+    if ($null -eq $mcpServersProperty) {
+        $mcpServers = [PSCustomObject]@{}
+        $config | Add-Member -MemberType NoteProperty -Name "mcpServers" -Value $mcpServers
+    }
+    else {
+        $mcpServers = $mcpServersProperty.Value
+        if ($null -eq $mcpServers) {
+            $mcpServers = [PSCustomObject]@{}
+            $mcpServersProperty.Value = $mcpServers
+        }
+        elseif ($mcpServers -is [System.Array] -or $mcpServers -is [string] -or $mcpServers -is [ValueType]) {
+            Write-WarningLine (L `
+                "Claude Desktop mcpServers is not a JSON object; the config was left unchanged: $ConfigPath" `
+                "Claude Desktop 的 mcpServers 不是 JSON 对象，配置已保持原样：$ConfigPath")
+            $script:ClaudeDesktopStatus = "invalid mcpServers; MCPB fallback required"
+            return $false
+        }
+    }
+
+    $existing = $mcpServers.PSObject.Properties["blender_mcp"]
+    $entryMatches = $false
+    if ($null -ne $existing -and $null -ne $existing.Value) {
+        $existingEntry = $existing.Value
+        $existingEnv = Get-JsonProperty -Object $existingEntry -Name "env"
+        $existingArguments = @(Get-JsonProperty -Object $existingEntry -Name "args")
+        $entryMatches = (
+            (Test-SamePath -Left ([string](Get-JsonProperty -Object $existingEntry -Name "command")) -Right $ServerExecutable) -and
+            $existingArguments.Count -eq 0 -and
+            (Test-SamePath -Left ([string](Get-JsonProperty -Object $existingEnv -Name "BLENDER_MCP_WORKSPACE")) -Right $Workspace) -and
+            [string](Get-JsonProperty -Object $existingEnv -Name "BLENDER_HOST") -eq "localhost" -and
+            [string](Get-JsonProperty -Object $existingEnv -Name "BLENDER_PORT") -eq [string]$Port
+        )
+    }
+    if ($entryMatches) {
+        Write-Ok (L `
+            "Claude Desktop already has the matching blender_mcp configuration." `
+            "Claude Desktop 已有完全一致的 blender_mcp 配置。")
+        $script:ClaudeDesktopStatus = "already configured"
+        return $true
+    }
+    if ($null -ne $existing -and $PreserveExisting) {
+        Write-WarningLine (L `
+            "Claude Desktop already has a blender_mcp entry; it was preserved." `
+            "Claude Desktop 已有 blender_mcp 配置，现按要求保留。")
+        $script:ClaudeDesktopStatus = "existing entry preserved"
+        return $true
+    }
+
+    $entry = [PSCustomObject][ordered]@{
+        command = [System.IO.Path]::GetFullPath($ServerExecutable)
+        args = @()
+        env = [PSCustomObject][ordered]@{
+            BLENDER_MCP_WORKSPACE = [System.IO.Path]::GetFullPath($Workspace)
+            BLENDER_HOST = "localhost"
+            BLENDER_PORT = [string]$Port
+        }
+    }
+    if ($null -ne $existing) {
+        $mcpServers.PSObject.Properties.Remove("blender_mcp")
+    }
+    $mcpServers | Add-Member -MemberType NoteProperty -Name "blender_mcp" -Value $entry
+
+    if ($script:DryRunEnabled) {
+        Write-Info (L `
+            "Would update Claude Desktop config: $ConfigPath" `
+            "将更新 Claude Desktop 配置：$ConfigPath")
+        $script:ClaudeDesktopStatus = if ($null -ne $existing) { "would be updated" } else { "would be configured" }
+        return $true
+    }
+
+    $directory = Split-Path -Parent $ConfigPath
+    $temporary = "$ConfigPath.$([guid]::NewGuid().ToString('N')).tmp"
+    $backup = "$ConfigPath.blender-mcp-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ'))-$([guid]::NewGuid().ToString('N').Substring(0, 8)).bak"
+    try {
+        if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        $json = $config | ConvertTo-Json -Depth 100
+        $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($temporary, $json + "`r`n", $utf8WithoutBom)
+        if ($existingFile) {
+            [System.IO.File]::Replace($temporary, $ConfigPath, $backup)
+            Write-Info (L "Backup: $backup" "备份：$backup")
+        }
+        else {
+            [System.IO.File]::Move($temporary, $ConfigPath)
+        }
+    }
+    catch {
+        Write-WarningLine (L `
+            "Could not update Claude Desktop config; it was left unchanged: $($_.Exception.Message)" `
+            "无法更新 Claude Desktop 配置；配置已保持原样：$($_.Exception.Message)")
+        $script:ClaudeDesktopStatus = "config write failed; MCPB fallback required"
+        return $false
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporary -PathType Leaf) {
+            Remove-Item -LiteralPath $temporary -Force
+        }
+    }
+
+    if ($null -ne $existing) {
+        Write-Ok (L "Claude Desktop blender_mcp entry was updated." "已更新 Claude Desktop 的 blender_mcp 配置。")
+        $script:ClaudeDesktopStatus = "updated"
+    }
+    else {
+        Write-Ok (L "Claude Desktop blender_mcp entry is configured." "已配置 Claude Desktop 的 blender_mcp。")
+        $script:ClaudeDesktopStatus = "configured"
+    }
+    return $true
+}
+
 function Open-ClaudeDesktopBundle {
-    param([string]$BundlePath)
+    param(
+        [string]$BundlePath,
+        [string]$LaunchKind = "",
+        [string]$LaunchTarget = ""
+    )
+
+    $script:ClaudeDesktopMcpbFallbackUsed = $true
 
     if (-not $BundlePath) {
-        Write-WarningLine "Claude Desktop MCPB asset is unavailable."
+        Write-WarningLine (L "Claude Desktop MCPB asset is unavailable." "Claude Desktop MCPB 安装包不可用。")
         $script:ClaudeDesktopStatus = "bundle unavailable"
         return
     }
     if ($script:DryRunEnabled) {
-        Write-Info "Would open Claude Desktop bundle: $BundlePath"
-        $script:ClaudeDesktopStatus = "would request confirmation"
+        Write-Info (L `
+            "Would launch Claude Desktop when a launch target is available." `
+            "如检测到启动目标，将会启动 Claude Desktop。")
+        Write-Info (L `
+            "Would reveal the MCPB for Settings > Extensions > Advanced settings > Install Extension: $BundlePath" `
+            "将显示 MCPB，供你在「设置 > 扩展 > 高级设置 > 安装扩展」中选择：$BundlePath")
+        $script:ClaudeDesktopStatus = "would prepare in-app confirmation"
         return
     }
     if (-not (Test-Path -LiteralPath $BundlePath -PathType Leaf)) {
-        throw "Claude Desktop MCPB was not downloaded: $BundlePath"
+        throw (L "Claude Desktop MCPB was not downloaded: $BundlePath" "尚未下载 Claude Desktop MCPB：$BundlePath")
     }
 
+    $claudeStarted = $false
+    $bundleHandedOff = $false
     try {
-        Start-Process -FilePath $BundlePath
-        Write-Ok "Opened the Claude Desktop MCPB installer."
-        Write-Info "Confirm installation in Claude Desktop to complete this target."
-        $script:ClaudeDesktopStatus = "confirmation requested"
+        if ($LaunchKind -eq "Executable" -and $LaunchTarget) {
+            # Claude Desktop accepts an MCPB path directly. Passing the file to
+            # the detected executable bypasses Windows' optional .mcpb file
+            # association and opens Claude's own confirmation dialog.
+            $quotedBundlePath = '"{0}"' -f $BundlePath.Replace('"', '')
+            Start-Process -FilePath $LaunchTarget -ArgumentList @($quotedBundlePath) | Out-Null
+            $claudeStarted = $true
+            $bundleHandedOff = $true
+        }
+        elseif ($LaunchKind -eq "StartApp" -and $LaunchTarget) {
+            Start-Process -FilePath "explorer.exe" -ArgumentList @("shell:AppsFolder\$LaunchTarget") | Out-Null
+            $claudeStarted = $true
+        }
     }
     catch {
-        Write-WarningLine "Could not open the MCPB automatically."
-        Write-Info "Install it from Claude Desktop > Settings > Extensions: $BundlePath"
-        $script:ClaudeDesktopStatus = "manual confirmation required"
+        Write-WarningLine (L `
+            "Claude Desktop could not be launched automatically: $($_.Exception.Message)" `
+            "无法自动启动 Claude Desktop：$($_.Exception.Message)")
     }
+
+    if ($bundleHandedOff) {
+        Write-Ok (L "Opened the MCPB with Claude Desktop." "已使用 Claude Desktop 打开 MCPB。")
+        Write-Info (L "Review and confirm the extension installation inside Claude Desktop." "请在 Claude Desktop 中检查并确认扩展安装。")
+        $script:ClaudeDesktopStatus = "confirmation requested"
+        return
+    }
+
+    $bundleRevealed = $false
+    try {
+        $selectArgument = '/select,"{0}"' -f $BundlePath.Replace('"', '')
+        Start-Process -FilePath "explorer.exe" -ArgumentList @($selectArgument) | Out-Null
+        $bundleRevealed = $true
+    }
+    catch {
+        Write-WarningLine (L `
+            "Could not reveal the MCPB in File Explorer: $($_.Exception.Message)" `
+            "无法在文件资源管理器中显示 MCPB：$($_.Exception.Message)")
+    }
+
+    Write-WarningLine (L `
+        "Claude Desktop requires a final in-app confirmation for custom MCPB extensions." `
+        "Claude Desktop 安装自定义 MCPB 扩展时，需要在应用内作最后确认。")
+    Write-Info (L `
+        "In Claude Desktop, open Settings > Extensions > Advanced settings > Install Extension..." `
+        "请在 Claude Desktop 中打开「设置 > 扩展 > 高级设置 > 安装扩展…」。")
+    Write-Info (L "Select this file: $BundlePath" "选择此文件：$BundlePath")
+    Write-Info (L `
+        "You can also drag the highlighted MCPB from File Explorer into Claude Desktop." `
+        "也可以从文件资源管理器将已选中的 MCPB 拖入 Claude Desktop。")
+    if ($claudeStarted) { Write-Ok (L "Claude Desktop was launched." "已启动 Claude Desktop。") }
+    if ($bundleRevealed) { Write-Ok (L "The MCPB was highlighted in File Explorer." "已在文件资源管理器中选中 MCPB。") }
+    $script:ClaudeDesktopStatus = "manual in-app confirmation required"
 }
 
 try {
@@ -1437,19 +1867,20 @@ try {
         $serverExecutable = Join-Path $venvRoot "Scripts\blender-mcp.exe"
     }
 
-    Write-Step "Detection and target selection"
+    Write-Step (L "Detection and target selection" "检测并选择安装目标")
     $clientDetection = Get-ClientDetection
     $blenderInstallations = @(Get-BlenderInstallations -RequestedPaths $BlenderPath)
-    Write-Info "Codex CLI            : $($clientDetection.CodexCliFound)"
-    Write-Info "Codex Desktop (ChatGPT): $($clientDetection.CodexDesktopFound)"
-    Write-Info "Claude Code CLI       : $($clientDetection.ClaudeCodeFound)"
-    Write-Info "Claude Desktop        : $($clientDetection.ClaudeDesktopFound)"
+    Write-Info (L `
+        "Codex / ChatGPT      : config=$($clientDetection.CodexCliFound), desktop=$($clientDetection.CodexDesktopFound)" `
+        "Codex / ChatGPT      ：配置=$($clientDetection.CodexCliFound)，桌面端=$($clientDetection.CodexDesktopFound)")
+    Write-Info (L "Claude Code CLI       : $($clientDetection.ClaudeCodeFound)" "Claude Code CLI       ：$($clientDetection.ClaudeCodeFound)")
+    Write-Info (L "Claude Desktop        : $($clientDetection.ClaudeDesktopFound)" "Claude Desktop        ：$($clientDetection.ClaudeDesktopFound)")
     if ($blenderInstallations.Count -eq 0) {
-        Write-WarningLine "No Blender installation was detected. The server can still be installed."
+        Write-WarningLine (L "No Blender installation was detected. The server can still be installed." "未检测到 Blender；仍可继续安装服务端。")
     }
     else {
         foreach ($blender in $blenderInstallations) {
-            $support = if ($blender.Supported) { "supported" } else { "unsupported; requires 4.2+" }
+            $support = if ($blender.Supported) { L "supported" "支持" } else { L "unsupported; requires 4.2+" "不支持；需要 4.2+" }
             Write-Info "$($blender.Name): $support - $($blender.Path)"
         }
     }
@@ -1465,7 +1896,7 @@ try {
     )
     $selection = Select-InstallTargets -Detection $clientDetection -BlenderInstallations $blenderInstallations -NoGui $noGui -UseGui ([bool]$Gui) -DisableBlender ([bool]$SkipBlenderExtension) -DisableCodex ([bool]$SkipCodexRegistration) -DisableClaudeCode ([bool]$SkipClaudeCodeRegistration) -DisableClaudeDesktop ([bool]$SkipClaudeDesktop)
     if ($selection.Cancelled) {
-        Write-WarningLine "Installation cancelled; no changes were made."
+        Write-WarningLine (L "Installation cancelled; no changes were made." "安装已取消，未作任何更改。")
         return
     }
     if ($noGui -and @($BlenderPath).Count -gt 0 -and -not $SkipBlenderExtension) {
@@ -1495,26 +1926,31 @@ try {
         $script:BlenderStatus = "skipped"
     }
 
-    Write-Step "Installation plan"
-    Write-Info "Mode      : $(if ($releaseMode) { 'GitHub Release' } else { 'local source checkout' })"
-    Write-Info "Install   : $installBase"
-    Write-Info "Workspace : $workspace"
-    Write-Info "MCP port  : $blenderPort"
-    Write-Info "Blender targets: $($selectedBlenderPaths.Count)"
-    Write-Info "Codex targets : CLI=$($script:SelectedCodexCli), Desktop (ChatGPT)=$($script:SelectedCodexDesktop)"
-    Write-Info "Claude targets: Code=$($script:SelectedClaudeCode), Desktop=$($script:SelectedClaudeDesktop)"
+    Write-Step (L "Installation plan" "安装计划")
+    $modeName = if ($releaseMode) { "GitHub Release" } else { L "local source checkout" "本地源码" }
+    Write-Info (L "Mode      : $modeName" "模式      ：$modeName")
+    Write-Info (L "Install   : $installBase" "安装目录  ：$installBase")
+    Write-Info (L "Workspace : $workspace" "工作区    ：$workspace")
+    Write-Info (L "MCP port  : $blenderPort" "MCP 端口  ：$blenderPort")
+    Write-Info (L "Blender targets: $($selectedBlenderPaths.Count)" "Blender 目标：$($selectedBlenderPaths.Count)")
+    Write-Info (L `
+        "Codex / ChatGPT: $($script:SelectedCodexCli -or $script:SelectedCodexDesktop) (shared configuration)" `
+        "Codex / ChatGPT：$($script:SelectedCodexCli -or $script:SelectedCodexDesktop)（共用配置）")
+    Write-Info (L `
+        "Claude targets: Code=$($script:SelectedClaudeCode), Desktop=$($script:SelectedClaudeDesktop)" `
+        "Claude 目标：Code=$($script:SelectedClaudeCode)，Desktop=$($script:SelectedClaudeDesktop)")
     if ($script:DryRunEnabled) {
-        Write-WarningLine "Dry-run mode is active; no machine state will be changed."
+        Write-WarningLine (L "Dry-run mode is active; no machine state will be changed." "当前为试运行模式，不会更改系统状态。")
     }
 
     foreach ($directory in @($installBase, $workspace, $downloadDirectory)) {
         if (Test-Path -LiteralPath $directory -PathType Container) { continue }
         if ($script:DryRunEnabled) {
-            Write-Info "Would create directory: $directory"
+            Write-Info (L "Would create directory: $directory" "将创建目录：$directory")
         }
         else {
             New-Item -ItemType Directory -Path $directory -Force | Out-Null
-            Write-Ok "Created $directory"
+            Write-Ok (L "Created $directory" "已创建 $directory")
         }
     }
 
@@ -1524,12 +1960,12 @@ try {
     $release = $null
     $releaseVersion = $null
     if ($releaseMode) {
-        Write-Step "Verified GitHub Release assets"
+        Write-Step (L "Verified GitHub Release assets" "校验 GitHub Release 资源")
         $release = Get-GitHubRelease -Repo $Repository -Tag $ReleaseTag
         if ($release.draft -or $release.prerelease) {
             Write-WarningLine "The explicitly selected release is marked draft or prerelease."
         }
-        Write-Ok "Selected release $($release.tag_name)"
+        Write-Ok (L "Selected release $($release.tag_name)" "已选择版本 $($release.tag_name)")
 
         $releaseTagName = [string]$release.tag_name
         if ($releaseTagName -notmatch '^v([0-9]+\.[0-9]+\.[0-9]+)$') {
@@ -1566,28 +2002,30 @@ try {
         $mcpbPath = $verifiedAssets | Where-Object { $_ -like "*.mcpb" } | Select-Object -First 1
     }
 
-    Write-Step "Python MCP server"
+    Write-Step (L "Python MCP server" "Python MCP 服务端")
     $serverInstallRequired = $true
     if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
         $pythonVersion = & $venvPython -c "import sys; assert sys.version_info >= (3, 10), 'Python 3.10+ required'; print(sys.version.split()[0])" 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw "The existing environment must contain a working Python 3.10 or newer: $venvPython"
         }
-        Write-Ok "Reusing Python $pythonVersion from $venvRoot"
+        Write-Ok (L "Reusing Python $pythonVersion from $venvRoot" "继续使用 $venvRoot 中的 Python $pythonVersion")
         if ($releaseMode) {
             $installedReleaseVersion = & $venvPython -c "import importlib.metadata; print(importlib.metadata.version('blender-mcp'))" 2>$null
             if ($LASTEXITCODE -eq 0 -and ([string]$installedReleaseVersion).Trim() -eq $releaseVersion) {
                 $serverInstallRequired = $false
-                Write-Ok "Blender MCP $releaseVersion is already installed in its versioned environment."
+                Write-Ok (L `
+                    "Blender MCP $releaseVersion is already installed in its versioned environment." `
+                    "Blender MCP $releaseVersion 已安装在对应版本的环境中。")
             }
         }
     }
     else {
         $launcher = Get-PythonLauncher -RequestedPath $PythonPath
         $pythonVersion = Test-PythonLauncher -Launcher $launcher
-        Write-Ok "Found Python $pythonVersion"
+        Write-Ok (L "Found Python $pythonVersion" "已找到 Python $pythonVersion")
         $venvArguments = @($launcher.Prefix) + @("-m", "venv", $venvRoot)
-        Invoke-CheckedCommand -FilePath $launcher.Command -ArgumentList $venvArguments -Description "Creating the Blender MCP virtual environment..."
+        Invoke-CheckedCommand -FilePath $launcher.Command -ArgumentList $venvArguments -Description (L "Creating the Blender MCP virtual environment..." "正在创建 Blender MCP 虚拟环境……")
     }
 
     if ($releaseMode) {
@@ -1597,29 +2035,33 @@ try {
         $pipArguments = @("-m", "pip", "install", "--quiet", "--disable-pip-version-check", "--editable", $repoRoot)
     }
     if ($serverInstallRequired) {
-        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $pipArguments -Description "Installing Blender MCP and Python dependencies..."
+        Invoke-CheckedCommand -FilePath $venvPython -ArgumentList $pipArguments -Description (L "Installing Blender MCP and Python dependencies..." "正在安装 Blender MCP 与 Python 依赖……")
     }
     Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @(
         "-c",
         "import asyncio; from blender_mcp.server import mcp; tools = asyncio.run(mcp.list_tools()); names = {tool.name for tool in tools}; required = {'get_blender_documentation_context', 'search_blender_docs', 'get_blender_doc_page', 'get_runtime_automation_context', 'search_geometry_node_types', 'search_blender_node_assets', 'import_blender_node_asset', 'list_node_trees', 'ensure_scene_compositor_tree', 'get_node_tree_index', 'export_node_tree', 'get_node_type_schema', 'validate_node_tree_patch', 'apply_node_tree_patch'}; missing = sorted(required - names); print(f'Registered MCP tools: {len(tools)}'); print(f'Missing required tools: {missing}' if missing else 'Knowledge and structured-node tools: ready'); assert len(tools) >= 42 and not missing"
-    ) -Description "Verifying MCP imports and tool registration..."
+    ) -Description (L "Verifying MCP imports and tool registration..." "正在验证 MCP 导入与工具注册……")
     if (-not $script:DryRunEnabled) {
         if (-not (Test-Path -LiteralPath $serverExecutable -PathType Leaf)) {
             throw "MCP console executable was not installed: $serverExecutable"
         }
-        Write-Ok "Python MCP server is ready."
+        Write-Ok (L "Python MCP server is ready." "Python MCP 服务端已就绪。")
     }
     if ($releaseMode) {
         Set-CurrentServerPointer -InstallBase $installBase -ServerExecutable $serverExecutable | Out-Null
+        Set-CurrentWorkspacePointer -InstallBase $installBase -Workspace $workspace | Out-Null
+        if ($script:SelectedClaudeDesktop) {
+            Set-ClaudeDesktopFallbackPointers -ServerExecutable $serverExecutable -Workspace $workspace
+        }
     }
 
-    Write-Step "Blender Extension"
+    Write-Step (L "Blender Extension" "Blender 扩展")
     if ($selectedBlenderPaths.Count -eq 0) {
         if ($SkipBlenderExtension) {
-            Write-WarningLine "Skipped by -SkipBlenderExtension."
+            Write-WarningLine (L "Skipped by -SkipBlenderExtension." "已按 -SkipBlenderExtension 跳过。")
         }
         else {
-            Write-WarningLine "No supported Blender target was selected."
+            Write-WarningLine (L "No supported Blender target was selected." "未选择受支持的 Blender 目标。")
             $script:BlenderStatus = "no target selected"
         }
     }
@@ -1633,7 +2075,7 @@ try {
             Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @(
                 (Join-Path $repoRoot "scripts\build_blender_extension.py"),
                 "--blender", $selectedBlenderPaths[0]
-            ) -Description "Building and validating the installable Blender Extension ZIP..." -Quiet
+            ) -Description (L "Building and validating the installable Blender Extension ZIP..." "正在构建并校验可安装的 Blender 扩展 ZIP……") -Quiet
         }
         if (-not $script:DryRunEnabled -and -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
             throw "The Blender Extension archive is unavailable: $archivePath"
@@ -1652,22 +2094,24 @@ try {
             Invoke-CheckedCommand -FilePath $blenderExecutable -ArgumentList @(
                 "--quiet", "--disable-autoexec", "--command", "extension", "install-file",
                 "-r", "user_default", "-e", $archivePath
-            ) -Description "Installing and enabling Blender MCP in Blender $blenderVersion..." -Quiet
+            ) -Description (L "Installing and enabling Blender MCP in Blender $blenderVersion..." "正在 Blender $blenderVersion 中安装并启用 Blender MCP……") -Quiet
             $installedVersions += [string]$blenderVersion
         }
         if ($script:DryRunEnabled) {
             $script:BlenderStatus = "would install for $($installedVersions -join ', ')"
         }
         else {
-            Write-Ok "Blender Extension installed and enabled in $($installedVersions.Count) installation(s)."
+            Write-Ok (L `
+                "Blender Extension installed and enabled in $($installedVersions.Count) installation(s)." `
+                "已在 $($installedVersions.Count) 个 Blender 安装版本中安装并启用扩展。")
             $script:BlenderStatus = "installed for $($installedVersions -join ', ')"
         }
     }
 
-    Write-Step "MCP client registration"
+    Write-Step (L "MCP client registration" "注册 MCP 客户端")
     if ($script:SelectedCodexCli -or $script:SelectedCodexDesktop) {
         if (-not $clientDetection.CodexCommand) {
-            Write-WarningLine "Codex command was not found; Codex configuration was not changed."
+            Write-WarningLine (L "Codex command was not found; Codex configuration was not changed." "未找到 Codex 命令；未更改 Codex 配置。")
             $script:CodexStatus = "command unavailable"
         }
         else {
@@ -1680,7 +2124,7 @@ try {
 
     if ($script:SelectedClaudeCode) {
         if (-not $clientDetection.ClaudeCommand) {
-            Write-WarningLine "Claude Code command was not found; its configuration was not changed."
+            Write-WarningLine (L "Claude Code command was not found; its configuration was not changed." "未找到 Claude Code 命令；未更改其配置。")
             $script:ClaudeCodeStatus = "command unavailable"
         }
         else {
@@ -1692,12 +2136,21 @@ try {
     }
 
     if ($script:SelectedClaudeDesktop) {
-        if ($releaseMode) {
-            Open-ClaudeDesktopBundle -BundlePath $mcpbPath
+        $claudeDesktopConfigured = Register-ClaudeDesktopMcp `
+            -ConfigPath (Get-ClaudeDesktopConfigPath) `
+            -ServerExecutable $serverExecutable `
+            -Workspace $workspace `
+            -Port $blenderPort `
+            -PreserveExisting ([bool]$PreserveExistingMcpEntries)
+        if (-not $claudeDesktopConfigured -and $releaseMode) {
+            Open-ClaudeDesktopBundle `
+                -BundlePath $mcpbPath `
+                -LaunchKind $clientDetection.ClaudeDesktopLaunchKind `
+                -LaunchTarget $clientDetection.ClaudeDesktopLaunchTarget
         }
-        else {
-            Write-WarningLine "Claude Desktop MCPB installation requires the stable release layout."
-            Write-Info "Re-run with -UseRelease, or use the GitHub Raw one-line command."
+        elseif (-not $claudeDesktopConfigured) {
+            Write-WarningLine (L "Claude Desktop MCPB installation requires the stable release layout." "安装 Claude Desktop MCPB 需要稳定版发布结构。")
+            Write-Info (L "Re-run with -UseRelease, or use the GitHub Raw one-line command." "请使用 -UseRelease 重新运行，或使用 GitHub Raw 一行安装命令。")
             $script:ClaudeDesktopStatus = "requires release mode"
         }
     }
@@ -1705,29 +2158,33 @@ try {
         $script:ClaudeDesktopStatus = "not selected"
     }
 
-    Write-Step "Finished"
+    Write-Step (L "Finished" "完成")
     Write-Host ""
     if ($script:DryRunEnabled) {
-        Write-Host "  Dry run completed successfully." -ForegroundColor Green
+        Write-Host (L "  Dry run completed successfully." "  试运行已成功完成。") -ForegroundColor Green
     }
     else {
-        Write-Host "  Blender MCP installation completed successfully." -ForegroundColor Green
+        Write-Host (L "  Blender MCP installation completed successfully." "  Blender MCP 安装成功。") -ForegroundColor Green
     }
-    Write-Info "Server        : $serverExecutable"
-    Write-Info "Blender       : $script:BlenderStatus"
-    Write-Info "Codex         : $script:CodexStatus"
-    Write-Info "Claude Code   : $script:ClaudeCodeStatus"
-    Write-Info "Claude Desktop: $script:ClaudeDesktopStatus"
+    Write-Info (L "Server        : $serverExecutable" "服务端        ：$serverExecutable")
+    Write-Info (L "Blender       : $script:BlenderStatus" "Blender       ：$script:BlenderStatus")
+    Write-Info (L "Codex         : $script:CodexStatus" "Codex         ：$script:CodexStatus")
+    Write-Info (L "Claude Code   : $script:ClaudeCodeStatus" "Claude Code   ：$script:ClaudeCodeStatus")
+    Write-Info (L "Claude Desktop: $script:ClaudeDesktopStatus" "Claude Desktop：$script:ClaudeDesktopStatus")
     if ($archivePath) { Write-Info "ZIP           : $archivePath" }
     if ($release) { Write-Info "Release       : $($release.html_url)" }
     Write-Host ""
-    Write-Host "  Next steps" -ForegroundColor Cyan
+    Write-Host (L "  Next steps" "  后续步骤") -ForegroundColor Cyan
     if ($selectedBlenderPaths.Count -gt 0) {
-        Write-Info "1. Open a selected Blender version and find BlenderMCP in the 3D View sidebar (N)."
-        Write-Info "2. The local bridge starts automatically on port $blenderPort by default."
+        Write-Info (L `
+            "1. Open a selected Blender version and find BlenderMCP in the 3D View sidebar (N)." `
+            "1. 打开任一所选 Blender 版本，在 3D 视图侧栏（N）中找到 BlenderMCP。")
+        Write-Info (L `
+            "2. The local bridge starts automatically on port $blenderPort by default." `
+            "2. 本地桥接服务默认会在端口 $blenderPort 自动启动。")
     }
     else {
-        Write-Info "1. Install the Blender Extension later by running this installer again."
+        Write-Info (L "1. Install the Blender Extension later by running this installer again." "1. 稍后重新运行安装器，即可安装 Blender 扩展。")
     }
     $anyClientSelected = (
         $script:SelectedCodexCli -or
@@ -1736,23 +2193,25 @@ try {
         $script:SelectedClaudeDesktop
     )
     if ($anyClientSelected) {
-        Write-Info "Restart the selected MCP clients so they load the blender_mcp server."
+        Write-Info (L "Restart the selected MCP clients so they load the blender_mcp server." "请重启所选 MCP 客户端，以加载 blender_mcp 服务端。")
     }
     else {
-        Write-Info "Run the installer again after installing an MCP client to configure it."
+        Write-Info (L "Run the installer again after installing an MCP client to configure it." "安装 MCP 客户端后，请重新运行安装器完成配置。")
     }
-    if ($script:SelectedClaudeDesktop) {
-        Write-Info "Complete the MCPB confirmation inside Claude Desktop."
+    if ($script:ClaudeDesktopMcpbFallbackUsed) {
+        Write-Info (L "Complete the MCPB confirmation inside Claude Desktop." "请在 Claude Desktop 中完成 MCPB 确认。")
     }
     Write-Host ""
 }
 catch {
     Write-Host ""
-    Write-Host "  Installation failed" -ForegroundColor Red
+    Write-Host (L "  Installation failed" "  安装失败") -ForegroundColor Red
     Write-Host "  -------------------" -ForegroundColor DarkRed
     Write-Host ("  " + $_.Exception.Message) -ForegroundColor Red
     Write-Host ""
-    Write-Host "  Tip: run .\install.ps1 -DryRun to inspect detection and commands." -ForegroundColor Yellow
+    Write-Host (L `
+        "  Tip: run .\install.ps1 -DryRun to inspect detection and commands." `
+        "  提示：运行 .\install.ps1 -DryRun 可检查检测结果与将要执行的命令。") -ForegroundColor Yellow
     Write-Host ""
     exit 1
 }

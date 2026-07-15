@@ -48,7 +48,7 @@ human-readable: [install.ps1](install.ps1). For a reproducible, version-pinned
 install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.9.1/install.ps1))) -ReleaseTag v1.9.1
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.9.2/install.ps1))) -ReleaseTag v1.9.2
 ```
 
 Before changing the machine, the installer:
@@ -56,14 +56,14 @@ Before changing the machine, the installer:
 1. detects supported MCP clients and every local Blender installation;
 2. opens a terminal checklist;
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
-4. verifies the wheel, Extension ZIP, and optional MCPB against `SHA256SUMS.txt`;
+4. verifies the wheel, Extension ZIP, and optional fallback MCPB against `SHA256SUMS.txt`;
 5. installs into a versioned environment such as
-   `%LOCALAPPDATA%\BlenderMCP\venv-1.9.1`;
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.9.2`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients.
 
 Updates are idempotent: an exact matching Codex entry is left alone, while a
-different `blender_mcp` Codex or Claude Code user entry is replaced in place.
+different `blender_mcp` Codex, Claude Code, or Claude Desktop user entry is replaced in place.
 Use `-PreserveExistingMcpEntries` when an existing custom entry must not change.
 Versioned environments allow an update while an older server is still running;
 the current session finishes on the old process and restarted clients use the
@@ -85,11 +85,10 @@ Use `-Gui` for a WinForms checkbox window.
 
 | Target | Installer behavior |
 | --- | --- |
-| Codex CLI | Adds or updates the per-user `blender_mcp` stdio server. |
-| Codex Desktop (ChatGPT) | Uses the same Codex MCP configuration as the CLI. |
+| Codex / ChatGPT | One combined target that adds or updates their shared per-user `blender_mcp` stdio configuration. |
 | Claude Code CLI | Adds or updates `blender_mcp` in user scope; project/local entries are not removed. |
-| Claude Desktop | Opens the checksummed MCPB; Claude Desktop performs final confirmation. |
-| Blender 4.2+ | Select one or several detected versions. The newest is selected by default. |
+| Claude Desktop | Safely merges `blender_mcp` into `%APPDATA%\Claude\claude_desktop_config.json`, preserving other settings and making a backup before replacement. Invalid or unwritable JSON falls back to the checksummed MCPB and Claude's in-app confirmation. |
+| Blender 4.2+ | Every detected supported version is selected by default; deselect any version you do not want to update. |
 | Blender below 4.2 | Shown for clarity but disabled for Extension installation. |
 
 ### Finish setup
@@ -98,7 +97,10 @@ Use `-Gui` for a WinForms checkbox window.
 2. In the 3D View, press N and open the **BlenderMCP** tab.
 3. The bridge starts automatically on port `9876`; the preference is enabled by default.
 4. Restart or reopen the selected MCP clients.
-5. If Claude Desktop was selected, approve the MCPB inside Claude Desktop.
+5. Claude Desktop normally needs only a restart. If the installer reports an
+   MCPB fallback, approve it under **Settings > Extensions > Advanced settings >
+   Install Extension...**; this path does not require a Windows `.mcpb` file
+   association.
 
 ## Installer reference
 
@@ -124,6 +126,7 @@ exercise the published Release path instead.
 | `-DryRun` | Print detection, paths, downloads, and commands without changing state. |
 | `-Gui` | Use the graphical selector instead of the default TUI. |
 | `-NonInteractive` | Skip both selectors and use detected defaults. |
+| `-Language <Auto\|en-US\|zh-CN>` | Choose installer text. `Auto` uses Chinese for a `zh-CN`/`zh-Hans` Windows UI and English otherwise. |
 | `-BlenderPath <path[]>` | Limit Blender targets to explicit executable paths. |
 | `-PythonPath <path>` | Choose the Python 3.10+ interpreter used to create the venv. |
 | `-WorkspacePath <path>` | Set the structured node-tree JSON workspace. |
@@ -132,9 +135,9 @@ exercise the published Release path instead.
 | `-UseRelease` | Use Release assets even when the script is run from a clone. |
 | `-SkipBlenderExtension` | Install only the Python MCP server. |
 | `-SkipCodexRegistration` | Leave Codex/ChatGPT configuration unchanged. |
-| `-PreserveExistingMcpEntries` | Keep a different same-name Codex or Claude Code entry instead of updating it. |
+| `-PreserveExistingMcpEntries` | Keep a different same-name Codex, Claude Code, or Claude Desktop entry instead of updating it. |
 | `-SkipClaudeCodeRegistration` | Leave Claude Code configuration unchanged. |
-| `-SkipClaudeDesktop` | Do not download or open the Claude Desktop MCPB. |
+| `-SkipClaudeDesktop` | Leave Claude Desktop unchanged and do not download its fallback MCPB. |
 
 Examples:
 
@@ -154,7 +157,8 @@ Examples:
 ```
 
 The TUI requires a real interactive console. CI, SSH, redirected input/output,
-and `-NonInteractive` use detected defaults. If
+and `-NonInteractive` use detected defaults, including every supported Blender
+installation. If
 `Console.ReadKey()` is unavailable, the installer tries WinForms and
 then falls back to detected defaults with a warning.
 
@@ -323,7 +327,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.9.1-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.9.2-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -331,7 +335,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.9.1-py3-none-any.whl
+python -m pip install ./blender_mcp-1.9.2-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -369,8 +373,13 @@ claude mcp add --scope user blender_mcp `
 ```
 
 Other stdio MCP clients can use the same executable and environment variables.
-For Claude Desktop on Windows, open the published MCPB and approve it in
-**Settings > Extensions**.
+For Claude Desktop on Windows, the installer adds or updates only the
+`mcpServers.blender_mcp` object in
+`%APPDATA%\Claude\claude_desktop_config.json`. It preserves unrelated fields,
+backs up an existing file, and uses absolute paths—there is no `${HOME}` value
+for Claude to expand. If that JSON is malformed or cannot be written, the
+installer leaves it untouched and falls back to the published MCPB through
+**Settings > Extensions > Advanced settings > Install Extension...**.
 
 ## Configuration
 
@@ -420,11 +429,13 @@ MCP server telemetry.
 | No checklist appears | Use a normal PowerShell console. Redirected streams, CI, SSH, and `-NonInteractive` intentionally use defaults. Use `-Gui` for WinForms. |
 | A client is unavailable | Install it, open a new PowerShell session, and rerun the installer. |
 | A custom MCP entry must not be updated | Rerun with `-PreserveExistingMcpEntries`, or use the client-specific skip switch. |
+| Claude Desktop does not show Blender MCP | Restart Claude Desktop, then inspect `%APPDATA%\Claude\claude_desktop_config.json` and `%APPDATA%\Claude\logs`. The installer preserves malformed JSON and reports the MCPB fallback instead of overwriting it. |
 | Claude Code still uses another same-name entry | Run `claude mcp get blender_mcp` and check its scope. Local and project entries take precedence and are intentionally not removed by this installer. |
 | The client cannot reach Blender | Open Blender and confirm auto-connect is enabled, or click **Connect to Claude** manually; both sides must use the same host and port. |
 | Blender is running but no window is visible | The installer does not launch Blender. Start it from the logged-on desktop; a background or Windows Session 0 process is not an interactive GUI launch. |
 | An old `blender: uvx blender-mcp` entry still appears | Rerun the installer. It removes only semantically matched legacy entries unless `-PreserveExistingMcpEntries` is set; unrelated `uvx` services are retained. |
 | The Extension is absent from one Blender | Rerun and select that version, or pass its executable with `-BlenderPath`. |
+| Windows asks how to open `.mcpb` | This is only the fallback path. In Claude Desktop use **Settings > Extensions > Advanced settings > Install Extension...** and select the downloaded MCPB. The installer also tries the detected Claude executable directly and can highlight the file. |
 | A Geometry Nodes patch is stale | Re-index or re-export the tree and rebuild the patch with the new revision. |
 | A Shader or Compositor patch is stale | Re-index or re-export the exact owner-addressed `tree_ref`; do not reuse a patch for another owner with the same display tree name. |
 | A linked or override node tree cannot be edited | Linked data is read-only. Local library overrides can be inspected and dry-run, but apply is intentionally disabled. |
@@ -459,7 +470,8 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm 
 - Structured exports and patch validation warn when a local Object Info target
   is hidden from render, `As Instance` is a fixed true value, and its geometry
   reaches Group Output.
-- Claude Desktop always requires final MCPB approval.
+- Automatic Claude Desktop JSON registration uses its documented local-server
+  configuration. Only the MCPB fallback requires final in-app approval.
 - Automatic installation is Windows-only.
 - Blender 4.2.22 LTS, 5.1.2, and 5.2 LTS RC passed the local runtime,
   transactional, linked/override, 2,048-node efficiency, and corner-case suites.
