@@ -39,17 +39,22 @@ model-generation tools while adding:
 Open PowerShell and run:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1 | iex
+Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/bootstrap.ps1 | iex
 ```
 
 `-Scope Process` applies only to the current PowerShell window; it does not
-permanently change the user or machine execution policy. The source is
-human-readable: [install.ps1](install.ps1). For a reproducible, version-pinned
-install, use:
+permanently change the user or machine execution policy. The ASCII
+[bootstrap.ps1](bootstrap.ps1) only fetches and launches the human-readable
+[install.ps1](install.ps1). For a reproducible, version-pinned install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.9.2/install.ps1))) -ReleaseTag v1.9.2
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.9.3/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.9.3
 ```
+
+The explicit `TrimStart` removes the UTF-8 BOM carried by the localized full
+installer when it is parsed directly from HTTP. The bootstrap performs the same
+single-character normalization automatically; the BOM is retained so Windows
+PowerShell 5.1 can also run `install.ps1` from disk without corrupting Chinese.
 
 Before changing the machine, the installer:
 
@@ -58,7 +63,7 @@ Before changing the machine, the installer:
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
 4. verifies the wheel, Extension ZIP, and optional fallback MCPB against `SHA256SUMS.txt`;
 5. installs into a versioned environment such as
-   `%LOCALAPPDATA%\BlenderMCP\venv-1.9.2`;
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.9.3`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients.
 
@@ -108,7 +113,7 @@ Pass parameters to the remote script by creating a script block:
 
 ```powershell
 Set-ExecutionPolicy Bypass -Scope Process -Force
-$installer = [scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1))
+$installer = [scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1)).TrimStart([char]0xFEFF))
 & $installer -Gui
 ```
 
@@ -327,7 +332,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.9.2-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.9.3-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -335,7 +340,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.9.2-py3-none-any.whl
+python -m pip install ./blender_mcp-1.9.3-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -447,7 +452,7 @@ MCP server telemetry.
 Dry-run command:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1))) -DryRun
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/main/install.ps1)).TrimStart([char]0xFEFF))) -DryRun
 ```
 
 ## Security and known limitations
@@ -523,7 +528,8 @@ Build all Release assets:
 | --- | --- |
 | [addon.py](addon.py) | Blender add-on and Extension source. |
 | [src/blender_mcp/server.py](src/blender_mcp/server.py) | Python MCP server. |
-| [install.ps1](install.ps1) | Windows Release/bootstrap installer. |
+| [bootstrap.ps1](bootstrap.ps1) | ASCII one-line entry point that fetches the localized installer. |
+| [install.ps1](install.ps1) | Human-readable Windows Release installer. |
 | [scripts/build_release.ps1](scripts/build_release.ps1) | Release asset builder. |
 | [docs/blender-knowledge.md](docs/blender-knowledge.md) | Official documentation and live runtime knowledge guide. |
 | [docs/geometry-nodes.md](docs/geometry-nodes.md) | Geometry Nodes protocol guide. |

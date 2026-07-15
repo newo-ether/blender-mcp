@@ -6,6 +6,8 @@ $ErrorActionPreference = "Stop"
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $installer = Join-Path $root "install.ps1"
+$bootstrap = Join-Path $root "bootstrap.ps1"
+$readmePath = Join-Path $root "README.md"
 $manifestPath = Join-Path $root "packaging\claude_desktop\manifest.json"
 $launcherPath = Join-Path $root "packaging\claude_desktop\server\run.cmd"
 $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
@@ -24,6 +26,29 @@ try {
     $mainIndex = $source.LastIndexOf($mainMarker, [System.StringComparison]::Ordinal)
     Assert-True -Condition ($mainIndex -ge 0) -Message "Could not isolate installer function definitions."
     . ([scriptblock]::Create($source.Substring(0, $mainIndex)))
+
+    $installerBytes = [System.IO.File]::ReadAllBytes($installer)
+    Assert-True -Condition ($installerBytes[0] -eq 0xEF -and $installerBytes[1] -eq 0xBB -and $installerBytes[2] -eq 0xBF) -Message "Localized installer lost its Windows PowerShell 5.1 UTF-8 BOM."
+    $httpStyleInstallerText = [System.Text.Encoding]::UTF8.GetString($installerBytes)
+    Assert-True -Condition ($httpStyleInstallerText[0] -eq [char]0xFEFF) -Message "Raw installer fixture did not retain the HTTP BOM character."
+    [void][scriptblock]::Create($httpStyleInstallerText.TrimStart([char]0xFEFF))
+
+    $bootstrapBytes = [System.IO.File]::ReadAllBytes($bootstrap)
+    Assert-True -Condition (@($bootstrapBytes | Where-Object { $_ -gt 0x7F }).Count -eq 0) -Message "bootstrap.ps1 must remain ASCII for irm | iex on Windows PowerShell 5.1."
+    $bootstrapText = [System.Text.Encoding]::ASCII.GetString($bootstrapBytes)
+    Assert-True -Condition ($bootstrapText -match 'TrimStart\(\[char\]0xFEFF\)') -Message "Bootstrap does not remove the localized installer BOM."
+    [void][scriptblock]::Create($bootstrapText)
+    $script:BootstrapProbeRan = $false
+    function Invoke-RestMethod {
+        param([string]$Uri, [switch]$UseBasicParsing)
+        return [string]([char]0xFEFF) + '$script:BootstrapProbeRan = $true'
+    }
+    & ([scriptblock]::Create($bootstrapText))
+    Remove-Item -LiteralPath Function:\Invoke-RestMethod
+    Assert-True -Condition $script:BootstrapProbeRan -Message "ASCII bootstrap did not execute BOM-prefixed installer content."
+    $readmeText = Get-Content -LiteralPath $readmePath -Raw -Encoding UTF8
+    Assert-True -Condition ($readmeText -match 'main/bootstrap\.ps1 \| iex') -Message "README one-line command bypasses the ASCII bootstrap."
+    Assert-True -Condition ($readmeText -notmatch '\[scriptblock\]::Create\(\(irm ') -Message "README contains a direct Raw ScriptBlock command without BOM normalization."
 
     Assert-True -Condition ((Resolve-InstallerLanguage -RequestedLanguage "Auto" -UiCultureName "zh-CN") -eq "zh-CN") -Message "zh-CN UI culture did not select Chinese."
     Assert-True -Condition ((Resolve-InstallerLanguage -RequestedLanguage "Auto" -UiCultureName "zh-Hans-CN") -eq "zh-CN") -Message "zh-Hans UI culture did not select Chinese."
