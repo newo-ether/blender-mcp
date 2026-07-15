@@ -33,6 +33,11 @@ SUPPORTED_PATCH_OPERATIONS = frozenset({
     "add_interface_socket",
     "remove_interface_socket",
     "set_modifier_input",
+    "add_dynamic_item",
+    "remove_dynamic_item",
+    "set_dynamic_item",
+    "add_foreach_zone",
+    "add_closure_zone",
 })
 
 _REVISION_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -69,6 +74,21 @@ _PATCH_OPERATION_FIELDS = {
     "set_modifier_input": (
         {"op", "object", "modifier", "socket", "value"},
         set(),
+    ),
+    "add_dynamic_item": (
+        {"op", "node", "collection", "socket_type", "name"}, set()
+    ),
+    "remove_dynamic_item": (
+        {"op", "node", "collection", "index"}, set()
+    ),
+    "set_dynamic_item": (
+        {"op", "node", "collection", "index", "property", "value"}, set()
+    ),
+    "add_foreach_zone": (
+        {"op", "input_id", "output_id"}, {"input_name", "output_name", "location"}
+    ),
+    "add_closure_zone": (
+        {"op", "input_id", "output_id"}, {"input_name", "output_name", "location"}
     ),
 }
 
@@ -277,6 +297,7 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
         "id", "node_type", "name", "node", "property", "socket",
         "from_node", "from_socket", "to_node", "to_socket", "identifier",
         "object", "modifier", "in_out", "socket_type",
+        "collection", "input_id", "output_id", "input_name", "output_name",
     }
     for index, operation in enumerate(operations):
         path = f"/operations/{index}"
@@ -391,6 +412,37 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                         "in_out must be INPUT or OUTPUT",
                     )
                 )
+        elif operation_name in {"remove_dynamic_item", "set_dynamic_item"}:
+            item_index = operation.get("index")
+            if not isinstance(item_index, int) or isinstance(item_index, bool) or item_index < 0:
+                diagnostics.append(
+                    _diagnostic("invalid_index", f"{path}/index", "index must be a non-negative integer")
+                )
+        elif operation_name in {"add_foreach_zone", "add_closure_zone"}:
+            for field in ("input_id", "output_id"):
+                created_id = operation.get(field)
+                if isinstance(created_id, str):
+                    if created_id in created_ids:
+                        diagnostics.append(
+                            _diagnostic(
+                                "duplicate_created_id", f"{path}/{field}",
+                                f"Created node id is duplicated: {created_id}",
+                            )
+                        )
+                    created_ids.add(created_id)
+            if "location" in operation:
+                location = operation["location"]
+                if (
+                    not isinstance(location, list)
+                    or len(location) != 2
+                    or any(not isinstance(value, (int, float)) or isinstance(value, bool) for value in location)
+                ):
+                    diagnostics.append(
+                        _diagnostic(
+                            "invalid_location", f"{path}/location",
+                            "location must be an array of two numbers",
+                        )
+                    )
 
     return diagnostics
 

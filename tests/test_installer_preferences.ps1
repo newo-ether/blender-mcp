@@ -49,7 +49,10 @@ function Invoke-BlenderPreferenceFixture {
     if ($Mode -eq "seed") {
         $arguments += "--factory-startup"
     }
-    $arguments += @("--python", $fixture, "--", $Mode)
+    # Start-Process flattens ArgumentList to one command line on Windows, so an
+    # absolute script path containing spaces must retain its own quotes.
+    $quotedFixture = '"' + $fixture.Replace('"', '\"') + '"'
+    $arguments += @("--python", $quotedFixture, "--", $Mode)
     $process = Start-Process -FilePath $blender `
         -ArgumentList $arguments `
         -Wait `

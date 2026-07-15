@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 import json
 import re
@@ -32,6 +33,10 @@ MAX_PAGE_IDENTIFIER_CHARS = 500
 MAX_SEARCH_INDEX_BYTES = 12 * 1024 * 1024
 MAX_PAGE_BYTES = 3 * 1024 * 1024
 MAX_REDIRECTS = 3
+SNIPPET_MODES = frozenset({"none", "top", "all"})
+DEFAULT_SNIPPET_MODE = "top"
+DEFAULT_SNIPPET_TOP_COUNT = 3
+MAX_SNIPPET_WORKERS = 3
 
 _INDEX_CONTENT_TYPES = frozenset({
     "application/javascript",
@@ -927,6 +932,7 @@ class BlenderDocumentationClient:
         *,
         query: str,
         limit: int = DEFAULT_SEARCH_LIMIT,
+        snippet_mode: str = DEFAULT_SNIPPET_MODE,
     ) -> dict[str, Any]:
         retrieval_marker = self._retrieval_marker()
         normalized_query = _validate_query(query)
@@ -934,6 +940,11 @@ class BlenderDocumentationClient:
             raise BlenderDocumentationRetrievalError(
                 "invalid_limit",
                 f"limit must be an integer from 1 to {MAX_SEARCH_LIMIT}",
+            )
+        if snippet_mode not in SNIPPET_MODES:
+            raise BlenderDocumentationRetrievalError(
+                "invalid_snippet_mode",
+                "snippet_mode must be none, top, or all",
             )
         source_records = self._validate_context(context)
         results: list[dict[str, Any]] = []
@@ -983,10 +994,24 @@ class BlenderDocumentationClient:
             seen.add(identity)
             deduplicated.append(result)
         results = deduplicated[:limit]
-        for result in results:
-            if not result.pop("_needs_snippet", False):
+        enrich_budget = {
+            "none": 0,
+            "top": DEFAULT_SNIPPET_TOP_COUNT,
+            "all": len(results),
+        }[snippet_mode]
+        enrich_indexes = []
+        for index, result in enumerate(results):
+            needs_snippet = result.pop("_needs_snippet", False)
+            if needs_snippet and index < enrich_budget:
+                enrich_indexes.append(index)
+            elif needs_snippet:
                 result.pop("_english_page_url", None)
-                continue
+                result["snippet_deferred"] = True
+            else:
+                result.pop("_english_page_url", None)
+
+        def enrich(index):
+            result = results[index]
             english_page_url = result.pop("_english_page_url", None)
             try:
                 page_response = self.fetcher(
@@ -1027,11 +1052,18 @@ class BlenderDocumentationClient:
                         result["snippet_error"] = fallback_exc.code
                 else:
                     result["snippet_error"] = exc.code
+            return index
+
+        if enrich_indexes:
+            with ThreadPoolExecutor(max_workers=min(MAX_SNIPPET_WORKERS, len(enrich_indexes))) as executor:
+                list(executor.map(enrich, enrich_indexes))
         return {
             "schema": DOCUMENTATION_SEARCH_SCHEMA,
             "documentation_context": _compact_context(context),
             "query": normalized_query,
             "limit": limit,
+            "snippet_mode": snippet_mode,
+            "snippet_enriched_count": len(enrich_indexes),
             "result_count": len(results),
             "results": results,
             "errors": errors,

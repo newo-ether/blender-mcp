@@ -49,7 +49,7 @@ permanently change the user or machine execution policy. The ASCII
 [install.ps1](install.ps1). For a reproducible, version-pinned install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.10.0/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.10.0
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.11.0/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.11.0
 ```
 
 The explicit `TrimStart` removes the UTF-8 BOM carried by the localized full
@@ -64,7 +64,7 @@ Before changing the machine, the installer:
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
 4. verifies the wheel, Extension ZIP, portable Skill ZIP, and optional fallback MCPB against `SHA256SUMS.txt`;
 5. installs into a versioned environment such as
-   `%LOCALAPPDATA%\BlenderMCP\venv-1.10.0`;
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.11.0`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients;
 8. installs the same portable Skill for selected Codex and Claude Code clients,
@@ -103,7 +103,7 @@ Use `-Gui` for a WinForms checkbox window.
 
 1. Open a selected Blender version.
 2. In the 3D View, press N and open the **BlenderMCP** tab.
-3. The bridge starts automatically on port `9876`; the preference is enabled by default.
+3. The bridge registers this Blender instance automatically; endpoint allocation is internal and requires no port setup.
 4. Start a new task or restart the selected MCP clients so they discover the
    server and filesystem Skill.
 5. Claude Desktop normally needs only a restart. If the installer reports an
@@ -188,9 +188,9 @@ Codex / ChatGPT / Claude
           v
 Python MCP server
           |
-          | JSON over TCP localhost:9876
+          | local discovery + one claimed loopback connection
           v
-Blender Extension <-> Blender scene and node trees
+one selected Blender Extension <-> scene and node trees
 ```
 
 The MCP server is launched by the client. The Blender Extension hosts the local
@@ -198,6 +198,17 @@ bridge. The installer installs the Extension but does not launch Blender. Start
 Blender from the logged-on interactive desktop, then start the bridge before
 asking the client to use Blender tools; a background or Windows Session 0
 process cannot provide a visible window.
+
+### Multiple Blender instances
+
+Every open Blender process registers a bounded local identity automatically. One MCP server can discover several instances but controls at most one at a time:
+
+1. `list_blender_instances` reports the open file, active scene, Blender version, dirty/available state, and claim status.
+2. With one available instance the server may select it automatically. With several, call `claim_blender_instance` using an explicit `instance_id`; selection never uses foreground-window or port heuristics.
+3. Mutations require an add-on-authoritative claim. `get_active_blender_instance` reports the selected identity, and `release_blender_instance` returns control when the task is done.
+4. Disable **Allow AI control** to reserve a window for manual work. A cyan hollow border inside every 3D View means that Blender process is currently claimed; it does not capture mouse or keyboard input.
+
+The add-on first tries the historical loopback endpoint for compatibility, then asks the operating system for a private loopback endpoint when another Blender already owns it. This transport detail is not a user mode and is not shown in the normal UI.
 
 ## Blender knowledge
 
@@ -215,7 +226,13 @@ source-attributed JSON instead of loading an entire Manual into context.
 | `get_node_type_schema` | Inspect a Geometry, Shader, or Compositor node in its exact owner context. | Yes |
 | `get_runtime_automation_context` | Probe live render-engine/output, layered Action, compositor, and Object Info compatibility without retaining probe data. | Yes |
 | `search_blender_node_assets` | Inspect bundled Essentials or configured user node assets without leaving data blocks in the project. | Yes |
+| `export_blender_node_asset` | Export an exact asset graph through a disposable load with zero retained datablocks. | Yes |
 | `import_blender_node_asset` | Append one exact searched asset locally after revalidating its configured/bundled source identity. | Yes |
+| `audit_external_dependencies` | List missing libraries, images, caches, fonts, and other external files without mutation. | Yes |
+| `plan_external_dependency_relinks` / `apply_external_dependency_relinks` | Build a bounded, ambiguity-preserving relink plan, then explicitly apply that exact revision with rollback on failure. | Yes |
+| `inspect_evaluated_mesh` | Report bounded evaluated topology, components, edge statistics, bounds, and Named Attributes. | Yes |
+| `get_simulation_status` | Inspect Geometry Nodes simulation/bake capability and state. | Yes |
+| `clear_simulation_cache` / `reset_simulation` / `bake_simulation` | Target one exact Geometry Nodes modifier and bake ID; the current synchronous bake reports `cancellable=false`. | Yes |
 
 Use `version="auto"` for build-correct answers or an explicit version such as
 `"5.1"` while Blender is disconnected. Prerelease, channel, and English
@@ -250,9 +267,11 @@ Supported generic owners:
 | `ensure_scene_compositor_tree` | Inspect an exact Scene, or explicitly create and verify its missing compositor tree with rollback. | Only with `create_if_missing=true` |
 | `get_node_tree_index` | Search and page a compact index without putting the full graph in model context. | No |
 | `export_node_tree` | Return or write a full flat graph or targeted N-hop subgraph. | No |
+| `query_node_graph` | Project fields or query socket links, Named Attributes, shortest paths, and bounded slices. | No |
 | `get_node_type_schema` | Probe exact runtime sockets, properties, dynamic structures, and owner restrictions. | No |
 | `validate_node_tree_patch` | Check structure, stale state, typed references, runtime semantics, and limits on a disposable copy. | No |
 | `apply_node_tree_patch` | Revalidate, commit through the owner adapter, re-export, and roll back exactly on failure. | Yes |
+| `modify_verify_save` | Validate a reviewed node Patch, assert candidate graph counts, commit and read back transactionally, then save only under an explicit `save_policy`. | Yes |
 
 The eight `*_geometry_node_*` tools remain available as the Geometry Nodes v1
 compatibility contract, including modifier inputs and explicit shared-tree
@@ -265,16 +284,22 @@ import is a separate opt-in transaction.
    read-only first, then repeat with `create_if_missing=true` only when wanted.
 2. Call `list_node_trees` and retain the exact `tree_ref`.
 3. Search large graphs with `get_node_tree_index`.
-4. Export only the relevant nodes and neighbors. Use `view="operations"` for
-   formulas and connectivity without inherited RNA metadata.
+4. Export only the relevant nodes and neighbors. Keep `view="auto"`: complete
+   graphs select operations, while targeted subgraphs select semantic detail.
 5. Put the returned `revision` and `tree_ref` into a small patch JSON file.
 6. Edit that file with the client's normal file-edit tool.
 7. Call `validate_node_tree_patch`.
 8. Apply only a valid patch, then inspect `actual_diff`, `new_revision`, users,
    and backup disposition.
 
-The generic protocol supports common graph/layout operations, Frame
-annotations, group interfaces, Color Ramps, Curve Mappings, and typed Blender
+For an atomic agent-facing sequence, `modify_verify_save` combines dry-run
+validation, declarative `node_count`/`link_count`/`interface_item_count`
+assertions, transactional application, and revision readback. It defaults to
+`save_policy="never"`; `on_success` and `required` are explicit save requests.
+
+The patch protocols support common graph/layout operations, Frame
+annotations, group interfaces, Color Ramps, Curve Mappings, allowlisted dynamic
+List/Repeat/Simulation items, paired For Each and Blender 5.2 Closure zones, and typed Blender
 IDs and View Layers. The workspace boundary is controlled by
 `BLENDER_MCP_WORKSPACE`; files outside it, non-JSON files, files over 2 MiB, and
 patches over 500 operations are rejected. A public full response is capped at
@@ -298,7 +323,7 @@ Examples and contracts:
 
 ## Other capabilities
 
-The server currently exposes 42 MCP tools, including:
+The server exposes MCP tools including:
 
 - scene and object inspection;
 - viewport screenshots;
@@ -309,7 +334,7 @@ The server currently exposes 42 MCP tools, including:
 - Hyper3D Rodin text/image generation and import;
 - Hunyuan3D generation and import;
 - the three official-documentation tools;
-- seven owner-aware structured-node tools, runtime compatibility probing,
+- owner-aware structured-node tools, runtime compatibility probing,
   configured node-asset import, and the eight Geometry Nodes v1 tools.
 
 Example requests:
@@ -345,7 +370,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.10.0-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.11.0-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -353,7 +378,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.10.0-py3-none-any.whl
+python -m pip install ./blender_mcp-1.11.0-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -363,7 +388,9 @@ Install the Extension in Blender 4.2+:
 3. Select `blender_mcp-<version>.zip` without extracting it.
 4. Enable **Blender MCP**.
 
-The legacy [addon.py](addon.py) remains available for Blender 3.x, but the
+The legacy [addon.py](addon.py) source install remains available for Blender 3.x
+when [blender_mcp_addon_runtime.py](blender_mcp_addon_runtime.py) is installed
+beside it, but the
 Geometry Nodes v1 protocol is not supported or claimed there.
 
 ### Install the Agent Skill manually
@@ -395,8 +422,6 @@ Codex CLI and ChatGPT with Codex mode:
 
 ```powershell
 codex mcp add blender_mcp `
-  --env BLENDER_HOST=localhost `
-  --env BLENDER_PORT=9876 `
   --env BLENDER_MCP_WORKSPACE=C:\path\to\workspace `
   -- C:\path\to\venv\Scripts\blender-mcp.exe
 ```
@@ -405,8 +430,6 @@ Claude Code:
 
 ```powershell
 claude mcp add --scope user blender_mcp `
-  --env BLENDER_HOST=localhost `
-  --env BLENDER_PORT=9876 `
   --env BLENDER_MCP_WORKSPACE=C:\path\to\workspace `
   -- C:\path\to\venv\Scripts\blender-mcp.exe
 ```
@@ -426,8 +449,8 @@ installer leaves it untouched and falls back to the published MCPB through
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `BLENDER_HOST` | `localhost` | Host running the Blender bridge. |
-| `BLENDER_PORT` | `9876` | TCP port exposed by the Blender Extension. |
+| `BLENDER_MCP_RUNTIME_DIR` | platform user state | Optional registry override for tests and advanced local deployment. |
+| `BLENDER_HOST` / `BLENDER_PORT` | `localhost` / `9876` | Legacy fallback only when no discovery-aware add-on is registered. |
 | `BLENDER_MCP_WORKSPACE` | server working directory | Allowed root for structured node-tree JSON files. |
 | `BLENDER_MCP_CACHE_DIR` | platform user cache | Optional parent directory for versioned Blender documentation cache entries. |
 | `DISABLE_TELEMETRY` | unset | Set to `true` to disable MCP server telemetry. |
@@ -441,8 +464,7 @@ switches.
 Persistent settings are available under
 **Edit > Preferences > Add-ons > Blender MCP**:
 
-- telemetry consent and auto-connect (enabled by default);
-- bridge port;
+- telemetry consent, auto-connect, and **Allow AI control** (enabled by default);
 - Poly Haven enablement;
 - Hyper3D provider and API key;
 - Sketchfab API key;
@@ -470,7 +492,9 @@ MCP server telemetry.
 | A custom MCP entry must not be updated | Rerun with `-PreserveExistingMcpEntries`, or use the client-specific skip switch. |
 | Claude Desktop does not show Blender MCP | Restart Claude Desktop, then inspect `%APPDATA%\Claude\claude_desktop_config.json` and `%APPDATA%\Claude\logs`. The installer preserves malformed JSON and reports the MCPB fallback instead of overwriting it. |
 | Claude Code still uses another same-name entry | Run `claude mcp get blender_mcp` and check its scope. Local and project entries take precedence and are intentionally not removed by this installer. |
-| The client cannot reach Blender | Open Blender and confirm auto-connect is enabled, or click **Connect to Claude** manually; both sides must use the same host and port. |
+| The client cannot find Blender | Open Blender and confirm auto-connect is enabled, or click **Start MCP connection**. Then call `list_blender_instances`; endpoint registration is automatic. |
+| More than one Blender is open | Choose the exact file/scene summary and call `claim_blender_instance`. Do not choose by window focus or endpoint order. |
+| A Blender window must remain manual | Disable **Allow AI control** in that window. If it is occupied, click **Release AI control**; the hollow viewport border then disappears. |
 | Blender is running but no window is visible | The installer does not launch Blender. Start it from the logged-on desktop; a background or Windows Session 0 process is not an interactive GUI launch. |
 | An old `blender: uvx blender-mcp` entry still appears | Rerun the installer. It removes only semantically matched legacy entries unless `-PreserveExistingMcpEntries` is set; unrelated `uvx` services are retained. |
 | The Extension is absent from one Blender | Rerun and select that version, or pass its executable with `-BlenderPath`. |
@@ -560,7 +584,8 @@ Build all Release assets:
 
 | Path | Purpose |
 | --- | --- |
-| [addon.py](addon.py) | Blender add-on and Extension source. |
+| [addon.py](addon.py) | Main Blender add-on and Extension source. |
+| [blender_mcp_addon_runtime.py](blender_mcp_addon_runtime.py) | Instance registry and occupancy UI runtime helpers. |
 | [src/blender_mcp/server.py](src/blender_mcp/server.py) | Python MCP server. |
 | [bootstrap.ps1](bootstrap.ps1) | ASCII one-line entry point that fetches the localized installer. |
 | [install.ps1](install.ps1) | Human-readable Windows Release installer. |

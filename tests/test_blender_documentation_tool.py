@@ -86,23 +86,24 @@ class BlenderDocumentationToolTests(unittest.TestCase):
         self.assertEqual(parsed["sources"][0]["channel"], "dev")
         self.assertEqual(parsed["sources"][0]["language"], "zh-hans")
 
-    def test_invalid_request_is_bounded_error_text(self):
+    def test_invalid_request_is_truthful_typed_failure(self):
         server.get_blender_connection = lambda: (_ for _ in ()).throw(
             AssertionError("invalid request unexpectedly connected to Blender")
         )
-        response = server.get_blender_documentation_context(
-            None,
-            version="https://example.com",
-        )
-        self.assertTrue(response.startswith("Error resolving Blender documentation context:"))
-        self.assertNotIn("Traceback", response)
+        with self.assertRaises(server.BlenderMCPError) as captured:
+            server.get_blender_documentation_context(
+                None,
+                version="https://example.com",
+            )
+        self.assertEqual(captured.exception.code, "tool_execution_failed")
+        self.assertNotIn("Traceback", captured.exception.message)
 
     def test_search_tool_defaults_to_manual_and_returns_json(self):
         calls = []
 
         class FakeClient:
-            def search(self, context, *, query, limit):
-                calls.append((context, query, limit))
+            def search(self, context, *, query, limit, snippet_mode):
+                calls.append((context, query, limit, snippet_mode))
                 return {
                     "schema": "blender-documentation-search/1",
                     "query": query,
@@ -122,10 +123,11 @@ class BlenderDocumentationToolTests(unittest.TestCase):
         )
         parsed = json.loads(response)
         self.assertEqual(parsed["schema"], "blender-documentation-search/1")
-        context, query, limit = calls[0]
+        context, query, limit, snippet_mode = calls[0]
         self.assertEqual(context["requested"]["sources"], ["manual"])
         self.assertEqual(query, "Geometry Nodes")
         self.assertEqual(limit, 3)
+        self.assertEqual(snippet_mode, "top")
 
     def test_page_tool_normalizes_source_alias_before_client(self):
         calls = []

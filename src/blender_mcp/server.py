@@ -14,6 +14,9 @@ from pathlib import Path
 import base64
 from urllib.parse import urlparse
 
+from .errors import BlenderMCPError, classify_exception
+from .instance_registry import InstanceConnectionManager, discover_registry_records
+
 from .blender_docs import (
     BlenderDocumentationContextError,
     resolve_documentation_context,
@@ -59,11 +62,30 @@ logger = logging.getLogger("BlenderMCPServer")
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 9876
 
+_LOG_REDACTED_KEYS = {
+    "_claim_token", "claim_token", "code", "api_key", "secret_id",
+    "secret_key", "password", "images", "input_image_urls",
+}
+
+
+def _redact_command_params(value: Any) -> Any:
+    """Keep bridge logs useful without leaking claims, credentials, code, or media."""
+    if isinstance(value, dict):
+        return {
+            key: "<redacted>" if str(key).casefold() in _LOG_REDACTED_KEYS
+            else _redact_command_params(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_command_params(item) for item in value[:20]]
+    return value
+
 @dataclass
 class BlenderConnection:
     host: str
     port: int
     sock: socket.socket = None  # Changed from 'socket' to 'sock' to avoid naming conflict
+    params_enricher: Any = None
     
     def connect(self) -> bool:
         """Connect to the Blender addon socket server"""
@@ -151,14 +173,21 @@ class BlenderConnection:
         if not self.sock and not self.connect():
             raise ConnectionError("Not connected to Blender")
         
+        prepared_params = dict(params or {})
+        if self.params_enricher is not None:
+            prepared_params = self.params_enricher(command_type, prepared_params)
         command = {
             "type": command_type,
-            "params": params or {}
+            "params": prepared_params
         }
         
         try:
             # Log the command being sent
-            logger.info(f"Sending command: {command_type} with params: {params}")
+            logger.info(
+                "Sending command: %s with params: %s",
+                command_type,
+                _redact_command_params(prepared_params),
+            )
             
             # Send the command
             self.sock.sendall(json.dumps(command).encode('utf-8'))
@@ -176,30 +205,42 @@ class BlenderConnection:
             
             if response.get("status") == "error":
                 logger.error(f"Blender error: {response.get('message')}")
-                raise Exception(response.get("message", "Unknown error from Blender"))
+                error = response.get("error") or {}
+                raise BlenderMCPError(
+                    error.get("code", "blender_python_error"),
+                    response.get("message", "Unknown error from Blender"),
+                    retryable=bool(error.get("retryable", False)),
+                    details=error.get("details") or {},
+                )
             
             return response.get("result", {})
+        except BlenderMCPError:
+            raise
         except socket.timeout:
             logger.error("Socket timeout while waiting for response from Blender")
             # Don't try to reconnect here - let the get_blender_connection handle reconnection
             # Just invalidate the current socket so it will be recreated next time
             self.sock = None
-            raise Exception("Timeout waiting for Blender response - try simplifying your request. If Blender is running headless (blender -b), commands never execute; run Blender with a GUI or via 'xvfb-run -a blender' instead")
+            raise BlenderMCPError(
+                "blender_timeout",
+                "Timeout waiting for Blender response; simplify the request and ensure Blender is running with a GUI",
+                retryable=True,
+            )
         except (ConnectionError, BrokenPipeError, ConnectionResetError) as e:
             logger.error(f"Socket connection error: {str(e)}")
             self.sock = None
-            raise Exception(f"Connection to Blender lost: {str(e)}")
+            raise BlenderMCPError("mcp_transport_error", f"Connection to Blender lost: {str(e)}", retryable=True)
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON response from Blender: {str(e)}")
             # Try to log what was received
             if 'response_data' in locals() and response_data:
                 logger.error(f"Raw response (first 200 bytes): {response_data[:200]}")
-            raise Exception(f"Invalid response from Blender: {str(e)}")
+            raise BlenderMCPError("mcp_protocol_error", f"Invalid response from Blender: {str(e)}")
         except Exception as e:
             logger.error(f"Error communicating with Blender: {str(e)}")
             # Don't try to reconnect here - let the get_blender_connection handle reconnection
             self.sock = None
-            raise Exception(f"Communication error with Blender: {str(e)}")
+            raise classify_exception(e, operation=command_type)
 
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
@@ -231,7 +272,10 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
     finally:
         # Clean up the global connection on shutdown
         global _blender_connection
-        if _blender_connection:
+        if _instance_manager.active is not None:
+            _instance_manager.release(ignore_errors=True)
+            _blender_connection = None
+        elif _blender_connection:
             logger.info("Disconnecting from Blender on shutdown")
             _blender_connection.disconnect()
             _blender_connection = None
@@ -263,10 +307,18 @@ mcp = FastMCP(
 # Global connection for resources (since resources can't access context)
 _blender_connection = None
 _polyhaven_enabled = False  # Add this global variable
+_instance_manager = InstanceConnectionManager(
+    connection_factory=lambda host, port: BlenderConnection(host=host, port=port),
+    owner_label=os.getenv("BLENDER_MCP_CLIENT_LABEL", "MCP client"),
+)
 
 def get_blender_connection():
     """Get or create a persistent Blender connection"""
     global _blender_connection, _polyhaven_enabled  # Add _polyhaven_enabled to globals
+
+    if _instance_manager.active is not None:
+        _instance_manager.ensure_lease()
+        _blender_connection = _instance_manager.active
     
     # If we have an existing connection, check if it's still valid
     if _blender_connection is not None:
@@ -284,9 +336,17 @@ def get_blender_connection():
             except:
                 pass
             _blender_connection = None
+            if _instance_manager.active is not None:
+                _instance_manager.invalidate()
     
     # Create a new connection if needed
     if _blender_connection is None:
+        registrations = discover_registry_records(directory=_instance_manager.directory)
+        if registrations:
+            _blender_connection = _instance_manager.auto_select()
+            _blender_connection.params_enricher = _instance_manager.prepare_params
+            logger.info("Selected registered Blender instance %s", _instance_manager.active_record["instance_id"])
+            return _blender_connection
         host = os.getenv("BLENDER_HOST", DEFAULT_HOST)
         port = int(os.getenv("BLENDER_PORT", DEFAULT_PORT))
         _blender_connection = BlenderConnection(host=host, port=port)
@@ -297,6 +357,54 @@ def get_blender_connection():
         logger.info("Created new persistent connection to Blender")
     
     return _blender_connection
+
+
+@mcp.tool()
+def list_blender_instances(ctx: Context, validate_live: bool = True) -> Dict[str, Any]:
+    """Discover all registered local Blender instances without selecting one."""
+    instances = _instance_manager.list_instances(validate_live=validate_live)
+    claimable = [item for item in instances if item["status"] == "ready"]
+    return {
+        "schema": "blender-mcp-instance-list/1",
+        "instances": instances,
+        "count": len(instances),
+        "claimable_count": len(claimable),
+        "requires_selection": len(claimable) > 1,
+    }
+
+
+@mcp.tool()
+def claim_blender_instance(
+    ctx: Context,
+    instance_id: str,
+    expected_file_session_id: str = "",
+    lease_seconds: float = 120.0,
+) -> Dict[str, Any]:
+    """Claim and select exactly one registered Blender instance."""
+    global _blender_connection
+    result = _instance_manager.claim(
+        instance_id,
+        expected_file_session_id=expected_file_session_id,
+        lease_seconds=lease_seconds,
+    )
+    _blender_connection = _instance_manager.active
+    _blender_connection.params_enricher = _instance_manager.prepare_params
+    return result
+
+
+@mcp.tool()
+def get_active_blender_instance(ctx: Context) -> Dict[str, Any]:
+    """Return the selected Blender identity and lease state."""
+    return _instance_manager.active_summary()
+
+
+@mcp.tool()
+def release_blender_instance(ctx: Context) -> Dict[str, Any]:
+    """Release only this MCP process's active Blender claim."""
+    global _blender_connection
+    result = _instance_manager.release()
+    _blender_connection = None
+    return result
 
 
 @mcp.tool()
@@ -319,7 +427,12 @@ def get_scene_info(ctx: Context, user_prompt: str) -> str:
 
 @mcp.tool()
 @telemetry_tool("get_object_info")
-def get_object_info(ctx: Context, object_name: str, user_prompt: str = "") -> str:
+def get_object_info(
+    ctx: Context,
+    object_name: str,
+    include_modifiers: bool = False,
+    user_prompt: str = "",
+) -> str:
     """
     Get detailed information about a specific object in the Blender scene.
 
@@ -329,13 +442,171 @@ def get_object_info(ctx: Context, object_name: str, user_prompt: str = "") -> st
     """
     try:
         blender = get_blender_connection()
-        result = blender.send_command("get_object_info", {"name": object_name})
+        params = {"name": object_name}
+        if include_modifiers:
+            params["include_modifiers"] = True
+        result = blender.send_command("get_object_info", params)
         
         # Just return the JSON representation of what Blender sent us
         return json.dumps(result, indent=2)
     except Exception as e:
         logger.error(f"Error getting object info from Blender: {str(e)}")
         return f"Error getting object info: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("audit_external_dependencies")
+def audit_external_dependencies(
+    ctx: Context,
+    missing_only: bool = True,
+    user_prompt: str = "",
+) -> str:
+    """List linked libraries and external media paths without modifying Blender."""
+    try:
+        result = get_blender_connection().send_command(
+            "audit_external_dependencies", {"missing_only": missing_only}
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error auditing external dependencies: {e}"
+
+
+@mcp.tool()
+@telemetry_tool("plan_external_dependency_relinks")
+def plan_external_dependency_relinks(
+    ctx: Context,
+    search_roots: List[str],
+    max_files: int = 10000,
+    user_prompt: str = "",
+) -> str:
+    """Create an explicit read-only relink plan from bounded search roots."""
+    try:
+        result = get_blender_connection().send_command(
+            "plan_external_dependency_relinks",
+            {"search_roots": search_roots, "max_files": max_files},
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error planning external dependency relinks: {e}"
+
+
+@mcp.tool()
+@telemetry_tool("apply_external_dependency_relinks")
+def apply_external_dependency_relinks(
+    ctx: Context,
+    plan: Dict[str, Any],
+    user_prompt: str = "",
+) -> str:
+    """Apply only a reviewed plan returned by plan_external_dependency_relinks."""
+    try:
+        result = get_blender_connection().send_command(
+            "apply_external_dependency_relinks", {"plan": plan}
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error applying external dependency relinks: {e}"
+
+
+@mcp.tool()
+@telemetry_tool("inspect_evaluated_mesh")
+def inspect_evaluated_mesh(
+    ctx: Context,
+    object_name: str,
+    max_attributes: int = 32,
+    max_attribute_values: int = 4096,
+    user_prompt: str = "",
+) -> str:
+    """Inspect bounded evaluated topology, bounds, edge lengths, and attributes."""
+    try:
+        result = get_blender_connection().send_command(
+            "inspect_evaluated_mesh",
+            {
+                "object_name": object_name,
+                "max_attributes": max_attributes,
+                "max_attribute_values": max_attribute_values,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error inspecting evaluated mesh: {e}"
+
+
+@mcp.tool()
+@telemetry_tool("get_simulation_status")
+def get_simulation_status(
+    ctx: Context,
+    object_name: str = "",
+    modifier_name: str = "",
+    user_prompt: str = "",
+) -> str:
+    """Inspect Geometry Nodes simulation zones and bake configuration."""
+    try:
+        result = get_blender_connection().send_command(
+            "get_simulation_status",
+            {"object_name": object_name, "modifier_name": modifier_name},
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error getting simulation status: {e}"
+
+
+@mcp.tool()
+@telemetry_tool("clear_simulation_cache")
+def clear_simulation_cache(
+    ctx: Context,
+    object_name: str,
+    modifier_name: str,
+    bake_id: int = None,
+    user_prompt: str = "",
+) -> str:
+    """Clear one or all simulation bake caches on an exact modifier."""
+    try:
+        params = {"object_name": object_name, "modifier_name": modifier_name}
+        if bake_id is not None:
+            params["bake_id"] = bake_id
+        result = get_blender_connection().send_command("clear_simulation_cache", params)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error clearing simulation cache: {e}"
+
+
+@mcp.tool()
+@telemetry_tool("reset_simulation")
+def reset_simulation(
+    ctx: Context,
+    object_name: str,
+    modifier_name: str,
+    user_prompt: str = "",
+) -> str:
+    """Reset a modifier's simulation state without frame-toggle heuristics."""
+    try:
+        result = get_blender_connection().send_command(
+            "reset_simulation",
+            {"object_name": object_name, "modifier_name": modifier_name},
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error resetting simulation: {e}"
+
+
+@mcp.tool()
+@telemetry_tool("bake_simulation")
+def bake_simulation(
+    ctx: Context,
+    object_name: str,
+    modifier_name: str,
+    bake_id: int,
+    user_prompt: str = "",
+) -> str:
+    """Run one exact Geometry Nodes simulation bake and return verified status."""
+    try:
+        result = get_blender_connection().send_command(
+            "bake_simulation",
+            {"object_name": object_name, "modifier_name": modifier_name, "bake_id": bake_id},
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error baking simulation: {e}"
 
 
 @mcp.tool()
@@ -427,6 +698,7 @@ def search_blender_docs(
     sources: List[str] = None,
     language: str = "en",
     limit: int = 8,
+    snippet_mode: str = "top",
     user_prompt: str = "",
 ) -> str:
     """Search version-correct official Blender documentation.
@@ -440,6 +712,7 @@ def search_blender_docs(
     - sources: manual, python_api, and/or release_notes; defaults to manual
     - language: Blender Manual language code, for example en or zh-hans
     - limit: Maximum results from 1 to 20
+    - snippet_mode: none, top (default, first three), or all
     - user_prompt: Original user prompt for telemetry
     """
     try:
@@ -452,6 +725,7 @@ def search_blender_docs(
             context,
             query=query,
             limit=limit,
+            snippet_mode=snippet_mode,
         )
         return json.dumps(result, ensure_ascii=False, indent=2)
     except (BlenderDocumentationContextError, BlenderDocumentationRetrievalError) as e:
@@ -586,7 +860,7 @@ def ensure_scene_compositor_tree(
 def export_node_tree(
     ctx: Context,
     tree_ref: Dict[str, Any],
-    view: str = "semantic",
+    view: str = "auto",
     node_names: List[str] = None,
     neighbor_depth: int = 0,
     output_path: str = "",
@@ -600,7 +874,7 @@ def export_node_tree(
 
     Parameters:
     - tree_ref: Object containing tree_type and owner {kind, name}
-    - view: semantic, compact operations, layout, or all
+    - view: auto (operations for full graphs, semantic for targeted), semantic, operations, layout, or all
     - node_names: Optional stable node names for a targeted subgraph
     - neighbor_depth: Include connected nodes up to 0-5 hops
     - output_path: Optional workspace-constrained .json output path
@@ -608,15 +882,15 @@ def export_node_tree(
     """
     try:
         blender = get_blender_connection()
-        result = blender.send_command(
-            "export_node_tree",
-            {
-                "tree_ref": tree_ref,
-                "view": view,
-                "node_names": node_names or [],
-                "neighbor_depth": neighbor_depth,
-            },
-        )
+        params = {
+            "tree_ref": tree_ref,
+            "view": view,
+            "node_names": node_names or [],
+            "neighbor_depth": neighbor_depth,
+        }
+        if output_path:
+            params["allow_large_response"] = True
+        result = blender.send_command("export_node_tree", params)
         if not output_path:
             return json.dumps(result, ensure_ascii=False, indent=2)
         destination = write_node_tree_snapshot_json(result, output_path)
@@ -671,6 +945,44 @@ def get_node_tree_index(
     except Exception as e:
         logger.error(f"Error indexing node tree: {str(e)}")
         return f"Error indexing node tree: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("query_node_graph")
+def query_node_graph(
+    ctx: Context,
+    tree_ref: Dict[str, Any],
+    query_type: str,
+    node_names: List[str] = None,
+    from_node: str = "",
+    to_node: str = "",
+    attribute_name: str = "",
+    socket_id: str = "",
+    direction: str = "downstream",
+    fields: List[str] = None,
+    limit: int = 200,
+    user_prompt: str = "",
+) -> str:
+    """Query fields, socket links, Named Attributes, paths, or bounded graph slices."""
+    try:
+        result = get_blender_connection().send_command(
+            "query_node_graph",
+            {
+                "tree_ref": tree_ref,
+                "query_type": query_type,
+                "node_names": node_names or [],
+                "from_node": from_node,
+                "to_node": to_node,
+                "attribute_name": attribute_name,
+                "socket_id": socket_id,
+                "direction": direction,
+                "fields": fields or [],
+                "limit": limit,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error querying node graph: {e}"
 
 
 @mcp.tool()
@@ -947,7 +1259,7 @@ def list_geometry_node_trees(ctx: Context, user_prompt: str = "") -> str:
 def export_geometry_node_tree(
     ctx: Context,
     tree_name: str,
-    view: str = "semantic",
+    view: str = "auto",
     node_names: List[str] = None,
     neighbor_depth: int = 0,
     output_path: str = "",
@@ -970,15 +1282,15 @@ def export_geometry_node_tree(
     """
     try:
         blender = get_blender_connection()
-        result = blender.send_command(
-            "export_geometry_node_tree",
-            {
-                "tree_name": tree_name,
-                "view": view,
-                "node_names": node_names or [],
-                "neighbor_depth": neighbor_depth,
-            },
-        )
+        params = {
+            "tree_name": tree_name,
+            "view": view,
+            "node_names": node_names or [],
+            "neighbor_depth": neighbor_depth,
+        }
+        if output_path:
+            params["allow_large_response"] = True
+        result = blender.send_command("export_geometry_node_tree", params)
         if not output_path:
             return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -1107,6 +1419,42 @@ def search_blender_node_assets(
     except Exception as e:
         logger.error(f"Error searching Blender node assets: {str(e)}")
         return f"Error searching Blender node assets: {str(e)}"
+
+
+@mcp.tool()
+@telemetry_tool("export_blender_node_asset")
+def export_blender_node_asset(
+    ctx: Context,
+    source_path: str,
+    asset_name: str,
+    tree_type: str = "",
+    scope: str = "USER",
+    library: str = "",
+    view: str = "auto",
+    node_names: List[str] = None,
+    neighbor_depth: int = 0,
+    user_prompt: str = "",
+) -> str:
+    """Inspect one exact searched node asset without importing it into the file."""
+    try:
+        blender = get_blender_connection()
+        result = blender.send_command(
+            "export_blender_node_asset",
+            {
+                "source_path": source_path,
+                "asset_name": asset_name,
+                "tree_type": tree_type,
+                "scope": scope,
+                "library": library,
+                "view": view,
+                "node_names": node_names or [],
+                "neighbor_depth": neighbor_depth,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error exporting Blender node asset: {str(e)}")
+        return f"Error exporting Blender node asset: {str(e)}"
 
 
 @mcp.tool()
@@ -1406,6 +1754,52 @@ def apply_geometry_node_patch(
             indent=2,
         )
 
+
+@mcp.tool()
+@telemetry_tool("modify_verify_save")
+def modify_verify_save(
+    ctx: Context,
+    patch_kind: str,
+    patch: Dict[str, Any],
+    assertions: List[Dict[str, Any]] = None,
+    keep_backup: bool = True,
+    save_policy: str = "never",
+    user_prompt: str = "",
+) -> str:
+    """Validate a Patch, check candidate assertions, commit, read back, and optionally save.
+
+    This high-level workflow accepts only the reviewed node-tree Patch protocols.
+    Assertions run against the disposable dry-run candidate before mutation.
+    Blender's Patch transaction then verifies the committed revision. Saving is
+    never implicit: use save_policy=on_success or required explicitly.
+    """
+    try:
+        if patch_kind == "node_tree":
+            patch_document = assert_valid_node_patch(patch)
+        elif patch_kind == "geometry_nodes":
+            patch_document = assert_valid_patch(patch)
+        else:
+            raise BlenderMCPError(
+                "invalid_request", "patch_kind must be node_tree or geometry_nodes"
+            )
+        result = get_blender_connection().send_command(
+            "modify_verify_save",
+            {
+                "patch_kind": patch_kind,
+                "patch": patch_document,
+                "assertions": assertions or [],
+                "keep_backup": keep_backup,
+                "save_policy": save_policy,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except (NodeTreePatchError, NodeTreeSchemaError, GeometryNodesSchemaError) as error:
+        raise BlenderMCPError(
+            "node_validation_error",
+            str(error),
+            details={"diagnostics": getattr(error, "diagnostics", [])},
+        ) from error
+
 @mcp.tool()
 def get_viewport_screenshot(ctx: Context, max_size: int = 1000, user_prompt: str = "") -> Image:
     """
@@ -1488,7 +1882,13 @@ def get_viewport_screenshot(ctx: Context, max_size: int = 1000, user_prompt: str
 
 @mcp.tool()
 @rich_telemetry_tool("execute_blender_code", capture_code=True)
-def execute_blender_code(ctx: Context, code: str, user_prompt: str = "") -> str:
+def execute_blender_code(
+    ctx: Context,
+    code: str,
+    transaction: bool = False,
+    rollback_on_error: bool = True,
+    user_prompt: str = "",
+) -> str:
     """
     Execute arbitrary Python code in Blender. Make sure to do it step-by-step by breaking it into smaller chunks.
 
@@ -1499,7 +1899,16 @@ def execute_blender_code(ctx: Context, code: str, user_prompt: str = "") -> str:
     try:
         # Get the global connection
         blender = get_blender_connection()
-        result = blender.send_command("execute_code", {"code": code})
+        result = blender.send_command(
+            "execute_code",
+            {
+                "code": code,
+                "transaction": transaction,
+                "rollback_on_error": rollback_on_error,
+            },
+        )
+        if transaction:
+            return json.dumps(result, ensure_ascii=False, indent=2)
         return f"Code executed successfully: {result.get('result', '')}"
     except Exception as e:
         logger.error(f"Error executing code: {str(e)}")

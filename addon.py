@@ -2,6 +2,7 @@
 
 import re
 import bpy
+import math
 import mathutils
 import json
 import threading
@@ -11,6 +12,8 @@ import requests
 import tempfile
 import traceback
 import os
+import sys
+import uuid
 import shutil
 import zipfile
 from bpy.props import IntProperty, BoolProperty, EnumProperty, StringProperty, FloatProperty
@@ -20,13 +23,31 @@ import hashlib, hmac, base64
 import os.path as osp
 from contextlib import redirect_stdout, suppress
 
+try:
+    from .blender_mcp_addon_runtime import (
+        draw_occupancy_border as _blendermcp_draw_occupancy_border,
+        on_allow_ai_control_changed as _on_allow_ai_control_changed,
+        runtime_directory as _blendermcp_runtime_directory,
+        tag_redraw as _blendermcp_tag_redraw,
+    )
+except ImportError:  # Legacy/direct source install with both files side by side.
+    _addon_source_directory = osp.dirname(osp.abspath(__file__))
+    if _addon_source_directory not in sys.path:
+        sys.path.insert(0, _addon_source_directory)
+    from blender_mcp_addon_runtime import (
+        draw_occupancy_border as _blendermcp_draw_occupancy_border,
+        on_allow_ai_control_changed as _on_allow_ai_control_changed,
+        runtime_directory as _blendermcp_runtime_directory,
+        tag_redraw as _blendermcp_tag_redraw,
+    )
+
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 10, 0),
+    "version": (1, 11, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > BlenderMCP",
-    "description": "Connect Blender to Claude via MCP",
+    "description": "Connect Blender to MCP clients",
     "category": "Interface",
 }
 
@@ -36,6 +57,26 @@ bl_info = {
 ADDON_MODULE_ID = __package__ or __name__
 
 RODIN_FREE_TRIAL_KEY = "vibecoding"
+BLENDER_MCP_INSTANCE_SCHEMA = "blender-mcp-instance/1"
+BLENDER_MCP_BRIDGE_PROTOCOL = "blender-mcp-bridge/2"
+BLENDER_MCP_HEARTBEAT_SECONDS = 2.0
+BLENDER_MCP_DEFAULT_LEASE_SECONDS = 120.0
+BLENDER_MCP_MIN_LEASE_SECONDS = 30.0
+BLENDER_MCP_MAX_LEASE_SECONDS = 600.0
+_BLENDER_MCP_INSTANCE_ID = str(uuid.uuid4())
+_BLENDER_MCP_FILE_SESSION_ID = str(uuid.uuid4())
+_BLENDER_MCP_OVERLAY_HANDLE = None
+
+
+class BlenderMCPAddonError(RuntimeError):
+    """Bridge error with a stable public category."""
+
+    def __init__(self, code, message, retryable=False, details=None):
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self.details = details or {}
+
 
 # Add User-Agent as required by Poly Haven API
 REQ_HEADERS = requests.utils.default_headers()
@@ -53,7 +94,7 @@ def get_blendermcp_addon_preferences(context=None):
 # On Blender start / file load, prefs are copied back to scene.
 
 _PREF_PROPERTY_NAMES = [
-    'port', 'use_polyhaven',
+    'allow_ai_control', 'use_polyhaven',
     'use_hyper3d', 'hyper3d_mode', 'hyper3d_api_key',
     'use_sketchfab', 'sketchfab_api_key',
     'use_hunyuan3d', 'hunyuan3d_mode',
@@ -99,7 +140,7 @@ def _auto_connect_if_enabled():
         bpy.context.scene.blendermcp_server_running = True
         return
 
-    server = BlenderMCPServer(port=addon_prefs.preferences.port)
+    server = BlenderMCPServer()
     bpy.types.blendermcp_server = server
     server.start()
     bpy.context.scene.blendermcp_server_running = server.running
@@ -107,6 +148,11 @@ def _auto_connect_if_enabled():
 @bpy.app.handlers.persistent
 def _load_post_handler(_dummy):
     """On .blend file load: sync prefs → scene, auto-connect if enabled."""
+    global _BLENDER_MCP_FILE_SESSION_ID
+    _BLENDER_MCP_FILE_SESSION_ID = str(uuid.uuid4())
+    server = getattr(bpy.types, "blendermcp_server", None)
+    if server:
+        server.rotate_file_session()
     sync_prefs_to_scene()
     _auto_connect_if_enabled()
 
@@ -123,6 +169,7 @@ GEOMETRY_NODE_TYPE_SCHEMA_DETAILS = {"compact", "full"}
 GEOMETRY_NODE_TYPE_CATALOG_SCHEMA = "blender-geometry-node-type-catalog/1"
 BLENDER_NODE_ASSET_CATALOG_SCHEMA = "blender-node-asset-catalog/1"
 BLENDER_NODE_ASSET_IMPORT_SCHEMA = "blender-node-asset-import/1"
+BLENDER_NODE_ASSET_EXPORT_SCHEMA = "blender-node-asset-export/1"
 BLENDER_RUNTIME_AUTOMATION_CONTEXT_SCHEMA = "blender-runtime-automation-context/1"
 SCENE_COMPOSITOR_TREE_SCHEMA = "blender-scene-compositor-tree/1"
 NODE_TREE_SNAPSHOT_SCHEMA = "blender-node-tree/1"
@@ -131,6 +178,7 @@ NODE_TYPE_SCHEMA = "blender-node-type-schema/1"
 NODE_TREE_TYPES = {"GeometryNodeTree", "ShaderNodeTree", "CompositorNodeTree"}
 NODE_TREE_OWNER_KINDS = {"MATERIAL", "WORLD", "LIGHT", "SCENE", "NODE_GROUP"}
 NODE_TREE_MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+NODE_TREE_SOFT_RESPONSE_BYTES = 512 * 1024
 NODE_TREE_MAX_MUTATION_NODES = 10000
 NODE_TREE_MAX_VALIDATION_SECONDS = 30.0
 
@@ -704,7 +752,11 @@ def _node_export_tree(
     record_factory=None,
 ):
     """Serialize any supported NodeTree through the shared flat graph core."""
-    view = normalizer(view)
+    requested_view = str(view or "auto").strip().lower()
+    if requested_view == "auto":
+        view = "semantic" if node_names else "operations"
+    else:
+        view = normalizer(view)
     record_factory = record_factory or _node_graph_record
     include_semantic = view in {"semantic", "operations", "all"}
     library = getattr(tree, "library", None)
@@ -801,6 +853,12 @@ def _node_export_tree(
             "json_bytes": 0,
         },
     }
+    if requested_view == "auto":
+        snapshot["view_selection"] = {
+            "requested": "auto",
+            "selected": view,
+            "reason": "targeted_subgraph" if node_names else "full_graph_context_budget",
+        }
     revision_nodes = (
         view_nodes
         if view == "all"
@@ -830,6 +888,191 @@ def _node_export_tree(
             break
         snapshot["stats"]["json_bytes"] = size
     return snapshot
+
+
+def _node_soft_limit_response(snapshot):
+    """Return bounded guidance instead of carrying an oversized full graph."""
+    if snapshot["scope"]["kind"] != "full":
+        return snapshot
+    if snapshot["stats"]["json_bytes"] <= NODE_TREE_SOFT_RESPONSE_BYTES:
+        return snapshot
+    result = {
+        "schema": snapshot["schema"],
+        "status": "summary",
+        "reason": "soft_response_limit",
+        "view": snapshot["view"],
+        "revision": snapshot["revision"],
+        "scope": snapshot["scope"],
+        "stats": snapshot["stats"],
+        "tree": {
+            key: snapshot["tree"][key]
+            for key in ("name", "bl_idname", "editable", "library")
+        },
+        "next_action": (
+            "Call get_node_tree_index, then export_node_tree with node_names and "
+            "a bounded neighbor_depth. Use an explicit output_path only when the "
+            "complete snapshot is required on disk."
+        ),
+        "soft_limit_bytes": NODE_TREE_SOFT_RESPONSE_BYTES,
+    }
+    for key in ("tree_ref", "owner", "capabilities", "view_selection"):
+        if key in snapshot:
+            result[key] = snapshot[key]
+    return result
+
+
+def _node_named_attribute_name(node):
+    for socket in node.inputs:
+        if socket.name == "Name" and hasattr(socket, "default_value"):
+            value = socket.default_value
+            return value if isinstance(value, str) else ""
+    return ""
+
+
+def _node_query_graph(
+    target,
+    query_type,
+    *,
+    node_names=None,
+    from_node="",
+    to_node="",
+    attribute_name="",
+    socket_id="",
+    direction="downstream",
+    fields=None,
+    limit=200,
+):
+    """Run bounded deterministic graph queries without exporting a full graph."""
+    tree = target["tree"]
+    query_type = str(query_type or "").strip().lower()
+    limit = int(limit)
+    if not 1 <= limit <= 1000:
+        raise ValueError("limit must be from 1 to 1000")
+    node_map = {node.name: node for node in tree.nodes}
+    links = sorted(
+        (_gn_link_record(link) for link in tree.links),
+        key=lambda item: (item["from_node"], item["to_node"], item["from_socket"], item["to_socket"]),
+    )
+    requested = set(node_names or [])
+    if requested - set(node_map):
+        raise ValueError("One or more requested nodes do not exist")
+    records = []
+    if query_type == "socket_links":
+        if socket_id and len(requested) != 1:
+            raise ValueError("socket_id requires exactly one node_name")
+        socket_node = next(iter(requested), "")
+        records = [
+            link for link in links
+            if not requested or link["from_node"] in requested or link["to_node"] in requested
+        ]
+        if socket_id:
+            records = [
+                link for link in records
+                if (link["from_node"] == socket_node and link["from_socket"] == socket_id)
+                or (link["to_node"] == socket_node and link["to_socket"] == socket_id)
+            ]
+    elif query_type == "named_attributes":
+        wanted = str(attribute_name or "").casefold()
+        for node in sorted(tree.nodes, key=lambda item: item.name):
+            name = _node_named_attribute_name(node)
+            if wanted and name.casefold() != wanted:
+                continue
+            identifier = node.bl_idname
+            if "StoreNamedAttribute" in identifier or "RemoveNamedAttribute" in identifier:
+                access = "writer"
+            elif "NamedAttribute" in identifier:
+                access = "reader"
+            else:
+                continue
+            records.append({
+                "node": node.name,
+                "node_type": identifier,
+                "attribute": name,
+                "access": access,
+                "data_type": getattr(node, "data_type", None),
+            })
+    elif query_type == "shortest_path":
+        if from_node not in node_map or to_node not in node_map:
+            raise ValueError("from_node and to_node must name existing nodes")
+        if direction not in {"upstream", "downstream", "both"}:
+            raise ValueError("direction must be upstream, downstream, or both")
+        adjacency = {}
+        for link in links:
+            if direction in {"downstream", "both"}:
+                adjacency.setdefault(link["from_node"], []).append((link["to_node"], link))
+            if direction in {"upstream", "both"}:
+                adjacency.setdefault(link["to_node"], []).append((link["from_node"], link))
+        queue = [from_node]
+        previous = {from_node: (None, None)}
+        for current in queue:
+            if current == to_node:
+                break
+            for neighbor, link in adjacency.get(current, []):
+                if neighbor not in previous:
+                    previous[neighbor] = (current, link)
+                    queue.append(neighbor)
+        if to_node in previous:
+            path_links = []
+            current = to_node
+            while previous[current][0] is not None:
+                prior, link = previous[current]
+                path_links.append(link)
+                current = prior
+            records = list(reversed(path_links))
+    elif query_type in {"upstream", "downstream", "slice"}:
+        if not requested:
+            raise ValueError("node_names is required for graph slices")
+        direction_value = direction if query_type == "slice" else query_type
+        if direction_value not in {"upstream", "downstream", "both"}:
+            raise ValueError("direction must be upstream, downstream, or both")
+        included = set(requested)
+        queue = list(sorted(requested))
+        while queue and len(included) < limit:
+            current = queue.pop(0)
+            for link in links:
+                neighbors = []
+                if direction_value in {"downstream", "both"} and link["from_node"] == current:
+                    neighbors.append(link["to_node"])
+                if direction_value in {"upstream", "both"} and link["to_node"] == current:
+                    neighbors.append(link["from_node"])
+                for neighbor in neighbors:
+                    if neighbor not in included:
+                        included.add(neighbor)
+                        queue.append(neighbor)
+        records = [{"node": name, "node_type": node_map[name].bl_idname} for name in sorted(included)]
+    elif query_type == "fields":
+        allowed = set(fields or ["name", "label", "bl_idname"])
+        for name in sorted(requested or set(node_map)):
+            node = node_map[name]
+            full = _node_graph_record(node, "operations")
+            records.append({key: value for key, value in full.items() if key in allowed})
+    else:
+        raise ValueError(
+            "query_type must be fields, socket_links, named_attributes, shortest_path, upstream, downstream, or slice"
+        )
+    total = len(records)
+    records = records[:limit]
+    snapshot = _node_export_target(target, "operations", list(requested), 0) if requested else None
+    revision = snapshot["revision"] if snapshot else _node_export_target(target, "layout")["revision"]
+    return {
+        "schema": "blender-node-graph-query/1",
+        "tree_ref": target["tree_ref"],
+        "revision": revision,
+        "query_type": query_type,
+        "query": {
+            "node_names": sorted(requested),
+            "from_node": from_node,
+            "to_node": to_node,
+            "attribute_name": attribute_name,
+            "socket_id": socket_id,
+            "direction": direction,
+            "fields": list(fields or []),
+            "limit": limit,
+        },
+        "total_matches": total,
+        "truncated": total > limit,
+        "records": records,
+    }
 
 
 def _gn_export_tree(tree, view="semantic", node_names=None, neighbor_depth=0):
@@ -2342,6 +2585,81 @@ def _gn_import_node_asset(
         raise RuntimeError(f"Asset import failed and was rolled back: {exc}") from exc
 
 
+def _gn_export_node_asset(
+    source_path,
+    asset_name,
+    *,
+    tree_type="",
+    scope="USER",
+    library="",
+    view="auto",
+    node_names=None,
+    neighbor_depth=0,
+):
+    """Inspect one exact asset through a disposable library load."""
+    requested_path = os.path.normcase(os.path.realpath(os.path.abspath(source_path)))
+    _scope_value, catalog = _gn_node_asset_catalog_for_scope(scope, library)
+    matches = [
+        record for record in catalog["records"]
+        if os.path.normcase(os.path.realpath(record["source_path"])) == requested_path
+        and record["name"] == asset_name
+        and (not tree_type or record["tree_type"] == tree_type)
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            "Asset identity must match exactly one current catalog result; run "
+            "search_blender_node_assets and reuse its exact fields"
+        )
+    record = matches[0]
+    before = _gn_blend_data_ids()
+    snapshot = None
+    cleanup_error = None
+    try:
+        try:
+            loader = bpy.data.libraries.load(record["source_path"], link=False, assets_only=True)
+        except TypeError:
+            loader = bpy.data.libraries.load(record["source_path"], link=False)
+        with loader as (data_from, data_to):
+            if asset_name not in data_from.node_groups:
+                raise RuntimeError("The selected asset disappeared from its library")
+            data_to.node_groups = [asset_name]
+        tree = data_to.node_groups[0] if data_to.node_groups else None
+        if tree is None or tree.bl_idname != record["tree_type"]:
+            raise RuntimeError("Blender did not load the selected node asset")
+        snapshot = _node_export_tree(
+            tree,
+            view,
+            node_names or [],
+            neighbor_depth,
+            schema=NODE_TREE_SNAPSHOT_SCHEMA,
+        )
+    finally:
+        appended = [
+            item for pointer, item in _gn_blend_data_ids().items()
+            if pointer not in before
+        ]
+        if appended:
+            try:
+                bpy.data.batch_remove(ids=appended)
+            except Exception as error:
+                cleanup_error = error
+        remaining = [
+            item for pointer, item in _gn_blend_data_ids().items()
+            if pointer not in before
+        ]
+        if remaining or cleanup_error:
+            names = ", ".join(item.name for item in remaining[:10])
+            raise _GNAssetCleanupError(
+                f"Disposable node-asset export cleanup failed: {cleanup_error}; remaining={names}"
+            )
+    return {
+        "schema": BLENDER_NODE_ASSET_EXPORT_SCHEMA,
+        "asset": _gn_node_asset_summary(record),
+        "snapshot": _node_soft_limit_response(snapshot),
+        "cleanup": {"appended_datablocks_remaining": 0, "file_mutated": False},
+    }
+
+
 def _gn_patch_diagnostic(severity, code, path, message):
     return {
         "severity": severity,
@@ -2607,6 +2925,7 @@ def _gn_validate_patch_runtime(tree, patch):
         "interface_sockets_added": 0,
         "interface_sockets_removed": 0,
         "modifier_inputs_changed": 0,
+        "dynamic_structures_changed": 0,
     }
     current_revision = _gn_export_tree(tree, "semantic")["revision"]
     if patch.get("base_revision") != current_revision:
@@ -2956,6 +3275,73 @@ def _gn_validate_patch_runtime(tree, patch):
                     item["removed"] = True
                     diff["interface_sockets_removed"] += 1
                     summary = f"Remove interface socket {reference}"
+
+            elif op in {"add_dynamic_item", "remove_dynamic_item", "set_dynamic_item"}:
+                item = _gn_resolve_patch_node(
+                    node_refs, operation["node"], f"{path}/node", diagnostics
+                )
+                if item:
+                    try:
+                        source_node = item["node"]
+                        probe_node = temp_tree.nodes.new(source_node.bl_idname)
+                        collection = _node_dynamic_collection(
+                            probe_node if op == "add_dynamic_item" else source_node,
+                            operation["collection"],
+                        )
+                        if op == "add_dynamic_item":
+                            collection.new(operation["socket_type"], operation["name"])
+                        else:
+                            item_index = operation["index"]
+                            if item_index >= len(collection):
+                                raise ValueError(f"Dynamic item index {item_index} is out of range")
+                            if op == "set_dynamic_item":
+                                _gn_validate_value(
+                                    collection[item_index], operation["property"], operation["value"],
+                                    f"{path}/value", diagnostics, node_refs,
+                                    property_path=f"{path}/property",
+                                )
+                        diff["dynamic_structures_changed"] += 1
+                        summary = f"{op} on {operation['node']}.{operation['collection']}"
+                    except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                        diagnostics.append(_gn_patch_diagnostic(
+                            "error", "dynamic_operation_rejected", path,
+                            f"{type(exc).__name__}: {exc}",
+                        ))
+
+            elif op in {"add_foreach_zone", "add_closure_zone"}:
+                input_id, output_id = operation["input_id"], operation["output_id"]
+                if input_id in node_refs or output_id in node_refs:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "duplicate_node_reference", path,
+                        "Zone node references must be unique",
+                    ))
+                else:
+                    try:
+                        if op == "add_foreach_zone":
+                            input_type = "GeometryNodeForeachGeometryElementInput"
+                            output_type = "GeometryNodeForeachGeometryElementOutput"
+                        else:
+                            input_type = "NodeClosureInput"
+                            output_type = "NodeClosureOutput"
+                        input_node, output_node = _node_add_paired_zone(
+                            temp_tree, input_type, output_type, operation
+                        )
+                        node_refs[input_id] = {
+                            "node": input_node, "existing": False, "removed": False,
+                            "projected_name": input_node.name,
+                        }
+                        node_refs[output_id] = {
+                            "node": output_node, "existing": False, "removed": False,
+                            "projected_name": output_node.name,
+                        }
+                        diff["nodes_added"] += 2
+                        diff["dynamic_structures_changed"] += 1
+                        summary = f"Add paired {op.removeprefix('add_')}"
+                    except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                        diagnostics.append(_gn_patch_diagnostic(
+                            "error", "unsupported_zone", path,
+                            f"{type(exc).__name__}: {exc}",
+                        ))
 
             elif op == "set_modifier_input":
                 obj = bpy.data.objects.get(operation["object"])
@@ -3331,6 +3717,50 @@ def _node_apply_curve_mapping(node, operation):
     mapping.update()
 
 
+_NODE_DYNAMIC_COLLECTION_ALLOWLIST = {
+    "GeometryNodeFieldToList": {"list_items"},
+    "GeometryNodeClosureToList": {"list_items"},
+    "GeometryNodeRepeatOutput": {"repeat_items"},
+    "GeometryNodeSimulationOutput": {"state_items"},
+    "GeometryNodeForeachGeometryElementOutput": {
+        "input_items", "main_items", "generation_items",
+    },
+    "NodeClosureOutput": {"input_items", "output_items"},
+    "NodeEvaluateClosure": {"input_items", "output_items"},
+}
+
+
+def _node_dynamic_collection(node, collection_name):
+    allowed = _NODE_DYNAMIC_COLLECTION_ALLOWLIST.get(node.bl_idname, set())
+    if collection_name not in allowed:
+        raise ValueError(
+            f"Dynamic collection {collection_name!r} is not allowlisted for {node.bl_idname}"
+        )
+    collection = getattr(node, collection_name, None)
+    if collection is None or not hasattr(collection, "new") or not hasattr(collection, "remove"):
+        raise ValueError(
+            f"Dynamic collection {collection_name!r} is unavailable in Blender {bpy.app.version_string}"
+        )
+    return collection
+
+
+def _node_add_paired_zone(tree, input_type, output_type, operation):
+    input_node = tree.nodes.new(input_type)
+    output_node = tree.nodes.new(output_type)
+    input_node.name = operation.get("input_name") or input_node.name
+    output_node.name = operation.get("output_name") or output_node.name
+    base_location = operation.get("location", [0.0, 0.0])
+    input_node.location = base_location
+    output_node.location = [float(base_location[0]) + 300.0, float(base_location[1])]
+    try:
+        input_node.pair_with_output(output_node)
+    except Exception:
+        tree.nodes.remove(input_node)
+        tree.nodes.remove(output_node)
+        raise
+    return input_node, output_node
+
+
 def _node_execute_patch_operations(target, patch):
     tree = target["tree"]
     diagnostics = []
@@ -3652,6 +4082,67 @@ def _node_execute_patch_operations(target, patch):
                     _node_apply_curve_mapping(node, operation)
                     diff["dynamic_structures_changed"] += 1
                     summary = f"Set Curve Mapping on {operation['node']}"
+
+            elif op == "add_dynamic_item":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None and _node_mutation_allowed(node, op, path, diagnostics):
+                    collection = _node_dynamic_collection(node, operation["collection"])
+                    item = collection.new(operation["socket_type"], operation["name"])
+                    diff["dynamic_structures_changed"] += 1
+                    summary = (
+                        f"Add {getattr(item, 'name', operation['name'])} to "
+                        f"{operation['node']}.{operation['collection']}"
+                    )
+
+            elif op == "remove_dynamic_item":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None and _node_mutation_allowed(node, op, path, diagnostics):
+                    collection = _node_dynamic_collection(node, operation["collection"])
+                    item_index = operation["index"]
+                    if item_index >= len(collection):
+                        raise ValueError(f"Dynamic item index {item_index} is out of range")
+                    collection.remove(collection[item_index])
+                    diff["dynamic_structures_changed"] += 1
+                    summary = f"Remove item {item_index} from {operation['node']}.{operation['collection']}"
+
+            elif op == "set_dynamic_item":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None and _node_mutation_allowed(node, op, path, diagnostics):
+                    collection = _node_dynamic_collection(node, operation["collection"])
+                    item_index = operation["index"]
+                    if item_index >= len(collection):
+                        raise ValueError(f"Dynamic item index {item_index} is out of range")
+                    item = collection[item_index]
+                    property_name = operation["property"]
+                    if not _gn_validate_value(
+                        item, property_name, operation["value"], f"{path}/value",
+                        diagnostics, node_refs, property_path=f"{path}/property",
+                    ):
+                        raise ValueError(f"Dynamic item property is not writable: {property_name}")
+                    setattr(item, property_name, _gn_decode_patch_value(operation["value"], node_refs))
+                    diff["dynamic_structures_changed"] += 1
+                    summary = f"Set dynamic item {item_index}.{property_name}"
+
+            elif op in {"add_foreach_zone", "add_closure_zone"}:
+                input_id, output_id = operation["input_id"], operation["output_id"]
+                if input_id in node_refs or output_id in node_refs:
+                    raise ValueError("Zone node references must be unique")
+                if op == "add_foreach_zone":
+                    input_type = "GeometryNodeForeachGeometryElementInput"
+                    output_type = "GeometryNodeForeachGeometryElementOutput"
+                else:
+                    input_type = "NodeClosureInput"
+                    output_type = "NodeClosureOutput"
+                input_node, output_node = _node_add_paired_zone(
+                    tree, input_type, output_type, operation
+                )
+                node_refs[input_id] = {"node": input_node, "removed": False, "existing": False}
+                node_refs[output_id] = {"node": output_node, "removed": False, "existing": False}
+                created_nodes[input_id] = input_node.name
+                created_nodes[output_id] = output_node.name
+                diff["nodes_added"] += 2
+                diff["dynamic_structures_changed"] += 1
+                summary = f"Add paired {op.removeprefix('add_')}"
         except (AttributeError, KeyError, TypeError, ValueError, RuntimeError) as exc:
             unavailable_node_type = (
                 op == "add_node"
@@ -4414,6 +4905,47 @@ def _gn_apply_operations_to_working(working, patch):
             item["removed"] = True
             created_interface.pop(operation["identifier"], None)
 
+        elif op == "add_dynamic_item":
+            node = node_refs[operation["node"]]["node"]
+            collection = _node_dynamic_collection(node, operation["collection"])
+            item = collection.new(operation["socket_type"], operation["name"])
+            result["dynamic_item"] = {
+                "index": len(collection) - 1,
+                "name": getattr(item, "name", operation["name"]),
+            }
+
+        elif op == "remove_dynamic_item":
+            node = node_refs[operation["node"]]["node"]
+            collection = _node_dynamic_collection(node, operation["collection"])
+            collection.remove(collection[operation["index"]])
+
+        elif op == "set_dynamic_item":
+            node = node_refs[operation["node"]]["node"]
+            collection = _node_dynamic_collection(node, operation["collection"])
+            setattr(
+                collection[operation["index"]],
+                operation["property"],
+                _gn_decode_patch_value(operation["value"], node_refs),
+            )
+
+        elif op in {"add_foreach_zone", "add_closure_zone"}:
+            if op == "add_foreach_zone":
+                input_type = "GeometryNodeForeachGeometryElementInput"
+                output_type = "GeometryNodeForeachGeometryElementOutput"
+            else:
+                input_type = "NodeClosureInput"
+                output_type = "NodeClosureOutput"
+            input_node, output_node = _node_add_paired_zone(
+                working, input_type, output_type, operation
+            )
+            input_id, output_id = operation["input_id"], operation["output_id"]
+            node_refs[input_id] = {"node": input_node, "existing": False, "removed": False}
+            node_refs[output_id] = {"node": output_node, "existing": False, "removed": False}
+            created_nodes[input_id] = input_node.name
+            created_nodes[output_id] = output_node.name
+            result["input_node"] = input_node.name
+            result["output_node"] = output_node.name
+
         elif op == "set_modifier_input":
             deferred_modifier_inputs.append({
                 **operation,
@@ -4630,13 +5162,261 @@ def _gn_apply_patch_transaction(tree, patch, keep_backup=True, _commit_guard=Non
             "plan": validation["plan"],
         }
 
+
+def _blendermcp_check_workflow_assertions(stats, assertions):
+    """Evaluate a deliberately small assertion language against dry-run stats."""
+    if assertions is None:
+        assertions = []
+    if not isinstance(assertions, list) or len(assertions) > 32:
+        raise BlenderMCPAddonError(
+            "invalid_request", "assertions must be a list containing at most 32 items"
+        )
+    allowed_fields = {"node_count", "link_count", "interface_item_count"}
+    comparisons = {
+        "eq": lambda actual, expected: actual == expected,
+        "gte": lambda actual, expected: actual >= expected,
+        "lte": lambda actual, expected: actual <= expected,
+    }
+    results = []
+    for index, assertion in enumerate(assertions):
+        if not isinstance(assertion, dict):
+            raise BlenderMCPAddonError(
+                "invalid_request", f"assertions[{index}] must be an object"
+            )
+        field = assertion.get("field")
+        operator = assertion.get("op", "eq")
+        expected = assertion.get("value")
+        if field not in allowed_fields or operator not in comparisons:
+            raise BlenderMCPAddonError(
+                "invalid_request",
+                f"assertions[{index}] must use a supported stats field and eq/gte/lte",
+            )
+        if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+            raise BlenderMCPAddonError(
+                "invalid_request", f"assertions[{index}].value must be a non-negative integer"
+            )
+        actual = int(stats.get(field, -1))
+        passed = comparisons[operator](actual, expected)
+        results.append({
+            "field": field,
+            "op": operator,
+            "expected": expected,
+            "actual": actual,
+            "passed": passed,
+        })
+    return results
+
 class BlenderMCPServer:
-    def __init__(self, host='localhost', port=9876):
-        self.host = host
-        self.port = port
+    def __init__(self):
+        self.host = "127.0.0.1"
+        self.port = 0
         self.running = False
         self.socket = None
         self.server_thread = None
+        self.busy = False
+        self.claim = None
+        self.last_claim_end_reason = ""
+        self.registry_path = osp.join(
+            _blendermcp_runtime_directory(),
+            f"{_BLENDER_MCP_INSTANCE_ID}.json",
+        )
+
+    def _claim_is_live(self):
+        return bool(self.claim and float(self.claim.get("expires_at", 0.0)) > time.time())
+
+    def has_live_claim(self):
+        if self.claim and not self._claim_is_live():
+            self.revoke_claim("claim_expired")
+        return self._claim_is_live()
+
+    def _public_claim(self):
+        if not self._claim_is_live():
+            return None
+        return {
+            "client_id": self.claim["client_id"],
+            "owner_label": self.claim["owner_label"],
+            "expires_at": self.claim["expires_at"],
+        }
+
+    def _registry_record(self):
+        preferences = get_blendermcp_addon_preferences()
+        allow_ai = bool(preferences is None or preferences.allow_ai_control)
+        return {
+            "schema": BLENDER_MCP_INSTANCE_SCHEMA,
+            "protocol_version": BLENDER_MCP_BRIDGE_PROTOCOL,
+            "instance_id": _BLENDER_MCP_INSTANCE_ID,
+            "file_session_id": _BLENDER_MCP_FILE_SESSION_ID,
+            "pid": os.getpid(),
+            "host": "127.0.0.1",
+            "port": int(self.port),
+            "heartbeat_at": time.time(),
+            "blender_version": bpy.app.version_string,
+            "binary_path": bpy.app.binary_path or sys.executable,
+            "blend_file": bpy.data.filepath or "",
+            "dirty": bool(getattr(bpy.data, "is_dirty", False)),
+            "active_scene": getattr(getattr(bpy.context, "scene", None), "name", ""),
+            "addon_version": ".".join(str(value) for value in bl_info["version"]),
+            "allow_ai_control": allow_ai,
+            "busy": bool(self.busy),
+            "claim": self._public_claim(),
+        }
+
+    def _write_registry_record(self):
+        if not self.running or not self.socket:
+            return
+        directory = osp.dirname(self.registry_path)
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        temp_path = self.registry_path + f".{os.getpid()}.tmp"
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(self._registry_record(), handle, ensure_ascii=False, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        with suppress(OSError):
+            os.chmod(temp_path, 0o600)
+        os.replace(temp_path, self.registry_path)
+
+    def _remove_registry_record(self):
+        with suppress(FileNotFoundError, OSError):
+            os.remove(self.registry_path)
+
+    def _heartbeat_tick(self):
+        if not self.running:
+            return None
+        if self.claim and not self._claim_is_live():
+            self.revoke_claim("claim_expired")
+        try:
+            self._write_registry_record()
+        except Exception as error:
+            print(f"BlenderMCP registry heartbeat failed: {error}")
+        return BLENDER_MCP_HEARTBEAT_SECONDS
+
+    def rotate_file_session(self):
+        self.revoke_claim("file_session_changed")
+        self._write_registry_record()
+
+    def revoke_claim(self, reason="released"):
+        changed = self.claim is not None
+        self.claim = None
+        self.last_claim_end_reason = reason
+        if changed:
+            _blendermcp_tag_redraw()
+        if self.running:
+            with suppress(Exception):
+                self._write_registry_record()
+
+    def blender_mcp_handshake(self):
+        record = self._registry_record()
+        return {
+            "protocol_version": record["protocol_version"],
+            "instance_id": record["instance_id"],
+            "file_session_id": record["file_session_id"],
+            "addon_version": record["addon_version"],
+            "allow_ai_control": record["allow_ai_control"],
+            "busy": record["busy"],
+            "claim": record["claim"],
+        }
+
+    def claim_blender_instance(
+        self,
+        instance_id,
+        file_session_id,
+        client_id,
+        owner_label="MCP client",
+        lease_seconds=BLENDER_MCP_DEFAULT_LEASE_SECONDS,
+    ):
+        if instance_id != _BLENDER_MCP_INSTANCE_ID:
+            raise BlenderMCPAddonError("instance_changed", "Blender instance identity changed")
+        if file_session_id != _BLENDER_MCP_FILE_SESSION_ID:
+            raise BlenderMCPAddonError("file_session_changed", "The open Blender file session changed")
+        preferences = get_blendermcp_addon_preferences()
+        if preferences and not preferences.allow_ai_control:
+            raise BlenderMCPAddonError("instance_manual", "Allow AI control is disabled")
+        lease_seconds = float(lease_seconds)
+        if not BLENDER_MCP_MIN_LEASE_SECONDS <= lease_seconds <= BLENDER_MCP_MAX_LEASE_SECONDS:
+            raise BlenderMCPAddonError("invalid_request", "Requested claim lease is outside supported bounds")
+        if self._claim_is_live() and self.claim["client_id"] != client_id:
+            raise BlenderMCPAddonError(
+                "instance_claimed_by_other_client",
+                f"This Blender instance is occupied by {self.claim['owner_label']}",
+                retryable=True,
+            )
+        token = self.claim["token"] if self._claim_is_live() else uuid.uuid4().hex + uuid.uuid4().hex
+        self.claim = {
+            "client_id": str(client_id),
+            "owner_label": str(owner_label or "MCP client")[:80],
+            "token": token,
+            "expires_at": time.time() + lease_seconds,
+            "lease_seconds": lease_seconds,
+        }
+        self._write_registry_record()
+        _blendermcp_tag_redraw()
+        return {
+            "instance_id": _BLENDER_MCP_INSTANCE_ID,
+            "file_session_id": _BLENDER_MCP_FILE_SESSION_ID,
+            "owner_label": self.claim["owner_label"],
+            "expires_at": self.claim["expires_at"],
+            "claim_token": token,
+        }
+
+    def release_blender_instance(self, client_id, claim_token):
+        if not self._claim_is_live():
+            self.revoke_claim("claim_expired")
+            return {"released": False, "reason": "claim_expired"}
+        if self.claim["client_id"] != client_id or self.claim["token"] != claim_token:
+            raise BlenderMCPAddonError("claim_revoked_by_user", "The supplied claim is not current")
+        self.revoke_claim("released")
+        return {"released": True, "instance_id": _BLENDER_MCP_INSTANCE_ID}
+
+    def renew_blender_instance(self, client_id, claim_token, lease_seconds=BLENDER_MCP_DEFAULT_LEASE_SECONDS):
+        if not self._claim_is_live():
+            raise BlenderMCPAddonError("claim_expired", "The Blender claim expired")
+        if self.claim["client_id"] != client_id or self.claim["token"] != claim_token:
+            raise BlenderMCPAddonError("claim_expired", "The Blender claim token is invalid")
+        lease_seconds = float(lease_seconds)
+        if not BLENDER_MCP_MIN_LEASE_SECONDS <= lease_seconds <= BLENDER_MCP_MAX_LEASE_SECONDS:
+            raise BlenderMCPAddonError("invalid_request", "Requested claim lease is outside supported bounds")
+        self.claim["expires_at"] = time.time() + lease_seconds
+        self.claim["lease_seconds"] = lease_seconds
+        self._write_registry_record()
+        return {"renewed": True, "expires_at": self.claim["expires_at"]}
+
+    def _authorize_command(self, command_type, params):
+        read_only = {
+            "blender_mcp_handshake", "get_scene_info", "get_object_info",
+            "get_blender_version_context", "get_runtime_automation_context",
+            "list_node_trees", "export_node_tree", "get_node_tree_index",
+            "get_node_type_schema", "validate_node_tree_patch",
+            "list_geometry_node_trees", "export_geometry_node_tree",
+            "get_geometry_node_type_schema", "search_geometry_node_types",
+            "search_blender_node_assets", "export_blender_node_asset",
+            "get_geometry_node_tree_index", "validate_geometry_node_patch",
+            "get_viewport_screenshot", "get_telemetry_consent",
+            "get_polyhaven_status", "get_hyper3d_status", "get_sketchfab_status",
+            "get_hunyuan3d_status", "get_polyhaven_categories",
+            "search_polyhaven_assets", "search_sketchfab_models",
+            "get_sketchfab_model_preview", "audit_external_dependencies",
+            "plan_external_dependency_relinks", "inspect_evaluated_mesh",
+            "get_simulation_status", "query_node_graph",
+        }
+        claim_commands = {
+            "claim_blender_instance", "renew_blender_instance", "release_blender_instance"
+        }
+        if command_type in read_only or command_type in claim_commands:
+            return
+        if command_type == "ensure_scene_compositor_tree" and not params.get("create_if_missing", False):
+            return
+        if not self._claim_is_live():
+            code = self.last_claim_end_reason or "claim_expired"
+            if code not in {"claim_expired", "claim_revoked_by_user", "file_session_changed"}:
+                code = "claim_expired"
+            raise BlenderMCPAddonError(code, "A live AI claim is required before modifying Blender")
+        if params.get("_instance_id") != _BLENDER_MCP_INSTANCE_ID:
+            raise BlenderMCPAddonError("instance_changed", "Command instance identity does not match")
+        if params.get("_file_session_id") != _BLENDER_MCP_FILE_SESSION_ID:
+            raise BlenderMCPAddonError("file_session_changed", "Command file session does not match")
+        if params.get("_client_id") != self.claim["client_id"] or params.get("_claim_token") != self.claim["token"]:
+            raise BlenderMCPAddonError("claim_expired", "Command claim token is invalid or expired")
+        self.claim["expires_at"] = time.time() + self.claim.get("lease_seconds", BLENDER_MCP_DEFAULT_LEASE_SECONDS)
 
     def _get_config_value(self, scene_attr, pref_attr=None, env_var=None):
         """Read config in order: addon preferences -> scene -> env var."""
@@ -4711,14 +5491,30 @@ class BlenderMCPServer:
         try:
             # Create socket
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.socket.bind((self.host, self.port))
+            if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                # Windows SO_REUSEADDR permits two live listeners to share the
+                # same endpoint, which destroys instance routing guarantees.
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                self.socket.bind(("127.0.0.1", 9876))
+            except OSError as bind_error:
+                if getattr(bind_error, "errno", None) not in {48, 98, 10048}:
+                    raise
+                self.socket.bind(("127.0.0.1", 0))
+            self.host = "127.0.0.1"
+            self.port = int(self.socket.getsockname()[1])
             self.socket.listen(1)
 
             # Start server thread
             self.server_thread = threading.Thread(target=self._server_loop)
             self.server_thread.daemon = True
             self.server_thread.start()
+
+            self._write_registry_record()
+            if not bpy.app.timers.is_registered(self._heartbeat_tick):
+                bpy.app.timers.register(self._heartbeat_tick, first_interval=BLENDER_MCP_HEARTBEAT_SECONDS)
 
             print(f"BlenderMCP server started on {self.host}:{self.port}")
         except Exception as e:
@@ -4727,6 +5523,12 @@ class BlenderMCPServer:
 
     def stop(self):
         self.running = False
+        self.revoke_claim("addon_stopped")
+        self._remove_registry_record()
+
+        if bpy.app.timers.is_registered(self._heartbeat_tick):
+            with suppress(Exception):
+                bpy.app.timers.unregister(self._heartbeat_tick)
 
         # Close socket
         if self.socket:
@@ -4845,30 +5647,62 @@ class BlenderMCPServer:
         try:
             return self._execute_command_internal(command)
 
+        except BlenderMCPAddonError as e:
+            print(f"BlenderMCP command rejected [{e.code}]: {str(e)}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "error": {
+                    "code": e.code,
+                    "retryable": e.retryable,
+                    "details": e.details,
+                },
+            }
         except Exception as e:
             print(f"Error executing command: {str(e)}")
             traceback.print_exc()
-            return {"status": "error", "message": str(e)}
+            return {
+                "status": "error",
+                "message": str(e),
+                "error": {"code": "blender_python_error", "retryable": False},
+            }
 
     def _execute_command_internal(self, command):
         """Internal command execution with proper context"""
         cmd_type = command.get("type")
         params = command.get("params", {})
 
-        # Add a handler for checking PolyHaven status
-        if cmd_type == "get_polyhaven_status":
-            return {"status": "success", "result": self.get_polyhaven_status()}
+        if not isinstance(cmd_type, str) or not isinstance(params, dict):
+            raise BlenderMCPAddonError("invalid_request", "Command type and params are required")
+        self._authorize_command(cmd_type, params)
+        handler_params = {
+            key: value for key, value in params.items()
+            if not key.startswith("_")
+        }
 
         # Base handlers that are always available
         handlers = {
+            "blender_mcp_handshake": self.blender_mcp_handshake,
+            "claim_blender_instance": self.claim_blender_instance,
+            "renew_blender_instance": self.renew_blender_instance,
+            "release_blender_instance": self.release_blender_instance,
             "get_scene_info": self.get_scene_info,
             "get_object_info": self.get_object_info,
+            "audit_external_dependencies": self.audit_external_dependencies,
+            "plan_external_dependency_relinks": self.plan_external_dependency_relinks,
+            "apply_external_dependency_relinks": self.apply_external_dependency_relinks,
+            "inspect_evaluated_mesh": self.inspect_evaluated_mesh,
+            "get_simulation_status": self.get_simulation_status,
+            "clear_simulation_cache": self.clear_simulation_cache,
+            "reset_simulation": self.reset_simulation,
+            "bake_simulation": self.bake_simulation,
             "get_blender_version_context": self.get_blender_version_context,
             "get_runtime_automation_context": self.get_runtime_automation_context,
             "list_node_trees": self.list_node_trees,
             "ensure_scene_compositor_tree": self.ensure_scene_compositor_tree,
             "export_node_tree": self.export_node_tree,
             "get_node_tree_index": self.get_node_tree_index,
+            "query_node_graph": self.query_node_graph,
             "get_node_type_schema": self.get_node_type_schema,
             "validate_node_tree_patch": self.validate_node_tree_patch,
             "apply_node_tree_patch": self.apply_node_tree_patch,
@@ -4877,10 +5711,12 @@ class BlenderMCPServer:
             "get_geometry_node_type_schema": self.get_geometry_node_type_schema,
             "search_geometry_node_types": self.search_geometry_node_types,
             "search_blender_node_assets": self.search_blender_node_assets,
+            "export_blender_node_asset": self.export_blender_node_asset,
             "import_blender_node_asset": self.import_blender_node_asset,
             "get_geometry_node_tree_index": self.get_geometry_node_tree_index,
             "validate_geometry_node_patch": self.validate_geometry_node_patch,
             "apply_geometry_node_patch": self.apply_geometry_node_patch,
+            "modify_verify_save": self.modify_verify_save,
             "get_viewport_screenshot": self.get_viewport_screenshot,
             "execute_code": self.execute_code,
             "get_telemetry_consent": self.get_telemetry_consent,
@@ -4931,15 +5767,23 @@ class BlenderMCPServer:
         if handler:
             try:
                 print(f"Executing handler for {cmd_type}")
-                result = handler(**params)
+                self.busy = True
+                self._write_registry_record()
+                result = handler(**handler_params)
                 print(f"Handler execution complete")
                 return {"status": "success", "result": result}
+            except BlenderMCPAddonError:
+                raise
             except Exception as e:
                 print(f"Error in handler: {str(e)}")
                 traceback.print_exc()
-                return {"status": "error", "message": str(e)}
+                raise BlenderMCPAddonError("blender_python_error", str(e)) from e
+            finally:
+                self.busy = False
+                with suppress(Exception):
+                    self._write_registry_record()
         else:
-            return {"status": "error", "message": f"Unknown command type: {cmd_type}"}
+            raise BlenderMCPAddonError("unknown_command", f"Unknown command type: {cmd_type}")
 
 
 
@@ -5044,7 +5888,8 @@ class BlenderMCPServer:
         }
 
     def export_node_tree(
-        self, tree_ref, view="semantic", node_names=None, neighbor_depth=0,
+        self, tree_ref, view="auto", node_names=None, neighbor_depth=0,
+        allow_large_response=False,
     ):
         """Export an owner-addressed NodeTree as deterministic flat JSON."""
         target = _node_resolve_tree_ref(tree_ref)
@@ -5057,12 +5902,39 @@ class BlenderMCPServer:
                 f"the limit is {NODE_TREE_MAX_RESPONSE_BYTES}. Use get_node_tree_index "
                 "and export_node_tree with node_names."
             )
-        return snapshot
+        return snapshot if allow_large_response else _node_soft_limit_response(snapshot)
 
     def get_node_tree_index(self, tree_ref, query="", offset=0, limit=100):
         """Return a compact index for one owner-addressed NodeTree."""
         return _node_tree_index(
             _node_resolve_tree_ref(tree_ref), query, offset, limit,
+        )
+
+    def query_node_graph(
+        self,
+        tree_ref,
+        query_type,
+        node_names=None,
+        from_node="",
+        to_node="",
+        attribute_name="",
+        socket_id="",
+        direction="downstream",
+        fields=None,
+        limit=200,
+    ):
+        """Run a bounded field, link, attribute, path, or graph-slice query."""
+        return _node_query_graph(
+            _node_resolve_tree_ref(tree_ref),
+            query_type,
+            node_names=node_names or [],
+            from_node=from_node,
+            to_node=to_node,
+            attribute_name=attribute_name,
+            socket_id=socket_id,
+            direction=direction,
+            fields=fields or [],
+            limit=limit,
         )
 
     def get_node_type_schema(
@@ -5132,12 +6004,16 @@ class BlenderMCPServer:
             "trees": trees,
         }
 
-    def export_geometry_node_tree(self, tree_name, view="semantic", node_names=None, neighbor_depth=0):
+    def export_geometry_node_tree(
+        self, tree_name, view="auto", node_names=None, neighbor_depth=0,
+        allow_large_response=False,
+    ):
         """Export one Geometry Node group as normalized graph JSON."""
         tree = bpy.data.node_groups.get(tree_name)
         if tree is None or tree.bl_idname != "GeometryNodeTree":
             raise ValueError(f"Geometry Node tree not found: {tree_name}")
-        return _gn_export_tree(tree, view, node_names, neighbor_depth)
+        snapshot = _gn_export_tree(tree, view, node_names, neighbor_depth)
+        return snapshot if allow_large_response else _node_soft_limit_response(snapshot)
 
     def get_geometry_node_type_schema(self, node_type, detail="compact"):
         """Inspect a node type from this running Blender build."""
@@ -5348,6 +6224,29 @@ class BlenderMCPServer:
             conflict_policy=conflict_policy,
         )
 
+    def export_blender_node_asset(
+        self,
+        source_path,
+        asset_name,
+        tree_type="",
+        scope="USER",
+        library="",
+        view="auto",
+        node_names=None,
+        neighbor_depth=0,
+    ):
+        """Read one exact node asset without retaining appended datablocks."""
+        return _gn_export_node_asset(
+            source_path,
+            asset_name,
+            tree_type=tree_type,
+            scope=scope,
+            library=library,
+            view=view,
+            node_names=node_names or [],
+            neighbor_depth=neighbor_depth,
+        )
+
     def get_geometry_node_tree_index(self, tree_name, query="", offset=0, limit=100):
         """Return a searchable, paginated node-name/type index for subgraph discovery."""
         tree = bpy.data.node_groups.get(tree_name)
@@ -5443,6 +6342,140 @@ class BlenderMCPServer:
             }
         return _gn_apply_patch_transaction(tree, patch, bool(keep_backup))
 
+    def modify_verify_save(
+        self,
+        patch_kind,
+        patch,
+        assertions=None,
+        keep_backup=True,
+        save_policy="never",
+    ):
+        """Validate, assert, transact, read back, and optionally save one Patch."""
+        if patch_kind not in {"node_tree", "geometry_nodes"}:
+            raise BlenderMCPAddonError(
+                "invalid_request", "patch_kind must be node_tree or geometry_nodes"
+            )
+        if save_policy not in {"never", "on_success", "required"}:
+            raise BlenderMCPAddonError(
+                "invalid_request", "save_policy must be never, on_success, or required"
+            )
+        if not isinstance(patch, dict):
+            raise BlenderMCPAddonError("invalid_request", "patch must be a JSON object")
+        if save_policy == "required" and not bpy.data.filepath:
+            raise BlenderMCPAddonError(
+                "file_permission_error",
+                "save_policy=required needs an existing .blend filepath; save the Untitled file first",
+            )
+
+        if patch_kind == "node_tree":
+            validation = self.validate_node_tree_patch(patch)
+        else:
+            validation = self.validate_geometry_node_patch(patch)
+        if not validation.get("valid"):
+            return {
+                "schema": "blender-modify-verify-save/1",
+                "status": "rejected",
+                "mutated": False,
+                "saved": False,
+                "patch_kind": patch_kind,
+                "validation": validation,
+                "assertions": [],
+            }
+
+        assertion_results = _blendermcp_check_workflow_assertions(
+            validation.get("candidate_stats") or {}, assertions
+        )
+        if not all(item["passed"] for item in assertion_results):
+            return {
+                "schema": "blender-modify-verify-save/1",
+                "status": "assertion_failed",
+                "mutated": False,
+                "saved": False,
+                "patch_kind": patch_kind,
+                "validation": {
+                    "current_revision": validation.get("current_revision"),
+                    "candidate_revision": validation.get("candidate_revision"),
+                    "candidate_stats": validation.get("candidate_stats"),
+                },
+                "assertions": assertion_results,
+            }
+
+        if patch_kind == "node_tree":
+            application = self.apply_node_tree_patch(patch, keep_backup=keep_backup)
+        else:
+            application = self.apply_geometry_node_patch(patch, keep_backup=keep_backup)
+        if not application.get("applied"):
+            return {
+                "schema": "blender-modify-verify-save/1",
+                "status": application.get("status", "failed"),
+                "mutated": bool(application.get("mutated")),
+                "saved": False,
+                "patch_kind": patch_kind,
+                "validation": {
+                    "current_revision": validation.get("current_revision"),
+                    "candidate_revision": validation.get("candidate_revision"),
+                    "candidate_stats": validation.get("candidate_stats"),
+                },
+                "assertions": assertion_results,
+                "application": application,
+            }
+
+        if patch_kind == "node_tree":
+            resolved = _node_resolve_tree_ref(patch["tree_ref"])
+            committed = _node_export_target(resolved, "all")
+        else:
+            committed_tree = bpy.data.node_groups.get(application.get("tree_name"))
+            if committed_tree is None:
+                raise RuntimeError("Committed Geometry Node tree could not be read back")
+            committed = _gn_export_tree(committed_tree, "all")
+        if committed["revision"] != application.get("new_revision"):
+            raise RuntimeError("Post-application verification revision changed unexpectedly")
+        candidate_stats = validation.get("candidate_stats") or {}
+        verified_stats = {
+            key: committed["stats"].get(key)
+            for key in ("node_count", "link_count", "interface_item_count")
+        }
+        if verified_stats != {
+            key: candidate_stats.get(key)
+            for key in ("node_count", "link_count", "interface_item_count")
+        }:
+            raise RuntimeError("Post-application verification stats differ from the dry-run candidate")
+
+        saved = False
+        save_result = "not_requested"
+        if save_policy == "on_success" and not bpy.data.filepath:
+            save_result = "skipped_untitled"
+        elif save_policy in {"on_success", "required"}:
+            operation_result = bpy.ops.wm.save_as_mainfile(filepath=bpy.data.filepath)
+            if 'FINISHED' not in operation_result:
+                raise BlenderMCPAddonError(
+                    "file_permission_error", "Blender did not complete the requested save"
+                )
+            saved = True
+            save_result = "saved"
+
+        return {
+            "schema": "blender-modify-verify-save/1",
+            "status": "completed",
+            "mutated": True,
+            "saved": saved,
+            "save_result": save_result,
+            "save_policy": save_policy,
+            "patch_kind": patch_kind,
+            "validation": {
+                "current_revision": validation.get("current_revision"),
+                "candidate_revision": validation.get("candidate_revision"),
+                "candidate_stats": validation.get("candidate_stats"),
+            },
+            "assertions": assertion_results,
+            "verification": {
+                "revision": committed["revision"],
+                "stats": verified_stats,
+                "matches_candidate": True,
+            },
+            "application": application,
+        }
+
     @staticmethod
     def _get_aabb(obj):
         """ Returns the world-space axis-aligned bounding box (AABB) of an object. """
@@ -5465,7 +6498,7 @@ class BlenderMCPServer:
 
 
 
-    def get_object_info(self, name):
+    def get_object_info(self, name, include_modifiers=False):
         """Get detailed information about a specific object"""
         obj = bpy.data.objects.get(name)
         if not obj:
@@ -5480,6 +6513,7 @@ class BlenderMCPServer:
             "scale": [obj.scale.x, obj.scale.y, obj.scale.z],
             "visible": obj.visible_get(),
             "materials": [],
+            "modifiers": [],
         }
 
         if obj.type == "MESH":
@@ -5500,7 +6534,454 @@ class BlenderMCPServer:
                 "polygons": len(mesh.polygons),
             }
 
+        for index, modifier in enumerate(obj.modifiers):
+            record = {
+                "index": index,
+                "name": modifier.name,
+                "type": modifier.type,
+                "show_viewport": bool(modifier.show_viewport),
+                "show_render": bool(modifier.show_render),
+                "show_in_editmode": bool(getattr(modifier, "show_in_editmode", False)),
+                "show_on_cage": bool(getattr(modifier, "show_on_cage", False)),
+            }
+            node_group = getattr(modifier, "node_group", None)
+            if node_group is not None:
+                record["node_group"] = {
+                    "name": node_group.name,
+                    "library": _node_id_library(node_group),
+                    "editable": _node_id_editable(node_group),
+                }
+                if include_modifiers:
+                    inputs = []
+                    interface = getattr(node_group, "interface", None)
+                    for item in getattr(interface, "items_tree", ()):
+                        if getattr(item, "item_type", "") != "SOCKET" or getattr(item, "in_out", "") != "INPUT":
+                            continue
+                        identifier = getattr(item, "identifier", "")
+                        try:
+                            state = _gn_modifier_input_record(modifier, identifier)
+                        except KeyError:
+                            continue
+                        inputs.append({
+                            "identifier": identifier,
+                            "name": item.name,
+                            "socket_type": getattr(item, "socket_type", ""),
+                            **state,
+                        })
+                    record["inputs"] = inputs
+                    simulation_records = self._simulation_modifier_records(
+                        obj.name, modifier.name
+                    )
+                    simulation_bakes = (
+                        simulation_records[0]["bakes"] if simulation_records else []
+                    )
+                    record["simulation"] = {
+                        "zone_count": len(simulation_bakes),
+                        "bakes": simulation_bakes,
+                    }
+            warning = getattr(modifier, "error", "")
+            if warning:
+                record["warning"] = warning
+            obj_info["modifiers"].append(record)
+
         return obj_info
+
+    def _external_dependency_records(self):
+        records = []
+        collections = (
+            ("LIBRARY", bpy.data.libraries),
+            ("IMAGE", bpy.data.images),
+            ("MOVIE_CLIP", bpy.data.movieclips),
+            ("SOUND", bpy.data.sounds),
+            ("FONT", bpy.data.fonts),
+            ("CACHE_FILE", bpy.data.cache_files),
+            ("VOLUME", bpy.data.volumes),
+        )
+        for id_type, collection in collections:
+            for item in sorted(collection, key=lambda value: value.name):
+                if id_type == "IMAGE" and (
+                    getattr(item, "packed_file", None)
+                    or getattr(item, "packed_files", None)
+                    or getattr(item, "source", "") == "GENERATED"
+                ):
+                    continue
+                raw_path = str(getattr(item, "filepath", "") or "")
+                if not raw_path:
+                    continue
+                try:
+                    resolved = bpy.path.abspath(raw_path, library=getattr(item, "library", None))
+                except (AttributeError, TypeError, ValueError):
+                    resolved = bpy.path.abspath(raw_path)
+                resolved = osp.normpath(osp.abspath(resolved))
+                records.append({
+                    "id_type": id_type,
+                    "name": item.name,
+                    "filepath": raw_path,
+                    "resolved_path": resolved,
+                    "exists": osp.exists(resolved),
+                    "packed": False,
+                })
+        return records
+
+    def audit_external_dependencies(self, missing_only=True):
+        """Report linked libraries and external files without changing paths."""
+        records = self._external_dependency_records()
+        visible = [item for item in records if not item["exists"]] if missing_only else records
+        counts = {}
+        for item in records:
+            counts[item["id_type"]] = counts.get(item["id_type"], 0) + 1
+        return {
+            "schema": "blender-external-dependency-audit/1",
+            "blend_file": bpy.data.filepath or "Untitled",
+            "missing_only": bool(missing_only),
+            "dependency_count": len(records),
+            "missing_count": sum(not item["exists"] for item in records),
+            "counts_by_type": counts,
+            "dependencies": visible,
+            "mutated": False,
+        }
+
+    def plan_external_dependency_relinks(self, search_roots, max_files=10000):
+        """Build an explicit, non-mutating relink plan using exact basenames."""
+        if not isinstance(search_roots, (list, tuple)) or not search_roots:
+            raise ValueError("search_roots must contain at least one directory")
+        max_files = int(max_files)
+        if not 1 <= max_files <= 100000:
+            raise ValueError("max_files must be from 1 to 100000")
+        roots = []
+        for value in search_roots:
+            root = osp.normpath(osp.abspath(bpy.path.abspath(str(value))))
+            if not osp.isdir(root):
+                raise ValueError(f"Search root is not a directory: {value}")
+            roots.append(root)
+        candidates = {}
+        scanned = 0
+        truncated = False
+        for root in roots:
+            for directory, directory_names, file_names in os.walk(root, followlinks=False):
+                directory_names[:] = sorted(name for name in directory_names if not name.startswith("."))
+                for file_name in sorted(file_names):
+                    candidates.setdefault(file_name.casefold(), []).append(
+                        osp.normpath(osp.join(directory, file_name))
+                    )
+                    scanned += 1
+                    if scanned >= max_files:
+                        truncated = True
+                        break
+                if truncated:
+                    break
+            if truncated:
+                break
+        actions = []
+        unresolved = []
+        for item in self._external_dependency_records():
+            if item["exists"]:
+                continue
+            matches = sorted(set(candidates.get(osp.basename(item["resolved_path"]).casefold(), [])))
+            if len(matches) == 1:
+                actions.append({
+                    "id_type": item["id_type"],
+                    "name": item["name"],
+                    "expected_filepath": item["filepath"],
+                    "new_filepath": matches[0],
+                })
+            else:
+                unresolved.append({**item, "candidates": matches[:20], "ambiguous": len(matches) > 1})
+        plan_core = {"search_roots": roots, "actions": actions}
+        revision = "sha256:" + hashlib.sha256(_gn_canonical_json(plan_core).encode("utf-8")).hexdigest()
+        return {
+            "schema": "blender-external-dependency-relink-plan/1",
+            "revision": revision,
+            "search_roots": roots,
+            "scanned_files": scanned,
+            "truncated": truncated,
+            "actions": actions,
+            "unresolved": unresolved,
+            "mutated": False,
+        }
+
+    def apply_external_dependency_relinks(self, plan):
+        """Apply only an explicit unambiguous relink plan with rollback on error."""
+        if not isinstance(plan, dict) or plan.get("schema") != "blender-external-dependency-relink-plan/1":
+            raise ValueError("A relink plan from plan_external_dependency_relinks is required")
+        core = {"search_roots": plan.get("search_roots", []), "actions": plan.get("actions", [])}
+        expected_revision = "sha256:" + hashlib.sha256(_gn_canonical_json(core).encode("utf-8")).hexdigest()
+        if plan.get("revision") != expected_revision:
+            raise ValueError("Relink plan revision is invalid")
+        collections = {
+            "LIBRARY": bpy.data.libraries,
+            "IMAGE": bpy.data.images,
+            "MOVIE_CLIP": bpy.data.movieclips,
+            "SOUND": bpy.data.sounds,
+            "FONT": bpy.data.fonts,
+            "CACHE_FILE": bpy.data.cache_files,
+            "VOLUME": bpy.data.volumes,
+        }
+        changed = []
+        try:
+            for action in plan.get("actions", []):
+                collection = collections.get(action.get("id_type"))
+                item = collection.get(action.get("name")) if collection is not None else None
+                if item is None:
+                    raise ValueError(f"Dependency no longer exists: {action.get('id_type')}/{action.get('name')}")
+                if item.filepath != action.get("expected_filepath"):
+                    raise ValueError(f"Dependency path changed before apply: {item.name}")
+                new_path = osp.normpath(osp.abspath(action.get("new_filepath", "")))
+                if not osp.isfile(new_path):
+                    raise ValueError(f"Relink candidate no longer exists: {new_path}")
+                changed.append((item, item.filepath))
+                item.filepath = new_path
+            verification = self.audit_external_dependencies(missing_only=True)
+            return {
+                "schema": "blender-external-dependency-relink-application/1",
+                "status": "applied",
+                "applied": True,
+                "mutated": bool(changed),
+                "changed": [
+                    {"id_type": item.bl_rna.identifier, "name": item.name, "filepath": item.filepath}
+                    for item, _old in changed
+                ],
+                "missing_after": verification["missing_count"],
+            }
+        except Exception:
+            for item, old_path in reversed(changed):
+                with suppress(Exception):
+                    item.filepath = old_path
+            raise
+
+    def inspect_evaluated_mesh(self, object_name, max_attributes=32, max_attribute_values=4096):
+        """Return bounded topology, bounds, edge, and Named Attribute diagnostics."""
+        obj = bpy.data.objects.get(object_name)
+        if obj is None or obj.type != 'MESH':
+            raise ValueError(f"Mesh object not found: {object_name}")
+        max_attributes = max(0, min(int(max_attributes), 128))
+        max_attribute_values = max(1, min(int(max_attribute_values), 100000))
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = evaluated.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+        try:
+            vertex_count = len(mesh.vertices)
+            parent = list(range(vertex_count))
+
+            def find(index):
+                while parent[index] != index:
+                    parent[index] = parent[parent[index]]
+                    index = parent[index]
+                return index
+
+            def union(left, right):
+                left_root, right_root = find(left), find(right)
+                if left_root != right_root:
+                    parent[right_root] = left_root
+
+            lengths = []
+            for edge in mesh.edges:
+                left, right = edge.vertices
+                union(left, right)
+                lengths.append((mesh.vertices[left].co - mesh.vertices[right].co).length)
+            lengths.sort()
+            non_finite = 0
+            world_points = []
+            for vertex in mesh.vertices:
+                values = tuple(float(value) for value in vertex.co)
+                non_finite += sum(not math.isfinite(value) for value in values)
+                world_points.append(evaluated.matrix_world @ vertex.co)
+            if world_points:
+                bounds = [
+                    [min(point[index] for point in world_points) for index in range(3)],
+                    [max(point[index] for point in world_points) for index in range(3)],
+                ]
+            else:
+                bounds = [None, None]
+            components = len({find(index) for index in range(vertex_count)}) if vertex_count else 0
+            edge_stats = {
+                "count": len(lengths),
+                "min": lengths[0] if lengths else None,
+                "max": lengths[-1] if lengths else None,
+                "mean": (sum(lengths) / len(lengths)) if lengths else None,
+                "median": lengths[len(lengths) // 2] if lengths else None,
+            }
+            attributes = []
+            for attribute in sorted(mesh.attributes, key=lambda value: value.name)[:max_attributes]:
+                numeric = []
+                for value in list(attribute.data)[:max_attribute_values]:
+                    candidate = None
+                    for field in ("value", "vector", "color"):
+                        if hasattr(value, field):
+                            candidate = getattr(value, field)
+                            break
+                    if candidate is None:
+                        continue
+                    values = candidate if hasattr(candidate, "__iter__") and not isinstance(candidate, str) else (candidate,)
+                    for component in values:
+                        if isinstance(component, (int, float, bool)):
+                            numeric.append(float(component))
+                attributes.append({
+                    "name": attribute.name,
+                    "domain": attribute.domain,
+                    "data_type": attribute.data_type,
+                    "element_count": len(attribute.data),
+                    "sampled_values": min(len(attribute.data), max_attribute_values),
+                    "range": {"min": min(numeric), "max": max(numeric)} if numeric else None,
+                    "non_finite": sum(not math.isfinite(value) for value in numeric),
+                })
+            return {
+                "schema": "blender-evaluated-mesh-inspection/1",
+                "object": obj.name,
+                "original": {
+                    "vertices": len(obj.data.vertices),
+                    "edges": len(obj.data.edges),
+                    "polygons": len(obj.data.polygons),
+                },
+                "evaluated": {
+                    "vertices": vertex_count,
+                    "edges": len(mesh.edges),
+                    "polygons": len(mesh.polygons),
+                    "connected_components": components,
+                    "world_bounding_box": bounds,
+                    "edge_lengths": edge_stats,
+                    "position_non_finite": non_finite,
+                    "attributes": attributes,
+                    "attributes_truncated": len(mesh.attributes) > max_attributes,
+                },
+                "cleanup": {"temporary_mesh_cleared": True},
+            }
+        finally:
+            evaluated.to_mesh_clear()
+
+    def _simulation_modifier_records(self, object_name="", modifier_name=""):
+        records = []
+        objects = [bpy.data.objects.get(object_name)] if object_name else sorted(bpy.data.objects, key=lambda item: item.name)
+        for obj in objects:
+            if obj is None:
+                continue
+            for modifier in obj.modifiers:
+                if modifier.type != 'NODES' or (modifier_name and modifier.name != modifier_name):
+                    continue
+                bakes = []
+                for bake in getattr(modifier, "bakes", ()):
+                    node = getattr(bake, "node", None)
+                    if node is None or node.bl_idname != "GeometryNodeSimulationOutput":
+                        continue
+                    directory = str(getattr(bake, "directory", "") or getattr(modifier, "bake_directory", "") or "")
+                    resolved_directory = bpy.path.abspath(directory) if directory else ""
+                    bakes.append({
+                        "bake_id": int(bake.bake_id),
+                        "node": node.name,
+                        "frame_start": int(bake.frame_start),
+                        "frame_end": int(bake.frame_end),
+                        "bake_mode": str(bake.bake_mode),
+                        "bake_target": str(bake.bake_target),
+                        "directory": directory,
+                        "resolved_directory": resolved_directory,
+                        "directory_exists": bool(resolved_directory and osp.exists(resolved_directory)),
+                        "data_block_count": len(getattr(bake, "data_blocks", ())),
+                    })
+                if bakes:
+                    records.append({
+                        "object": obj.name,
+                        "object_session_uid": int(obj.session_uid),
+                        "modifier": modifier.name,
+                        "node_group": modifier.node_group.name if modifier.node_group else None,
+                        "bake_target": str(getattr(modifier, "bake_target", "")),
+                        "bake_directory": str(getattr(modifier, "bake_directory", "")),
+                        "bakes": bakes,
+                    })
+        return records
+
+    def get_simulation_status(self, object_name="", modifier_name=""):
+        records = self._simulation_modifier_records(object_name, modifier_name)
+        return {
+            "schema": "blender-simulation-status/1",
+            "blender_version": list(bpy.app.version[:3]),
+            "scene_frame": int(bpy.context.scene.frame_current),
+            "modifier_count": len(records),
+            "simulation_count": sum(len(item["bakes"]) for item in records),
+            "modifiers": records,
+            "capabilities": {
+                "status": True,
+                "reset": hasattr(bpy.ops.object, "geometry_node_bake_delete_single"),
+                "clear": hasattr(bpy.ops.object, "geometry_node_bake_delete_single"),
+                "bake": hasattr(bpy.ops.object, "geometry_node_bake_single"),
+                "cancellable_bake": False,
+            },
+        }
+
+    def _run_simulation_bake_operator(self, operator_name, object_name, modifier_name, bake_id):
+        obj = bpy.data.objects.get(object_name)
+        modifier = obj.modifiers.get(modifier_name) if obj else None
+        if obj is None or modifier is None or modifier.type != 'NODES':
+            raise ValueError(f"Geometry Nodes modifier not found: {object_name}/{modifier_name}")
+        bake_ids = {int(item.bake_id) for item in getattr(modifier, "bakes", ())}
+        if int(bake_id) not in bake_ids:
+            raise ValueError(f"Simulation bake id not found: {bake_id}")
+        operator = getattr(bpy.ops.object, operator_name, None)
+        if operator is None:
+            raise BlenderMCPAddonError(
+                "simulation_operation_unsupported",
+                f"{operator_name} is unavailable in Blender {bpy.app.version_string}",
+            )
+        with bpy.context.temp_override(
+            object=obj,
+            active_object=obj,
+            selected_objects=[obj],
+            selected_editable_objects=[obj],
+        ):
+            result = operator(
+                session_uid=int(obj.session_uid),
+                modifier_name=modifier.name,
+                bake_id=int(bake_id),
+            )
+        if 'FINISHED' not in result:
+            raise BlenderMCPAddonError(
+                "simulation_operation_failed",
+                f"Blender returned {sorted(result)} for {operator_name}",
+            )
+        return sorted(result)
+
+    def clear_simulation_cache(self, object_name, modifier_name, bake_id=None):
+        status_before = self.get_simulation_status(object_name, modifier_name)
+        targets = [
+            bake["bake_id"]
+            for record in status_before["modifiers"]
+            for bake in record["bakes"]
+            if bake_id is None or bake["bake_id"] == int(bake_id)
+        ]
+        if not targets:
+            raise ValueError("No matching simulation cache was found")
+        for target in targets:
+            self._run_simulation_bake_operator(
+                "geometry_node_bake_delete_single", object_name, modifier_name, target
+            )
+        return {
+            "schema": "blender-simulation-operation/1",
+            "operation": "clear",
+            "status": "completed",
+            "cleared_bake_ids": targets,
+            "verification": self.get_simulation_status(object_name, modifier_name),
+        }
+
+    def reset_simulation(self, object_name, modifier_name):
+        result = self.clear_simulation_cache(object_name, modifier_name)
+        result["operation"] = "reset"
+        result["frame_unchanged"] = int(bpy.context.scene.frame_current)
+        return result
+
+    def bake_simulation(self, object_name, modifier_name, bake_id):
+        started = time.time()
+        operator_result = self._run_simulation_bake_operator(
+            "geometry_node_bake_single", object_name, modifier_name, bake_id
+        )
+        return {
+            "schema": "blender-simulation-operation/1",
+            "operation": "bake",
+            "status": "completed",
+            "bake_id": int(bake_id),
+            "operator_result": operator_result,
+            "duration_seconds": round(time.time() - started, 3),
+            "cancellable": False,
+            "verification": self.get_simulation_status(object_name, modifier_name),
+        }
 
     def get_viewport_screenshot(self, max_size=800, filepath=None, format="png"):
         """
@@ -5559,9 +7040,9 @@ class BlenderMCPServer:
         except Exception as e:
             return {"error": str(e)}
 
-    def execute_code(self, code):
-        """Execute arbitrary Blender Python code"""
-        # This is powerful but potentially dangerous - use with caution
+    def execute_code(self, code, transaction=False, rollback_on_error=True):
+        """Execute Python with an optional, explicitly bounded datablock guard."""
+        before = _gn_blend_data_ids()
         try:
             # Create a local namespace for execution
             namespace = {"bpy": bpy}
@@ -5572,9 +7053,59 @@ class BlenderMCPServer:
                 exec(code, namespace)
 
             captured_output = capture_buffer.getvalue()
-            return {"executed": True, "result": captured_output}
+            after = _gn_blend_data_ids()
+            created = [item for pointer, item in after.items() if pointer not in before]
+            deleted = [item for pointer, item in before.items() if pointer not in after]
+            return {
+                "executed": True,
+                "result": captured_output,
+                "transaction": bool(transaction),
+                "changes": {
+                    "created": [
+                        {"id_type": item.bl_rna.identifier, "name": item.name}
+                        for item in sorted(created, key=lambda value: (value.bl_rna.identifier, value.name))
+                    ],
+                    "deleted": [
+                        {"id_type": item.bl_rna.identifier, "name": item.name}
+                        for item in deleted
+                    ],
+                    "modified": "not_detected_by_bounded_python_guard",
+                },
+                "rollback_scope": "new_datablocks_only" if transaction else "none",
+                "non_restorable_effects": [
+                    "modified_or_deleted_datablocks",
+                    "filesystem_and_network_side_effects",
+                    "external_processes_and_render_outputs",
+                ] if transaction else [],
+            }
         except Exception as e:
-            raise Exception(f"Code execution error: {str(e)}")
+            removed = []
+            rollback_errors = []
+            if transaction and rollback_on_error:
+                created = [
+                    item for pointer, item in _gn_blend_data_ids().items()
+                    if pointer not in before
+                ]
+                for item in created:
+                    try:
+                        removed.append({"id_type": item.bl_rna.identifier, "name": item.name})
+                        bpy.data.batch_remove(ids=[item])
+                    except Exception as rollback_error:
+                        rollback_errors.append(str(rollback_error))
+            raise BlenderMCPAddonError(
+                "bounded_python_rolled_back" if transaction and not rollback_errors else "blender_python_error",
+                f"Code execution error: {str(e)}",
+                details={
+                    "rollback_scope": "new_datablocks_only" if transaction else "none",
+                    "removed": removed,
+                    "rollback_errors": rollback_errors,
+                    "non_restorable_effects": [
+                        "modified_or_deleted_datablocks",
+                        "filesystem_and_network_side_effects",
+                        "external_processes_and_render_outputs",
+                    ],
+                },
+            ) from e
 
 
 
@@ -7492,10 +9023,11 @@ class BLENDERMCP_AddonPreferences(bpy.types.AddonPreferences):
         description="Automatically start MCP server when Blender opens or loads a file",
         default=True
     )
-    port: IntProperty(
-        name="Default Port",
-        description="Port for the BlenderMCP server",
-        default=9876, min=1024, max=65535
+    allow_ai_control: BoolProperty(
+        name="Allow AI control",
+        description="Allow an MCP client to claim and modify this Blender instance",
+        default=True,
+        update=_on_allow_ai_control_changed,
     )
     # ── Poly Haven ──
     use_polyhaven: BoolProperty(
@@ -7529,9 +9061,7 @@ class BLENDERMCP_AddonPreferences(bpy.types.AddonPreferences):
         layout = self.layout
         layout.prop(self, "telemetry_consent")
         layout.prop(self, "auto_connect")
-        layout.separator()
-        layout.label(text="Persistent defaults (applied on startup):", icon='SETTINGS')
-        layout.prop(self, "port")
+        layout.prop(self, "allow_ai_control")
         layout.separator()
         layout.prop(self, "use_polyhaven")
         layout.prop(self, "use_hyper3d")
@@ -7581,7 +9111,7 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
         scene = context.scene
         prefs = get_blendermcp_addon_preferences(context)
 
-        layout.prop(scene, "blendermcp_port")
+        layout.prop(scene, "blendermcp_allow_ai_control", text="Allow AI control")
         layout.prop(scene, "blendermcp_use_polyhaven", text="Use assets from Poly Haven")
 
         layout.prop(scene, "blendermcp_use_hyper3d", text="Use Hyper3D Rodin 3D model generation")
@@ -7621,10 +9151,12 @@ class BLENDERMCP_PT_Panel(bpy.types.Panel):
                 layout.prop(scene, "blendermcp_hunyuan3d_texture", text="Generate Texture")
         
         if not scene.blendermcp_server_running:
-            layout.operator("blendermcp.start_server", text="Connect to MCP server")
+            layout.operator("blendermcp.start_server", text="Start MCP connection")
         else:
-            layout.operator("blendermcp.stop_server", text="Disconnect from MCP server")
-            layout.label(text=f"Running on port {scene.blendermcp_port}")
+            server = getattr(bpy.types, "blendermcp_server", None)
+            if server and server.has_live_claim():
+                layout.operator("blendermcp.release_ai_control", text="Release AI control", icon='CANCEL')
+            layout.operator("blendermcp.stop_server", text="Stop MCP connection")
 
 # Operator to set Hyper3D API Key
 class BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey(bpy.types.Operator):
@@ -7649,15 +9181,15 @@ class BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey(bpy.types.Operator):
 # Operator to start the server
 class BLENDERMCP_OT_StartServer(bpy.types.Operator):
     bl_idname = "blendermcp.start_server"
-    bl_label = "Connect to Claude"
-    bl_description = "Start the BlenderMCP server to connect with Claude"
+    bl_label = "Start MCP connection"
+    bl_description = "Start automatic local Blender MCP registration"
 
     def execute(self, context):
         scene = context.scene
 
         # Create a new server instance
         if not hasattr(bpy.types, "blendermcp_server") or not bpy.types.blendermcp_server:
-            bpy.types.blendermcp_server = BlenderMCPServer(port=scene.blendermcp_port)
+            bpy.types.blendermcp_server = BlenderMCPServer()
 
         # Start the server
         bpy.types.blendermcp_server.start()
@@ -7668,8 +9200,8 @@ class BLENDERMCP_OT_StartServer(bpy.types.Operator):
 # Operator to stop the server
 class BLENDERMCP_OT_StopServer(bpy.types.Operator):
     bl_idname = "blendermcp.stop_server"
-    bl_label = "Stop the connection to Claude"
-    bl_description = "Stop the connection to Claude"
+    bl_label = "Stop MCP connection"
+    bl_description = "Stop the local Blender MCP registration"
 
     def execute(self, context):
         scene = context.scene
@@ -7681,6 +9213,19 @@ class BLENDERMCP_OT_StopServer(bpy.types.Operator):
 
         scene.blendermcp_server_running = False
 
+        return {'FINISHED'}
+
+
+class BLENDERMCP_OT_ReleaseAIControl(bpy.types.Operator):
+    bl_idname = "blendermcp.release_ai_control"
+    bl_label = "Release AI control"
+    bl_description = "Revoke the current AI claim without stopping the MCP connection"
+
+    def execute(self, _context):
+        server = getattr(bpy.types, "blendermcp_server", None)
+        if server:
+            server.revoke_claim("claim_revoked_by_user")
+        self.report({'INFO'}, "AI control released")
         return {'FINISHED'}
 
 # Operator to open Terms and Conditions
@@ -7703,16 +9248,19 @@ class BLENDERMCP_OT_OpenTerms(bpy.types.Operator):
 
 # Registration functions
 def register():
+    global _BLENDER_MCP_OVERLAY_HANDLE
     # Scene properties with update callbacks that sync to persistent AddonPreferences
     U = lambda name: _make_scene_update(name)  # shorthand
 
-    bpy.types.Scene.blendermcp_port = IntProperty(
-        name="Port", description="Port for the BlenderMCP server",
-        default=9876, min=1024, max=65535, update=U('port')
-    )
-
     bpy.types.Scene.blendermcp_server_running = bpy.props.BoolProperty(
         name="Server Running", default=False
+    )
+
+    bpy.types.Scene.blendermcp_allow_ai_control = bpy.props.BoolProperty(
+        name="Allow AI control",
+        description="Allow an MCP client to claim and modify this Blender instance",
+        default=True,
+        update=U('allow_ai_control'),
     )
 
     bpy.types.Scene.blendermcp_use_polyhaven = bpy.props.BoolProperty(
@@ -7801,7 +9349,16 @@ def register():
     bpy.utils.register_class(BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey)
     bpy.utils.register_class(BLENDERMCP_OT_StartServer)
     bpy.utils.register_class(BLENDERMCP_OT_StopServer)
+    bpy.utils.register_class(BLENDERMCP_OT_ReleaseAIControl)
     bpy.utils.register_class(BLENDERMCP_OT_OpenTerms)
+
+    if _BLENDER_MCP_OVERLAY_HANDLE is None:
+        _BLENDER_MCP_OVERLAY_HANDLE = bpy.types.SpaceView3D.draw_handler_add(
+            _blendermcp_draw_occupancy_border,
+            (),
+            'WINDOW',
+            'POST_PIXEL',
+        )
 
     # Register load_post handler for persistence + auto-connect
     bpy.app.handlers.load_post.append(_load_post_handler)
@@ -7821,6 +9378,7 @@ def register():
     )
 
 def unregister():
+    global _BLENDER_MCP_OVERLAY_HANDLE
     # Remove load_post handler
     if _load_post_handler in bpy.app.handlers.load_post:
         bpy.app.handlers.load_post.remove(_load_post_handler)
@@ -7830,15 +9388,21 @@ def unregister():
         bpy.types.blendermcp_server.stop()
         del bpy.types.blendermcp_server
 
+    if _BLENDER_MCP_OVERLAY_HANDLE is not None:
+        with suppress(Exception):
+            bpy.types.SpaceView3D.draw_handler_remove(_BLENDER_MCP_OVERLAY_HANDLE, 'WINDOW')
+        _BLENDER_MCP_OVERLAY_HANDLE = None
+
     bpy.utils.unregister_class(BLENDERMCP_PT_Panel)
     bpy.utils.unregister_class(BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey)
     bpy.utils.unregister_class(BLENDERMCP_OT_StartServer)
     bpy.utils.unregister_class(BLENDERMCP_OT_StopServer)
+    bpy.utils.unregister_class(BLENDERMCP_OT_ReleaseAIControl)
     bpy.utils.unregister_class(BLENDERMCP_OT_OpenTerms)
     bpy.utils.unregister_class(BLENDERMCP_AddonPreferences)
 
-    del bpy.types.Scene.blendermcp_port
     del bpy.types.Scene.blendermcp_server_running
+    del bpy.types.Scene.blendermcp_allow_ai_control
     del bpy.types.Scene.blendermcp_use_polyhaven
     del bpy.types.Scene.blendermcp_use_hyper3d
     del bpy.types.Scene.blendermcp_hyper3d_mode

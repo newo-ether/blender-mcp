@@ -25,6 +25,13 @@ class _FakeBlenderConnection:
 
     def send_command(self, command, params=None):
         self.commands.append((command, params))
+        if command == "export_node_tree" and params.get("allow_large_response"):
+            return {
+                "tree_ref": params["tree_ref"],
+                "view": params["view"],
+                "revision": "sha256:" + "a" * 64,
+                "stats": {"node_count": 1},
+            }
         return {"command": command, "params": params}
 
 
@@ -71,6 +78,32 @@ class NodeTreeToolTests(unittest.TestCase):
             "node_names": ["Principled BSDF"],
             "neighbor_depth": 2,
         })
+
+    def test_bridge_log_redaction_hides_claims_code_and_nested_credentials(self):
+        redacted = server._redact_command_params({
+            "_claim_token": "claim-secret",
+            "code": "print('private')",
+            "nested": {"api_key": "provider-secret", "name": "safe"},
+        })
+        self.assertEqual(redacted["_claim_token"], "<redacted>")
+        self.assertEqual(redacted["code"], "<redacted>")
+        self.assertEqual(redacted["nested"]["api_key"], "<redacted>")
+        self.assertEqual(redacted["nested"]["name"], "safe")
+
+    def test_file_export_explicitly_requests_the_complete_snapshot(self):
+        original_writer = server.write_node_tree_snapshot_json
+        server.write_node_tree_snapshot_json = lambda _result, path: Path(path).resolve()
+        try:
+            response = json.loads(server.export_node_tree(
+                None,
+                tree_ref=self.tree_ref,
+                view="auto",
+                output_path="complete.json",
+            ))
+        finally:
+            server.write_node_tree_snapshot_json = original_writer
+        self.assertEqual(response["status"], "written")
+        self.assertTrue(self.fake.commands[-1][1]["allow_large_response"])
 
     def test_scene_compositor_initialization_requires_explicit_flag(self):
         response = json.loads(server.ensure_scene_compositor_tree(

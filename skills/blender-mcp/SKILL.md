@@ -12,8 +12,10 @@ Use the connected Blender MCP server as the primary interface for live Blender w
 1. Decide whether the request depends on live Blender state.
 2. For a conceptual Blender question, answer from reliable knowledge or version-correct documentation without probing the scene.
 3. For a live task, confirm that relevant Blender MCP tools are available. If they are absent, report that Blender MCP is not installed or enabled in this client; do not silently switch to GUI automation.
-4. Start with the smallest read-only inspection that can identify the target and constraints.
-5. Prefer, in order:
+4. Call list_blender_instances before inspecting scene state. When one instance is ready, select it; when several are ready, require an explicit instance_id or an exact unique match on visible file/scene metadata. Never choose by port, registry order, foreground window, or recency.
+5. Claim the selected instance before mutation. Respect `manual` and `claimed_by_other_client`; do not bypass a human-reserved Blender window.
+6. Start with the smallest read-only inspection that can identify the target and constraints.
+7. Prefer, in order:
    - a dedicated structured tool;
    - a runtime schema plus a validated transactional node patch;
    - small, auditable execute_blender_code calls when the structured surface cannot express the operation.
@@ -24,6 +26,7 @@ Do not call every status or inspection tool preemptively. Let the requested outc
 
 - Use get_scene_info only when broad scene context is necessary.
 - Use get_object_info when the target object is already known.
+- Use audit_external_dependencies, inspect_evaluated_mesh, and get_simulation_status instead of diagnostic Python when they answer the question.
 - Use node-tree indexes and targeted exports instead of loading a large graph.
 - Use get_runtime_automation_context before version-sensitive Blender Python.
 - Resolve version-correct official Blender documentation with get_blender_documentation_context, search_blender_docs, and get_blender_doc_page when an API or feature contract is uncertain.
@@ -33,7 +36,9 @@ Do not call every status or inspection tool preemptively. Let the requested outc
 
 - Preserve the user's current project and unrelated datablocks.
 - Validate a node patch before applying it. Keep transactional backups unless the user explicitly prefers otherwise.
+- Prefer modify_verify_save when the task benefits from candidate-count assertions and the user has stated a save policy; its default remains unsaved.
 - Read back the affected object or targeted subgraph after mutation.
+- Release the Blender claim after the task or before handing control back to the user. The hollow viewport border means the instance is currently AI-occupied; it is not an input lock.
 - Use get_viewport_screenshot only when appearance or spatial composition materially affects success. A screenshot is not a substitute for structured verification.
 - Do not save, overwrite, or change the path of a .blend file unless the user asked for that outcome.
 - Do not begin a provider download, paid generation job, or destructive cleanup unless the request already authorizes it or the user confirms it.
@@ -41,7 +46,10 @@ Do not call every status or inspection tool preemptively. Let the requested outc
 
 ## Handle failures
 
-- Stop after a clear disconnected response. Tell the user to open Blender, enable the Blender MCP add-on, and confirm the configured host and port, then wait for them to retry.
+- Stop after `no_registered_instances` or a clear disconnected response. Tell the user to open Blender and enable or start the Blender MCP add-on; endpoint allocation and registration are automatic.
+- On `multiple_instances_require_selection`, show bounded file/scene summaries and ask which instance to use. Never probe windows through client-specific computer control to guess.
+- On `instance_manual` or `instance_claimed_by_other_client`, preserve human control and ask the user to enable or release that Blender instance.
+- On `file_session_changed` or `instance_changed`, discard the stale target, list instances again, and require a fresh claim before mutation.
 - When Blender reports a missing node type, socket, property, or edit capability, inspect the live schema or documentation once. If no equivalent exists, report the limitation instead of guessing.
 - Do not bypass linked-library or read-only restrictions with arbitrary Python.
 - On validation failure, correct the patch from diagnostics and revalidate before any application attempt.

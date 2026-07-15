@@ -95,13 +95,14 @@ def build_benchmark_tree(domain, count):
     return tree
 
 
-def benchmark_tree(server, tree):
+def benchmark_tree(server, tree, raw_export):
     reference = tree_ref(tree)
     middle = sorted(node.name for node in tree.nodes)[len(tree.nodes) // 2]
-    full_ms, full = timed(lambda: server.export_node_tree(reference, "semantic"))
+    full_ms, full = timed(lambda: raw_export(reference, "semantic"))
     operations_ms, operations = timed(
-        lambda: server.export_node_tree(reference, "operations")
+        lambda: raw_export(reference, "operations")
     )
+    public_ms, public = timed(lambda: server.export_node_tree(reference, "auto"))
     targeted_ms, targeted = timed(
         lambda: server.export_node_tree(reference, "semantic", [middle], 1)
     )
@@ -123,6 +124,11 @@ def benchmark_tree(server, tree):
         operations_bytes < full_bytes * 0.75,
         "operations view is not materially smaller",
     )
+    if public.get("status") == "summary":
+        assert_true(bool(public.get("next_action")), "soft-limit summary lacks next action")
+        assert_true("nodes" not in public["tree"], "soft-limit summary leaked the full graph")
+    if len(tree.nodes) >= 2048:
+        assert_true(public.get("status") == "summary", "oversized auto export was not summarized")
     if len(tree.nodes) >= 256:
         assert_true(combined_bytes < full_bytes * 0.15, "index-first context is not materially smaller")
     return {
@@ -143,6 +149,13 @@ def benchmark_tree(server, tree):
             "bytes": operations_bytes,
             "estimated_tokens": estimated_tokens(operations_bytes),
             "semantic_ratio": round(operations_bytes / full_bytes, 5),
+        },
+        "public_auto": {
+            "ms": public_ms,
+            "view": public["view"],
+            "summary": public.get("status") == "summary",
+            "bytes_before_summary": public["stats"]["json_bytes"],
+            "has_actionable_next_step": bool(public.get("next_action")) if public.get("status") == "summary" else True,
         },
         "index": {
             "ms": index_ms,
@@ -292,13 +305,16 @@ def run_test():
         run_name="blender_mcp_node_efficiency_test",
     )
     server = namespace["BlenderMCPServer"]()
+    raw_export = lambda reference, view: namespace["_node_export_target"](
+        namespace["_node_resolve_tree_ref"](reference), view
+    )
     trees = {
         domain: [build_benchmark_tree(domain, size) for size in SIZES]
         for domain in ("shader", "compositor")
     }
     metrics = {
         domain: {
-            str(len(tree.nodes)): benchmark_tree(server, tree)
+            str(len(tree.nodes)): benchmark_tree(server, tree, raw_export)
             for tree in domain_trees
         }
         for domain, domain_trees in trees.items()
