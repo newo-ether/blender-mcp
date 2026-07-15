@@ -12,7 +12,7 @@ The Geometry-specific list_geometry_node_trees family remains useful for exact g
 ## Inspect only the relevant subgraph
 
 1. Search get_node_tree_index with a distinctive node name, label, or type.
-2. Export with export_node_tree using view=operations, selected node_names, and neighbor_depth=1 for local rewiring.
+2. Call export_node_tree with view=auto by default. It selects operations for a complete graph and semantic for a targeted subgraph; explicit view=operations remains available. Pass selected node_names and neighbor_depth=1 for local rewiring.
 3. Increase neighbor depth only when the current export omits a required connection.
 4. Request semantic or all only when defaults, interface details, or layout are necessary.
 5. Record the returned revision and stable node names. Never invent node names from UI labels.
@@ -37,6 +37,13 @@ For Geometry-specific tools, use get_geometry_node_tree_index and export_geometr
 6. Call apply_node_tree_patch or apply_geometry_node_patch with keep_backup=true unless the user declines a backup.
 7. Read back the changed nodes plus one-hop neighbors and compare the new revision and intended connections.
 
+For a single guarded sequence, use modify_verify_save with the same Patch plus
+bounded assertions over node_count, link_count, or interface_item_count. Keep
+save_policy=never unless the user asked to save; on_success saves an existing
+file after verification, while required rejects an Untitled file before mutation.
+
+Use add_dynamic_item, remove_dynamic_item, and set_dynamic_item only on collections reported by the live node schema. Prefer add_foreach_zone and add_closure_zone over constructing paired zone nodes manually. Blender-version rejection is authoritative and the transaction must leave the original tree unchanged.
+
 Never apply after transport-stage validation failure. Script nodes and File Output mutations fail closed in the generic transaction surface; do not evade those safeguards.
 
 ## Evaluate Blender 5.2 List migrations
@@ -46,7 +53,7 @@ Use this sequence for requests such as replacing an uneven index field implement
 1. Locate the existing node group or imported node asset and export only the implementation subgraph.
 2. Identify its observable contract: input geometry or fields, ordering, index behavior, data type, empty-input behavior, and output domain.
 3. Confirm the connected Blender version from runtime evidence.
-4. Search live node types for List and inspect every candidate needed for the proposed replacement.
+4. Search live node types for List and inspect every candidate needed for the proposed replacement. Use export_blender_node_asset first when the implementation is still an asset; do not import it merely to inspect its internals.
 5. Compare candidate sockets, supported data types, field evaluation, and ordering semantics with the existing contract.
 6. Convert only when the live schemas can reproduce the full observable contract. Keep the Points plus For Each implementation when List support is narrower or ambiguous.
 7. Make the smallest patch, validate it, preserve a backup, then verify representative normal, uneven, and empty cases.

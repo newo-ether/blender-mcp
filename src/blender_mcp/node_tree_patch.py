@@ -36,6 +36,11 @@ SUPPORTED_OPERATIONS = frozenset({
     "remove_interface_socket",
     "set_color_ramp",
     "set_curve_mapping",
+    "add_dynamic_item",
+    "remove_dynamic_item",
+    "set_dynamic_item",
+    "add_foreach_zone",
+    "add_closure_zone",
 })
 MAX_OPERATIONS = 500
 MAX_PATCH_BYTES = 2 * 1024 * 1024
@@ -68,6 +73,21 @@ _OPERATION_FIELDS = {
     "remove_interface_socket": ({"op", "identifier"}, set()),
     "set_color_ramp": ({"op", "node", "elements"}, {"interpolation"}),
     "set_curve_mapping": ({"op", "node", "curves"}, {"use_clip"}),
+    "add_dynamic_item": (
+        {"op", "node", "collection", "socket_type", "name"}, {"item"}
+    ),
+    "remove_dynamic_item": (
+        {"op", "node", "collection", "index"}, set()
+    ),
+    "set_dynamic_item": (
+        {"op", "node", "collection", "index", "property", "value"}, set()
+    ),
+    "add_foreach_zone": (
+        {"op", "input_id", "output_id"}, {"input_name", "output_name", "location"}
+    ),
+    "add_closure_zone": (
+        {"op", "input_id", "output_id"}, {"input_name", "output_name", "location"}
+    ),
 }
 _OPERATION_CAPABILITY = {
     "add_node": "graph",
@@ -83,11 +103,17 @@ _OPERATION_CAPABILITY = {
     "remove_interface_socket": "interface",
     "set_color_ramp": "dynamic",
     "set_curve_mapping": "dynamic",
+    "add_dynamic_item": "dynamic",
+    "remove_dynamic_item": "dynamic",
+    "set_dynamic_item": "dynamic",
+    "add_foreach_zone": "dynamic",
+    "add_closure_zone": "dynamic",
 }
 _STRING_FIELDS = {
     "id", "node_type", "name", "node", "property", "socket", "from_node",
     "from_socket", "to_node", "to_socket", "identifier", "in_out",
     "socket_type", "interpolation", "handle_type",
+    "collection", "input_id", "output_id", "input_name", "output_name",
 }
 
 
@@ -515,6 +541,37 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                 diagnostics.append(diagnostic(
                     "invalid_boolean", f"{path}/use_clip", "use_clip must be boolean"
                 ))
+        elif operation_name in {"remove_dynamic_item", "set_dynamic_item"}:
+            item_index = operation.get("index")
+            if not isinstance(item_index, int) or isinstance(item_index, bool) or item_index < 0:
+                diagnostics.append(diagnostic(
+                    "invalid_index", f"{path}/index", "index must be a non-negative integer"
+                ))
+            if operation_name == "set_dynamic_item":
+                contains_id_reference = _validate_finite_json_value(
+                    operation.get("value"), f"{path}/value", diagnostics
+                ) or contains_id_reference
+        elif operation_name in {"add_foreach_zone", "add_closure_zone"}:
+            for field in ("input_id", "output_id"):
+                reference = operation.get(field)
+                if isinstance(reference, str):
+                    if reference in created_ids:
+                        diagnostics.append(diagnostic(
+                            "duplicate_created_id", f"{path}/{field}",
+                            f"Created node id is duplicated: {reference}",
+                        ))
+                    created_ids.add(reference)
+            if "location" in operation:
+                location = operation["location"]
+                if (
+                    not isinstance(location, list)
+                    or len(location) != 2
+                    or any(not _is_number(value) or not math.isfinite(float(value)) for value in location)
+                ):
+                    diagnostics.append(diagnostic(
+                        "invalid_location", f"{path}/location",
+                        "location must contain two finite numbers",
+                    ))
 
     if contains_id_reference:
         required_capabilities.add("id_reference")

@@ -16,9 +16,10 @@ Provider status checks are read-only. Downloads, imports, and generation jobs mu
 1. Call search_blender_node_assets with a narrow query, tree type, and scope.
 2. Use detail=summary for discovery; request detail=full only for shortlisted assets whose interface must be compared.
 3. Confirm exact source_path, asset name, tree type, library, scope, interface, and existing-name conflicts.
-4. Call import_blender_node_asset with the exact returned identity.
-5. Keep conflict_policy=REJECT unless the user intentionally wants a separate renamed copy.
-6. List or export the imported tree and verify its interface before connecting it to live users.
+4. Call export_blender_node_asset for internal graph inspection. Use node_names and neighbor_depth when only one implementation area matters; this disposable read must leave zero appended datablocks.
+5. Call import_blender_node_asset only when the requested outcome actually needs the asset in the open file.
+6. Keep conflict_policy=REJECT unless the user intentionally wants a separate renamed copy.
+7. List or export the imported tree and verify its interface before connecting it to live users.
 
 Search inspection is disposable and should not leave appended datablocks. If import fails, report the server's cleanup result rather than attempting an unbounded manual cleanup.
 

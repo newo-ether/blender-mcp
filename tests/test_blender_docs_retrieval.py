@@ -173,6 +173,17 @@ class BlenderDocumentationRetrievalTests(unittest.TestCase):
         self.assertEqual(response["result_count"], 1)
         self.assertEqual(response["results"][0]["title"], "Geometry Nodes")
 
+    def test_snippet_mode_none_defers_page_fetches(self):
+        base = "https://docs.blender.org/manual/en/5.1/"
+        fetcher = FakeFetcher({base + "searchindex.js": (MANUAL_INDEX, "application/javascript")})
+        response = retrieval.BlenderDocumentationClient(fetcher).search(
+            manual_context(), query="geometry nodes", limit=2, snippet_mode="none"
+        )
+        self.assertEqual(response["snippet_mode"], "none")
+        self.assertEqual(response["snippet_enriched_count"], 0)
+        self.assertEqual(len(fetcher.calls), 1)
+        self.assertTrue(all(item["snippet_deferred"] for item in response["results"]))
+
     def test_page_extracts_exact_heading_section_and_removes_chrome(self):
         base = "https://docs.blender.org/manual/en/5.1/"
         fetcher = FakeFetcher({

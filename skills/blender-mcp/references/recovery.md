@@ -2,11 +2,13 @@
 
 ## MCP or Blender unavailable
 
-Treat a clear connection error as terminal for the current attempt:
+Stop after a clear disconnected response. Treat a clear connection error as terminal for the current attempt:
 
 1. Do not repeat several live-state calls.
-2. Tell the user to open Blender, enable or reconnect the Blender MCP add-on, and confirm the client and add-on use the same host and port.
+2. Call list_blender_instances once. If none are registered, tell the user to open Blender and enable or start the Blender MCP add-on; registration and endpoint allocation are automatic.
 3. Preserve the intended next read-only call so work can resume after reconnection.
+
+When multiple instances are registered, do not use foreground-window or port heuristics. Require an exact instance selection. Respect `manual`, `claimed_by_other_client`, and the occupancy border; release the current claim before switching targets.
 
 If the tools themselves are absent, distinguish client MCP registration from Blender add-on connectivity.
 

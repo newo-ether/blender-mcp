@@ -21,6 +21,7 @@ files = "Import and export user-selected assets and data"
 [build]
 paths = [
   "__init__.py",
+  "blender_mcp_addon_runtime.py",
   "LICENSE",
   "schemas/geometry-nodes-index-v1.json",
   "schemas/geometry-nodes-patch-application-v1.json",

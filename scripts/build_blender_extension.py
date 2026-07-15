@@ -9,16 +9,40 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ADDON_SOURCE = ROOT / "addon.py"
+RUNTIME_SOURCE = ROOT / "blender_mcp_addon_runtime.py"
 MANIFEST_SOURCE = ROOT / "packaging" / "blender_extension" / "blender_manifest.toml"
 LICENSE_SOURCE = ROOT / "LICENSE"
 PROJECT_SOURCE = ROOT / "pyproject.toml"
 SCHEMA_SOURCE = ROOT / "schemas"
+
+
+def expected_archive_members() -> set[str]:
+    return {
+        "__init__.py",
+        "blender_mcp_addon_runtime.py",
+        "blender_manifest.toml",
+        "LICENSE",
+    } | {
+        f"schemas/{path.name}" for path in SCHEMA_SOURCE.glob("*.json")
+    }
+
+
+def stage_sources(staging: Path) -> None:
+    """Prepare the exact source tree consumed by Blender's official builder."""
+    shutil.copy2(ADDON_SOURCE, staging / "__init__.py")
+    shutil.copy2(RUNTIME_SOURCE, staging / "blender_mcp_addon_runtime.py")
+    shutil.copy2(MANIFEST_SOURCE, staging / "blender_manifest.toml")
+    shutil.copy2(LICENSE_SOURCE, staging / "LICENSE")
+    shutil.copytree(SCHEMA_SOURCE, staging / "schemas")
 
 
 def find_blender(explicit_path: str | None) -> Path:
@@ -67,9 +91,7 @@ def run_blender(blender: Path, *arguments: str) -> None:
 
 def verify_archive(archive_path: Path) -> None:
     """Reject accidental extra files or nested archive roots."""
-    expected = {"__init__.py", "blender_manifest.toml", "LICENSE"} | {
-        f"schemas/{path.name}" for path in SCHEMA_SOURCE.glob("*.json")
-    }
+    expected = expected_archive_members()
     with zipfile.ZipFile(archive_path) as archive:
         actual = {
             name for name in archive.namelist()
@@ -99,10 +121,7 @@ def build(blender: Path, output_dir: Path) -> Path:
 
     with tempfile.TemporaryDirectory(prefix="blender-mcp-extension-") as temp_dir:
         staging = Path(temp_dir)
-        shutil.copy2(ADDON_SOURCE, staging / "__init__.py")
-        shutil.copy2(MANIFEST_SOURCE, staging / "blender_manifest.toml")
-        shutil.copy2(LICENSE_SOURCE, staging / "LICENSE")
-        shutil.copytree(SCHEMA_SOURCE, staging / "schemas")
+        stage_sources(staging)
 
         run_blender(
             blender,

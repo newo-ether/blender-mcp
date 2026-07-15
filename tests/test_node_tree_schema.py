@@ -56,7 +56,10 @@ class NodeTreeSchemaTests(unittest.TestCase):
             destination = schema.write_snapshot_json(
                 sample_snapshot(), "graphs/shader.json", temp_dir
             )
-            self.assertEqual(destination, Path(temp_dir) / "graphs" / "shader.json")
+            self.assertEqual(
+                destination.resolve(),
+                (Path(temp_dir) / "graphs" / "shader.json").resolve(),
+            )
             self.assertEqual(
                 json.loads(destination.read_text(encoding="utf-8")), sample_snapshot()
             )

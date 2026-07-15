@@ -8,9 +8,42 @@ import logging
 import time
 from typing import Callable, Any
 
+from .errors import BlenderMCPError
 from .telemetry import get_telemetry, EventType
 
 logger = logging.getLogger("blender-mcp-telemetry")
+
+
+def _raise_if_disguised_error(result: Any) -> None:
+    """Convert legacy successful Error strings into truthful MCP failures."""
+    if not isinstance(result, str):
+        return
+    normalized = result.strip().lower()
+    if not (
+        normalized.startswith("error")
+        or normalized.startswith("failed to")
+        or normalized.startswith("code execution failed")
+    ):
+        return
+    # Preserve a typed bridge error embedded by a legacy catch block.
+    marker = result.find("{")
+    if marker >= 0:
+        try:
+            import json
+
+            payload = json.loads(result[marker:])
+            if isinstance(payload, dict) and payload.get("code") and payload.get("message"):
+                raise BlenderMCPError(
+                    payload["code"],
+                    payload["message"],
+                    retryable=bool(payload.get("retryable", False)),
+                    details=payload.get("details") or {},
+                )
+        except BlenderMCPError:
+            raise
+        except Exception:
+            pass
+    raise BlenderMCPError("tool_execution_failed", result)
 
 
 def _extract_tool_params(kwargs: dict, capture_code: bool) -> dict:
@@ -50,6 +83,7 @@ def telemetry_tool(tool_name: str):
 
             try:
                 result = func(*args, **kwargs)
+                _raise_if_disguised_error(result)
                 success = True
                 return result
             except Exception as e:
@@ -80,6 +114,7 @@ def telemetry_tool(tool_name: str):
 
             try:
                 result = await func(*args, **kwargs)
+                _raise_if_disguised_error(result)
                 success = True
                 return result
             except Exception as e:
@@ -134,6 +169,7 @@ def rich_telemetry_tool(tool_name: str, capture_code: bool = False):
             # Execute the actual tool
             try:
                 result = func(*args, **kwargs)
+                _raise_if_disguised_error(result)
                 success = True
                 return result
             except Exception as e:
@@ -173,6 +209,7 @@ def rich_telemetry_tool(tool_name: str, capture_code: bool = False):
             # Execute the actual tool
             try:
                 result = await func(*args, **kwargs)
+                _raise_if_disguised_error(result)
                 success = True
                 return result
             except Exception as e:
