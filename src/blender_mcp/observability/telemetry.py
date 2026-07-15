@@ -147,9 +147,13 @@ class TelemetryCollector:
     def _check_user_consent(self) -> bool:
         """Check if user has consented to prompt collection via Blender addon"""
         try:
-            # Import here to avoid circular dependency
-            from .server import get_blender_connection
-            blender = get_blender_connection()
+            # Telemetry must never create a Blender claim on its own. It may
+            # query consent only through a connection already selected by a
+            # user-facing Blender tool.
+            host_module = sys.modules.get("blender_mcp.host")
+            blender = getattr(host_module, "blender_connection", None)
+            if blender is None:
+                return False
             result = blender.send_command("get_telemetry_consent")
             consent = result.get("consent", False)
             return consent

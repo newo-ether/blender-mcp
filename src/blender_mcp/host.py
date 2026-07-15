@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict
 
@@ -20,40 +21,17 @@ logger = logging.getLogger("BlenderMCPServer")
 @asynccontextmanager
 async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
     """Manage server startup and shutdown lifecycle"""
-    # We don't need to create a connection here since we're using the global connection
-    # for resources and tools
-
     try:
-        # Just log that we're starting up
         logger.info("BlenderMCP server starting up")
-
-        # Record startup event for telemetry
         try:
             record_startup()
         except Exception as e:
             logger.debug(f"Failed to record startup telemetry: {e}")
-
-        # Try to connect to Blender on startup to verify it's available
-        try:
-            # This will initialize the global connection if needed
-            blender = get_blender_connection()
-            logger.info("Successfully connected to Blender on startup")
-        except Exception as e:
-            logger.warning(f"Could not connect to Blender on startup: {str(e)}")
-            logger.warning("Make sure the Blender addon is running before using Blender resources or tools")
-
-        # Return an empty context - we're using the global connection
+        # Starting an MCP process must not occupy Blender. The first live tool
+        # selects a target; the AI releases it before handing control back.
         yield {}
     finally:
-        # Clean up the global connection on shutdown
-        global blender_connection
-        if instance_manager.active is not None:
-            instance_manager.release(ignore_errors=True)
-            blender_connection = None
-        elif blender_connection:
-            logger.info("Disconnecting from Blender on shutdown")
-            blender_connection.disconnect()
-            blender_connection = None
+        release_blender_connection(ignore_errors=True)
         logger.info("BlenderMCP server shut down")
 
 BLENDER_MCP_INSTRUCTIONS = (
@@ -64,7 +42,9 @@ BLENDER_MCP_INSTRUCTIONS = (
     "transactionally, and read back the affected subgraph. Use arbitrary "
     "Blender Python only when structured tools cannot express the operation. "
     "Use screenshots only when appearance matters. Do not save or overwrite "
-    "the .blend file unless the user asked. Stop and report a disconnected, "
+    "the .blend file unless the user asked. Before handing control back after "
+    "a live Blender task, call release_blender_instance even when the task "
+    "failed or stopped early. Stop and report a disconnected, "
     "read-only, or unsupported state instead of guessing."
 )
 
@@ -75,6 +55,7 @@ mcp = FastMCP(
 )
 
 blender_connection = None
+_connection_lock = threading.RLock()
 
 polyhaven_enabled = False  # Add this global variable
 
@@ -83,48 +64,102 @@ instance_manager = InstanceConnectionManager(
     owner_label=os.getenv("BLENDER_MCP_CLIENT_LABEL", "MCP client"),
 )
 
+
+def _bind_active_connection(connection: BlenderConnection) -> BlenderConnection:
+    global blender_connection
+    connection.params_enricher = instance_manager.prepare_params
+    blender_connection = connection
+    return connection
+
+
+def _refresh_connection_status(connection: BlenderConnection) -> None:
+    global polyhaven_enabled
+    result = connection.send_command("get_polyhaven_status")
+    polyhaven_enabled = result.get("enabled", False)
+
+
+def claim_blender_connection(
+    instance_id: str,
+    *,
+    expected_file_session_id: str = "",
+    lease_seconds: float,
+) -> dict[str, Any]:
+    """Claim one exact target and keep host/manager state synchronized."""
+    with _connection_lock:
+        result = instance_manager.claim(
+            instance_id,
+            expected_file_session_id=expected_file_session_id,
+            lease_seconds=lease_seconds,
+        )
+        _bind_active_connection(instance_manager.active)
+        return result
+
+
+def release_blender_connection(*, ignore_errors: bool = False) -> dict[str, Any]:
+    """Release any AI claim and always clear this process's local connection."""
+    global blender_connection
+    with _connection_lock:
+        try:
+            if instance_manager.active is not None:
+                return instance_manager.release(ignore_errors=ignore_errors)
+            if blender_connection is not None:
+                blender_connection.disconnect()
+            return {"released": False, "reason": "no_active_instance"}
+        finally:
+            blender_connection = None
+
+
 def get_blender_connection():
     """Get or create a persistent Blender connection"""
-    global blender_connection, polyhaven_enabled  # Add polyhaven_enabled to globals
+    global blender_connection
 
-    if instance_manager.active is not None:
-        instance_manager.ensure_lease()
-        blender_connection = instance_manager.active
+    with _connection_lock:
+        if instance_manager.active is not None:
+            blender_connection = instance_manager.active
 
-    # If we have an existing connection, check if it's still valid
-    if blender_connection is not None:
-        try:
-            # First check if PolyHaven is enabled by sending a ping command
-            result = blender_connection.send_command("get_polyhaven_status")
-            # Store the PolyHaven status globally
-            polyhaven_enabled = result.get("enabled", False)
-            return blender_connection
-        except Exception as e:
-            # Connection is dead, close it and create a new one
-            logger.warning(f"Existing connection is no longer valid: {str(e)}")
+        if blender_connection is not None:
             try:
+                instance_manager.ensure_lease()
+                _refresh_connection_status(blender_connection)
+                return blender_connection
+            except Exception as error:
+                target = dict(instance_manager.active_record or {})
+                logger.warning("Existing connection is no longer valid: %s", error)
+                if target:
+                    try:
+                        instance_manager.claim(
+                            target["instance_id"],
+                            expected_file_session_id=target["file_session_id"],
+                        )
+                        connection = _bind_active_connection(instance_manager.active)
+                        _refresh_connection_status(connection)
+                        logger.info("Reconnected selected Blender instance %s", target["instance_id"])
+                        return connection
+                    except Exception:
+                        instance_manager.invalidate()
+                        blender_connection = None
+                        raise
                 blender_connection.disconnect()
-            except:
-                pass
-            blender_connection = None
-            if instance_manager.active is not None:
-                instance_manager.invalidate()
+                blender_connection = None
 
-    # Create a new connection if needed
-    if blender_connection is None:
         registrations = discover_registry_records(directory=instance_manager.directory)
         if registrations:
-            blender_connection = instance_manager.auto_select()
-            blender_connection.params_enricher = instance_manager.prepare_params
+            try:
+                connection = _bind_active_connection(instance_manager.auto_select())
+                _refresh_connection_status(connection)
+            except Exception:
+                instance_manager.invalidate()
+                blender_connection = None
+                raise
             logger.info("Selected registered Blender instance %s", instance_manager.active_record["instance_id"])
-            return blender_connection
+            return connection
+
         host = os.getenv("BLENDER_HOST", DEFAULT_BRIDGE_HOST)
         port = int(os.getenv("BLENDER_PORT", str(DEFAULT_BRIDGE_PORT)))
-        blender_connection = BlenderConnection(host=host, port=port)
-        if not blender_connection.connect():
+        connection = BlenderConnection(host=host, port=port)
+        if not connection.connect():
             logger.error("Failed to connect to Blender")
-            blender_connection = None
-            raise Exception("Could not connect to Blender. Make sure the Blender addon is running.")
+            raise ConnectionError("Could not connect to Blender. Make sure the Blender addon is running.")
+        blender_connection = connection
         logger.info("Created new persistent connection to Blender")
-
-    return blender_connection
+        return blender_connection

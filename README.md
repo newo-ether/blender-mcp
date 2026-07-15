@@ -49,7 +49,7 @@ permanently change the user or machine execution policy. The ASCII
 [install.ps1](install.ps1). For a reproducible, version-pinned install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.11.2/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.11.2
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.11.3/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.11.3
 ```
 
 The explicit `TrimStart` removes the UTF-8 BOM carried by the localized full
@@ -64,7 +64,7 @@ Before changing the machine, the installer:
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
 4. verifies the wheel, Extension ZIP, portable Skill ZIP, and optional fallback MCPB against `SHA256SUMS.txt`;
 5. installs into a versioned environment such as
-   `%LOCALAPPDATA%\BlenderMCP\venv-1.11.2`;
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.11.3`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients;
 8. installs the same portable Skill for selected Codex and Claude Code clients,
@@ -205,9 +205,11 @@ process cannot provide a visible window.
 Every open Blender process registers a bounded local identity automatically. One MCP server can discover several instances but controls at most one at a time:
 
 1. `list_blender_instances` reports the open file, active scene, Blender version, dirty/available state, and claim status.
-2. With one available instance the server may select it automatically. With several, call `claim_blender_instance` using an explicit `instance_id`; selection never uses foreground-window or port heuristics.
-3. Mutations require an add-on-authoritative claim. `get_active_blender_instance` reports the selected identity, and `release_blender_instance` returns control when the task is done.
-4. Disable **Allow AI control** to reserve a window for manual work. A cyan hollow border inside every 3D View means that Blender process is currently claimed; it does not capture mouse or keyboard input.
+2. Starting the MCP server only discovers instances; it does not claim Blender. The first live Blender operation may automatically select the sole available instance. With several, call `claim_blender_instance` using an explicit `instance_id`; selection never uses foreground-window or port heuristics.
+3. One claim is kept for the complete AI task so related reads and mutations stay on the same file. `get_active_blender_instance` reports that selected identity.
+4. Before giving its final answer, stopping early, or handing the task back, the AI calls `release_blender_instance`. If Blender is already unreachable, the bounded lease remains the fallback and expires automatically.
+5. Instance heartbeats survive `.blend` loads, and a stale registry timestamp is checked against the live endpoint before the instance is rejected.
+6. Disable **Allow AI control** to reserve a window for manual work. A cyan hollow border inside every 3D View means that Blender process is currently claimed; it does not capture mouse or keyboard input.
 
 The add-on first tries the historical loopback endpoint for compatibility, then asks the operating system for a private loopback endpoint when another Blender already owns it. This transport detail is not a user mode and is not shown in the normal UI.
 
@@ -371,7 +373,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.11.2-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.11.3-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -379,7 +381,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.11.2-py3-none-any.whl
+python -m pip install ./blender_mcp-1.11.3-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:

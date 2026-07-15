@@ -38,7 +38,7 @@ Do not call every status or inspection tool preemptively. Let the requested outc
 - Validate a node patch before applying it. Keep transactional backups unless the user explicitly prefers otherwise.
 - Prefer modify_verify_save when the task benefits from candidate-count assertions and the user has stated a save policy; its default remains unsaved.
 - Read back the affected object or targeted subgraph after mutation.
-- Release the Blender claim after the task or before handing control back to the user. The hollow viewport border means the instance is currently AI-occupied; it is not an input lock.
+- Before sending the final response for any live Blender task, call release_blender_instance if this MCP process selected or claimed an instance. Release after read-only work as well as mutation, and also before failure or early-stop handoffs. If release cannot reach Blender, report that the lease will expire as a fallback. The hollow viewport border means the instance is currently AI-occupied; it is not an input lock.
 - Use get_viewport_screenshot only when appearance or spatial composition materially affects success. A screenshot is not a substitute for structured verification.
 - Do not save, overwrite, or change the path of a .blend file unless the user asked for that outcome.
 - Do not begin a provider download, paid generation job, or destructive cleanup unless the request already authorizes it or the user confirms it.
@@ -64,4 +64,4 @@ Do not call every status or inspection tool preemptively. Let the requested outc
 
 ## Report completion
 
-Summarize the target, the mutation performed, verification evidence, and any retained backup or unsaved state. State explicitly when the Blender file has not been saved.
+Summarize the target, the mutation performed, verification evidence, release status, and any retained backup or unsaved state. State explicitly when the Blender file has not been saved.

@@ -136,6 +136,13 @@ class BlenderMcpSkillTests(unittest.TestCase):
         self.assertNotIn("icon_", metadata)
         self.assertNotIn("brand_color", metadata)
 
+    def test_live_task_guidance_requires_ai_release_before_handoff(self):
+        guidance = self.canonical_guidance().lower()
+        self.assertIn("before sending the final response", guidance)
+        self.assertIn("call release_blender_instance", guidance)
+        self.assertIn("read-only work", guidance)
+        self.assertIn("failure or early-stop handoffs", guidance)
+
 
 class McpGuidanceTests(unittest.TestCase):
     @classmethod
@@ -155,6 +162,8 @@ class McpGuidanceTests(unittest.TestCase):
             "screenshots only when appearance matters",
             "do not save or overwrite",
             "disconnected",
+            "call release_blender_instance",
+            "before handing control back",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, lower)

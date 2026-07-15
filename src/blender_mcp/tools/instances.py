@@ -34,14 +34,11 @@ def claim_blender_instance(
     lease_seconds: float = DEFAULT_LEASE_SECONDS,
 ) -> Dict[str, Any]:
     """Claim and select exactly one registered Blender instance."""
-    result = host.instance_manager.claim(
+    return host.claim_blender_connection(
         instance_id,
         expected_file_session_id=expected_file_session_id,
         lease_seconds=lease_seconds,
     )
-    host.blender_connection = host.instance_manager.active
-    host.blender_connection.params_enricher = host.instance_manager.prepare_params
-    return result
 
 @mcp.tool()
 def get_active_blender_instance(ctx: Context) -> Dict[str, Any]:
@@ -51,6 +48,4 @@ def get_active_blender_instance(ctx: Context) -> Dict[str, Any]:
 @mcp.tool()
 def release_blender_instance(ctx: Context) -> Dict[str, Any]:
     """Release only this MCP process's active Blender claim."""
-    result = host.instance_manager.release()
-    host.blender_connection = None
-    return result
+    return host.release_blender_connection()

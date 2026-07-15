@@ -24,6 +24,7 @@ CORE_CASES = (
     ("geometry-linked", "blender_geometry_nodes_linked.py"),
     ("geometry-readonly", "blender_geometry_nodes_readonly.py"),
     ("geometry-scale", "blender_geometry_nodes_scale.py"),
+    ("instance-lifecycle", "blender_instance_lifecycle.py"),
     ("node-corners", "blender_node_tree_corner_cases.py"),
     ("node-efficiency", "blender_node_tree_model_efficiency.py"),
     ("node-validation", "blender_node_tree_validation.py"),
@@ -133,10 +134,16 @@ def run_logged(
             check=False,
         )
     output = log_path.read_text(encoding="utf-8", errors="replace")
-    if result.returncode != 0:
+    traceback_found = "Traceback (most recent call last):" in output
+    if result.returncode != 0 or traceback_found:
         print(output[-12000:], file=sys.stderr)
+        reason = (
+            f"exit code {result.returncode}"
+            if result.returncode != 0
+            else "a Python traceback despite exit code 0"
+        )
         raise RuntimeError(
-            f"{name} failed with exit code {result.returncode}; see {log_path}"
+            f"{name} failed with {reason}; see {log_path}"
         )
     result_lines = [
         line
@@ -213,7 +220,10 @@ def main() -> int:
                 for case_name, script_name in CORE_CASES:
                     name = f"core-{version}-{case_name}"
                     arguments: tuple[str, ...] = ()
-                    if script_name == "blender_compositor_initialization.py":
+                    if script_name in {
+                        "blender_compositor_initialization.py",
+                        "blender_instance_lifecycle.py",
+                    }:
                         arguments = ("--addon", str(ADDON))
                     elif script_name == "blender_version_context.py":
                         arguments = (

@@ -31,6 +31,15 @@ from .constants import (
     RODIN_FREE_TRIAL_KEY,
 )
 
+CONTROL_PLANE_COMMANDS = frozenset(
+    {
+        "blender_mcp_handshake",
+        "claim_blender_instance",
+        "renew_blender_instance",
+        "release_blender_instance",
+    }
+)
+
 
 class BridgeLifecycleMixin:
     def __init__(self):
@@ -42,6 +51,9 @@ class BridgeLifecycleMixin:
         self.busy = False
         self.claim = None
         self.last_claim_end_reason = ""
+        # Blender's timer registry uses callback object identity. Keep one
+        # bound-method object for register/is_registered/unregister calls.
+        self._heartbeat_callback = self._heartbeat_tick
         self.registry_path = osp.join(
             runtime_directory(),
             f"{state.instance_id}.json",
@@ -112,6 +124,16 @@ class BridgeLifecycleMixin:
     def _heartbeat_tick(self):
         if not self.running:
             return None
+        if (
+            self.socket is None
+            or self.server_thread is None
+            or not self.server_thread.is_alive()
+        ):
+            print("BlenderMCP bridge listener stopped; registration withdrawn")
+            self.stop()
+            with suppress(Exception):
+                bpy.context.scene.blendermcp_server_running = False
+            return None
         if self.claim and not self._claim_is_live():
             self.revoke_claim("claim_expired")
         try:
@@ -120,8 +142,21 @@ class BridgeLifecycleMixin:
             print(f"BlenderMCP registry heartbeat failed: {error}")
         return BLENDER_MCP_HEARTBEAT_SECONDS
 
+    def ensure_heartbeat_timer(self):
+        """Keep discovery heartbeats alive across .blend file loads."""
+        if not self.running:
+            return False
+        if not bpy.app.timers.is_registered(self._heartbeat_callback):
+            bpy.app.timers.register(
+                self._heartbeat_callback,
+                first_interval=BLENDER_MCP_HEARTBEAT_SECONDS,
+                persistent=True,
+            )
+        return True
+
     def rotate_file_session(self):
         self.revoke_claim("file_session_changed")
+        self.ensure_heartbeat_timer()
         self._write_registry_record()
 
     def revoke_claim(self, reason="released"):
@@ -340,8 +375,7 @@ class BridgeLifecycleMixin:
             # Publish a complete registration before accepting clients. This
             # also keeps initialization failures out of the server thread.
             self._write_registry_record()
-            if not bpy.app.timers.is_registered(self._heartbeat_tick):
-                bpy.app.timers.register(self._heartbeat_tick, first_interval=BLENDER_MCP_HEARTBEAT_SECONDS)
+            self.ensure_heartbeat_timer()
 
             self.server_thread = threading.Thread(target=self._server_loop)
             self.server_thread.daemon = True
@@ -357,9 +391,9 @@ class BridgeLifecycleMixin:
         self.revoke_claim("addon_stopped")
         self._remove_registry_record()
 
-        if bpy.app.timers.is_registered(self._heartbeat_tick):
+        if bpy.app.timers.is_registered(self._heartbeat_callback):
             with suppress(Exception):
-                bpy.app.timers.unregister(self._heartbeat_tick)
+                bpy.app.timers.unregister(self._heartbeat_callback)
 
         # Close socket
         if self.socket:
@@ -560,7 +594,7 @@ class BridgeLifecycleMixin:
         }
 
         # Add Polyhaven handlers only if enabled
-        if bpy.context.scene.blendermcp_use_polyhaven:
+        if getattr(bpy.context.scene, "blendermcp_use_polyhaven", False):
             polyhaven_handlers = {
                 "get_polyhaven_categories": self.get_polyhaven_categories,
                 "search_polyhaven_assets": self.search_polyhaven_assets,
@@ -570,7 +604,7 @@ class BridgeLifecycleMixin:
             handlers.update(polyhaven_handlers)
 
         # Add Hyper3d handlers only if enabled
-        if bpy.context.scene.blendermcp_use_hyper3d:
+        if getattr(bpy.context.scene, "blendermcp_use_hyper3d", False):
             polyhaven_handlers = {
                 "create_rodin_job": self.create_rodin_job,
                 "poll_rodin_job_status": self.poll_rodin_job_status,
@@ -579,7 +613,7 @@ class BridgeLifecycleMixin:
             handlers.update(polyhaven_handlers)
 
         # Add Sketchfab handlers only if enabled
-        if bpy.context.scene.blendermcp_use_sketchfab:
+        if getattr(bpy.context.scene, "blendermcp_use_sketchfab", False):
             sketchfab_handlers = {
                 "search_sketchfab_models": self.search_sketchfab_models,
                 "get_sketchfab_model_preview": self.get_sketchfab_model_preview,
@@ -588,7 +622,7 @@ class BridgeLifecycleMixin:
             handlers.update(sketchfab_handlers)
 
         # Add Hunyuan3d handlers only if enabled
-        if bpy.context.scene.blendermcp_use_hunyuan3d:
+        if getattr(bpy.context.scene, "blendermcp_use_hunyuan3d", False):
             hunyuan_handlers = {
                 "create_hunyuan_job": self.create_hunyuan_job,
                 "poll_hunyuan_job_status": self.poll_hunyuan_job_status,
@@ -598,10 +632,12 @@ class BridgeLifecycleMixin:
 
         handler = handlers.get(cmd_type)
         if handler:
+            tracks_busy = cmd_type not in CONTROL_PLANE_COMMANDS
             try:
                 print(f"Executing handler for {cmd_type}")
-                self.busy = True
-                self._write_registry_record()
+                if tracks_busy:
+                    self.busy = True
+                    self._write_registry_record()
                 result = handler(**handler_params)
                 print(f"Handler execution complete")
                 return {"status": "success", "result": result}
@@ -612,8 +648,9 @@ class BridgeLifecycleMixin:
                 traceback.print_exc()
                 raise BlenderMCPAddonError("blender_python_error", str(e)) from e
             finally:
-                self.busy = False
-                with suppress(Exception):
-                    self._write_registry_record()
+                if tracks_busy:
+                    self.busy = False
+                    with suppress(Exception):
+                        self._write_registry_record()
         else:
             raise BlenderMCPAddonError("unknown_command", f"Unknown command type: {cmd_type}")

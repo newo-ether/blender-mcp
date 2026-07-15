@@ -51,6 +51,7 @@ def _auto_connect_if_enabled():
         return
     existing_server = getattr(bpy.types, "blendermcp_server", None)
     if existing_server and existing_server.running:
+        existing_server.ensure_heartbeat_timer()
         bpy.context.scene.blendermcp_server_running = True
         return
 
