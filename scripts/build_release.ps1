@@ -43,15 +43,20 @@ if ($mcpbManifest.version -ne $version) {
 
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 
-Write-Host "[1/4] Building Blender Extension ZIP..." -ForegroundColor Cyan
+Write-Host "[1/5] Building Blender Extension ZIP..." -ForegroundColor Cyan
 & $python (Join-Path $root "scripts\build_blender_extension.py") --blender $BlenderPath --output-dir $output
 if ($LASTEXITCODE -ne 0) { throw "Blender Extension build failed." }
 
-Write-Host "[2/4] Building Python wheel..." -ForegroundColor Cyan
+Write-Host "[2/5] Building Python wheel..." -ForegroundColor Cyan
 & $python -m pip wheel --quiet --no-deps --wheel-dir $output $root
 if ($LASTEXITCODE -ne 0) { throw "Python wheel build failed." }
 
-Write-Host "[3/4] Validating and packing Claude Desktop MCPB..." -ForegroundColor Cyan
+Write-Host "[3/5] Building portable Agent Skill ZIP..." -ForegroundColor Cyan
+& $python (Join-Path $root "scripts\build_skill_package.py") --output-dir $output --version $version
+if ($LASTEXITCODE -ne 0) { throw "Agent Skill package build failed." }
+$skillPath = Join-Path $output ("blender-mcp-skill-{0}.zip" -f $version)
+
+Write-Host "[4/5] Validating and packing Claude Desktop MCPB..." -ForegroundColor Cyan
 $mcpbPath = Join-Path $output ("blender_mcp-{0}.mcpb" -f $version)
 if (Test-Path -LiteralPath $mcpbPath) {
     Remove-Item -LiteralPath $mcpbPath -Force
@@ -81,11 +86,12 @@ finally {
     }
 }
 
-Write-Host "[4/4] Writing SHA256SUMS.txt..." -ForegroundColor Cyan
+Write-Host "[5/5] Writing SHA256SUMS.txt..." -ForegroundColor Cyan
 $assets = @(
     (Join-Path $output ("blender_mcp-{0}.zip" -f $version)),
     (Join-Path $output ("blender_mcp-{0}-py3-none-any.whl" -f $version)),
-    $mcpbPath
+    $mcpbPath,
+    $skillPath
 )
 foreach ($asset in $assets) {
     if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {

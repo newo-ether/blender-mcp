@@ -1,0 +1,90 @@
+[
+  {
+    "id": "conceptual_question",
+    "prompt": "解释一下 Geometry Nodes 的字段是什么，不需要查看当前文件。",
+    "live_state": false,
+    "required_phrases": [
+      "purely conceptual",
+      "without probing the scene"
+    ]
+  },
+  {
+    "id": "live_object_inspection",
+    "prompt": "看一下当前 Blender 文件里的 Hero 对象尺寸。",
+    "live_state": true,
+    "required_phrases": [
+      "confirm that relevant Blender MCP tools are available",
+      "smallest read-only inspection",
+      "get_object_info"
+    ]
+  },
+  {
+    "id": "uneven_index_list_migration",
+    "prompt": "检查 Uneven Index Field，判断 Blender 5.2 List 能不能替换 Point 加 For Each。",
+    "live_state": true,
+    "required_phrases": [
+      "Evaluate Blender 5.2 List migrations",
+      "search live node types for List",
+      "Convert only when the live schemas can reproduce",
+      "Keep the Points plus For Each implementation"
+    ]
+  },
+  {
+    "id": "localized_node_edit",
+    "prompt": "只修改材质节点组里 Roughness Clamp 附近的连接。",
+    "live_state": true,
+    "required_phrases": [
+      "view=operations",
+      "validate_node_tree_patch",
+      "apply_node_tree_patch",
+      "one-hop neighbors"
+    ]
+  },
+  {
+    "id": "disconnected_blender",
+    "prompt": "读取当前场景，但 Blender 连接已经断开。",
+    "live_state": true,
+    "required_phrases": [
+      "Stop after a clear disconnected response",
+      "Do not repeat several live-state calls"
+    ]
+  },
+  {
+    "id": "python_fallback",
+    "prompt": "结构化工具不支持这个版本相关的渲染设置，请安全处理。",
+    "live_state": true,
+    "required_phrases": [
+      "get_runtime_automation_context",
+      "small, auditable execute_blender_code",
+      "Reduce the next attempt to the smallest reversible operation"
+    ]
+  },
+  {
+    "id": "save_safety",
+    "prompt": "修改当前节点，但不要保存 blend 文件。",
+    "live_state": true,
+    "required_phrases": [
+      "Do not save, overwrite, or change the path",
+      "State explicitly when the Blender file has not been saved"
+    ]
+  },
+  {
+    "id": "asset_import",
+    "prompt": "找一个可下载的椅子模型，确认后导入当前场景。",
+    "live_state": true,
+    "required_phrases": [
+      "Choose one relevant source",
+      "search and preview as selection steps",
+      "world bounding box"
+    ]
+  },
+  {
+    "id": "visual_verification",
+    "prompt": "调整物体摆放并确认没有穿插。",
+    "live_state": true,
+    "required_phrases": [
+      "Use get_viewport_screenshot only when",
+      "Avoid repeated screenshots"
+    ]
+  }
+]

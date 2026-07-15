@@ -62,6 +62,7 @@ def verify(dist: Path, version: str) -> list[Path]:
         dist / f"blender_mcp-{version}.zip",
         dist / f"blender_mcp-{version}-py3-none-any.whl",
         dist / f"blender_mcp-{version}.mcpb",
+        dist / f"blender-mcp-skill-{version}.zip",
     ]
     checksum_path = dist / "SHA256SUMS.txt"
     for path in [*assets, checksum_path]:
@@ -89,6 +90,25 @@ def verify(dist: Path, version: str) -> list[Path]:
     require_suffix(mcpb_names, "/server/run.cmd", assets[2])
     require_suffix(mcpb_names, "/server/python/blender_mcp/server.py", assets[2])
     require_suffix(mcpb_names, "/server/schemas/node-tree-v1.json", assets[2])
+
+    skill_root = ROOT / "skills" / "blender-mcp"
+    expected_skill = {
+        f"blender-mcp/{path.relative_to(skill_root).as_posix()}": path.read_bytes()
+        for path in skill_root.rglob("*")
+        if path.is_file()
+    }
+    skill_names = archive_files(assets[3])
+    if skill_names != set(expected_skill):
+        raise RuntimeError(
+            "Skill archive members differ from canonical source: "
+            f"expected {sorted(expected_skill)}, got {sorted(skill_names)}"
+        )
+    with zipfile.ZipFile(assets[3]) as skill_archive:
+        for name, expected_content in expected_skill.items():
+            if skill_archive.read(name) != expected_content:
+                raise RuntimeError(
+                    f"{assets[3].name} content differs from source: {name}"
+                )
 
     checksum_entries: dict[str, str] = {}
     for line_number, raw_line in enumerate(

@@ -237,10 +237,25 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
             _blender_connection = None
         logger.info("BlenderMCP server shut down")
 
+# Keep this baseline short because clients may include it in every session.
+# The optional prompt and Agent Skill provide expanded task guidance.
+BLENDER_MCP_INSTRUCTIONS = (
+    "Use Blender MCP for tasks that depend on the live Blender file. "
+    "Start with the smallest useful read-only inspection. Prefer dedicated "
+    "structured tools; for node edits inspect an index or targeted export, "
+    "check live schemas when version-sensitive, validate a patch, apply it "
+    "transactionally, and read back the affected subgraph. Use arbitrary "
+    "Blender Python only when structured tools cannot express the operation. "
+    "Use screenshots only when appearance matters. Do not save or overwrite "
+    "the .blend file unless the user asked. Stop and report a disconnected, "
+    "read-only, or unsupported state instead of guessing."
+)
+
 # Create the MCP server with lifespan support
 mcp = FastMCP(
     "BlenderMCP",
-    lifespan=server_lifespan
+    instructions=BLENDER_MCP_INSTRUCTIONS,
+    lifespan=server_lifespan,
 )
 
 # Resource endpoints
@@ -2229,104 +2244,31 @@ def import_generated_asset_hunyuan(
 
 @mcp.prompt()
 def asset_creation_strategy() -> str:
-    """Defines the preferred strategy for creating assets in Blender"""
-    return """When creating 3D content in Blender, always start by checking if integrations are available:
+    """Return optional expanded guidance for asset-oriented Blender work."""
+    return """Use an asset source only when it fits the requested outcome.
 
-    0. Before anything, always check the scene from get_scene_info()
-    
-    **IMPORTANT: Visual Verification**
-    - Use get_viewport_screenshot() BEFORE making changes to see the current state
-    - Use get_viewport_screenshot() AFTER executing code or importing assets to verify the result
-    - This helps confirm your changes worked as expected and catch any visual issues
-    1. First use the following tools to verify if the following integrations are enabled:
-        1. PolyHaven
-            Use get_polyhaven_status() to verify its status
-            If PolyHaven is enabled:
-            - For objects/models: Use download_polyhaven_asset() with asset_type="models"
-            - For materials/textures: Use download_polyhaven_asset() with asset_type="textures"
-            - For environment lighting: Use download_polyhaven_asset() with asset_type="hdris"
-        2. Sketchfab
-            Sketchfab is good at Realistic models, and has a wider variety of models than PolyHaven.
-            Use get_sketchfab_status() to verify its status
-            If Sketchfab is enabled:
-            - For objects/models: First search using search_sketchfab_models() with your query
-            - Then download specific models using download_sketchfab_model() with the UID
-            - Note that only downloadable models can be accessed, and API key must be properly configured
-            - Sketchfab has a wider variety of models than PolyHaven, especially for specific subjects
-        3. Hyper3D(Rodin)
-            Hyper3D Rodin is good at generating 3D models for single item.
-            So don't try to:
-            1. Generate the whole scene with one shot
-            2. Generate ground using Hyper3D
-            3. Generate parts of the items separately and put them together afterwards
+1. Inspect only the scene or target objects needed to place and verify the asset.
+2. Check the status of the one relevant provider; do not probe every integration.
+3. Search and compare metadata before any download, import, or generation job.
+4. Treat downloads, provider jobs, and imports as mutations. Proceed when the
+   user requested that result; otherwise confirm the external action first.
+5. Prefer Blender node assets for reusable node groups, PolyHaven for HDRIs,
+   textures, and generic models, Sketchfab for specific downloadable models,
+   and Hyper3D or Hunyuan3D for a custom single item.
+6. For Sketchfab, review the license and preview when visual selection matters,
+   then provide an explicit real-world target size.
+7. For generated assets, create one job, poll that job to completion, import
+   once, and never silently switch providers after quota or service failure.
+8. After import, verify returned object names, dimensions, world bounding box,
+   orientation, and placement. Use a viewport screenshot only when appearance
+   or spatial composition is part of acceptance.
+9. Prefer structured tools. Use small execute_blender_code calls only for an
+   operation the structured surface cannot express.
+10. Do not delete unrelated data or save the .blend file unless the user asks.
 
-            Use get_hyper3d_status() to verify its status
-            If Hyper3D is enabled:
-            - For objects/models, do the following steps:
-                1. Create the model generation task
-                    - Use generate_hyper3d_model_via_images() if image(s) is/are given
-                    - Use generate_hyper3d_model_via_text() if generating 3D asset using text prompt
-                    If key type is free_trial and insufficient balance error returned, tell the user that the free trial key can only generated limited models everyday, they can choose to:
-                    - Wait for another day and try again
-                    - Go to hyper3d.ai to find out how to get their own API key
-                    - Go to fal.ai to get their own private API key
-                2. Poll the status
-                    - Use poll_rodin_job_status() to check if the generation task has completed or failed
-                3. Import the asset
-                    - Use import_generated_asset() to import the generated GLB model the asset
-                4. After importing the asset, ALWAYS check the world_bounding_box of the imported mesh, and adjust the mesh's location and size
-                    Adjust the imported mesh's location, scale, rotation, so that the mesh is on the right spot.
-
-                You can reuse assets previous generated by running python code to duplicate the object, without creating another generation task.
-        4. Hunyuan3D
-            Hunyuan3D is good at generating 3D models for single item.
-            So don't try to:
-            1. Generate the whole scene with one shot
-            2. Generate ground using Hunyuan3D
-            3. Generate parts of the items separately and put them together afterwards
-
-            Use get_hunyuan3d_status() to verify its status
-            If Hunyuan3D is enabled:
-                if Hunyuan3D mode is "OFFICIAL_API":
-                    - For objects/models, do the following steps:
-                        1. Create the model generation task
-                            - Use generate_hunyuan3d_model by providing either a **text description** OR an **image(local or urls) reference**.
-                            - Go to cloud.tencent.com out how to get their own SecretId and SecretKey
-                        2. Poll the status
-                            - Use poll_hunyuan_job_status() to check if the generation task has completed or failed
-                        3. Import the asset
-                            - Use import_generated_asset_hunyuan() to import the generated OBJ model the asset
-                    if Hunyuan3D mode is "LOCAL_API":
-                        - For objects/models, do the following steps:
-                        1. Create the model generation task
-                            - Use generate_hunyuan3d_model if image (local or urls)  or text prompt is given and import the asset
-
-                You can reuse assets previous generated by running python code to duplicate the object, without creating another generation task.
-
-    3. Always check the world_bounding_box for each item so that:
-        - Ensure that all objects that should not be clipping are not clipping.
-        - Items have right spatial relationship.
-    
-    4. Recommended asset source priority:
-        - For specific existing objects: First try Sketchfab, then PolyHaven
-        - For generic objects/furniture: First try PolyHaven, then Sketchfab
-        - For custom or unique items not available in libraries: Use Hyper3D Rodin or Hunyuan3D
-        - For environment lighting: Use PolyHaven HDRIs
-        - For materials/textures: Use PolyHaven textures
-
-    Only fall back to scripting when:
-    - PolyHaven, Sketchfab, Hyper3D, and Hunyuan3D are all disabled
-    - A simple primitive is explicitly requested
-    - No suitable asset exists in any of the libraries
-    - Hyper3D Rodin or Hunyuan3D failed to generate the desired asset
-    - The task specifically requires a basic material/color
-
-    **Best Practices:**
-    - Always take a screenshot after completing a task to verify the visual result
-    - Always call get_scene_info() after completing a task to verify the changes worked
-    - When executing multiple operations, take intermediate screenshots to confirm each step
-    - If something looks wrong in the screenshot or scene info, investigate and fix before proceeding
-    """
+Report the selected source, external action taken, imported datablocks,
+verification evidence, and whether the Blender file remains unsaved.
+"""
 
 # Main execution
 

@@ -17,7 +17,8 @@ model-generation tools while adding:
   and transactional edits;
 - version-aware official Manual, Python API, Release Notes, live node-schema,
   and installed Essentials queries;
-- a checksummed GitHub Release containing the Blender Extension, Python wheel, and Claude Desktop MCPB;
+- a checksummed GitHub Release containing the Blender Extension, Python wheel,
+  Claude Desktop MCPB, and portable Blender MCP Agent Skill;
 - a one-command Windows installer with automatic client and Blender detection;
 - terminal and graphical target selectors for multi-version installation.
 
@@ -48,7 +49,7 @@ permanently change the user or machine execution policy. The ASCII
 [install.ps1](install.ps1). For a reproducible, version-pinned install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.9.3/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.9.3
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.10.0/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.10.0
 ```
 
 The explicit `TrimStart` removes the UTF-8 BOM carried by the localized full
@@ -61,11 +62,13 @@ Before changing the machine, the installer:
 1. detects supported MCP clients and every local Blender installation;
 2. opens a terminal checklist;
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
-4. verifies the wheel, Extension ZIP, and optional fallback MCPB against `SHA256SUMS.txt`;
+4. verifies the wheel, Extension ZIP, portable Skill ZIP, and optional fallback MCPB against `SHA256SUMS.txt`;
 5. installs into a versioned environment such as
-   `%LOCALAPPDATA%\BlenderMCP\venv-1.9.3`;
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.10.0`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
-7. adds or updates the canonical `blender_mcp` entry for selected clients.
+7. adds or updates the canonical `blender_mcp` entry for selected clients;
+8. installs the same portable Skill for selected Codex and Claude Code clients,
+   and prepares a verified upload ZIP for Claude Desktop.
 
 Updates are idempotent: an exact matching Codex entry is left alone, while a
 different `blender_mcp` Codex, Claude Code, or Claude Desktop user entry is replaced in place.
@@ -90,9 +93,9 @@ Use `-Gui` for a WinForms checkbox window.
 
 | Target | Installer behavior |
 | --- | --- |
-| Codex / ChatGPT | One combined target that adds or updates their shared per-user `blender_mcp` stdio configuration. |
-| Claude Code CLI | Adds or updates `blender_mcp` in user scope; project/local entries are not removed. |
-| Claude Desktop | Safely merges `blender_mcp` into `%APPDATA%\Claude\claude_desktop_config.json`, preserving other settings and making a backup before replacement. Invalid or unwritable JSON falls back to the checksummed MCPB and Claude's in-app confirmation. |
+| Codex / ChatGPT | One combined target that adds or updates their shared per-user `blender_mcp` stdio configuration and installs one shared Skill under `~/.agents/skills`. |
+| Claude Code CLI | Adds or updates `blender_mcp` in user scope and installs the Skill under `~/.claude/skills`; project/local MCP entries are not removed. |
+| Claude Desktop | Safely merges `blender_mcp` into `%APPDATA%\Claude\claude_desktop_config.json`, preserving other settings and making a backup before replacement. It also prepares a verified Skill ZIP for explicit upload. Invalid or unwritable JSON falls back to the checksummed MCPB and Claude's in-app confirmation. |
 | Blender 4.2+ | Every detected supported version is selected by default; deselect any version you do not want to update. |
 | Blender below 4.2 | Shown for clarity but disabled for Extension installation. |
 
@@ -101,11 +104,16 @@ Use `-Gui` for a WinForms checkbox window.
 1. Open a selected Blender version.
 2. In the 3D View, press N and open the **BlenderMCP** tab.
 3. The bridge starts automatically on port `9876`; the preference is enabled by default.
-4. Restart or reopen the selected MCP clients.
+4. Start a new task or restart the selected MCP clients so they discover the
+   server and filesystem Skill.
 5. Claude Desktop normally needs only a restart. If the installer reports an
    MCPB fallback, approve it under **Settings > Extensions > Advanced settings >
    Install Extension...**; this path does not require a Windows `.mcpb` file
    association.
+6. For Claude Desktop, follow the installer path under **Customize > Skills >
+   Create skill > Upload a skill** and select the verified
+   `blender-mcp-skill-<version>.zip`. Skills do not synchronize between
+   Claude Desktop and Claude Code.
 
 ## Installer reference
 
@@ -143,6 +151,10 @@ exercise the published Release path instead.
 | `-PreserveExistingMcpEntries` | Keep a different same-name Codex, Claude Code, or Claude Desktop entry instead of updating it. |
 | `-SkipClaudeCodeRegistration` | Leave Claude Code configuration unchanged. |
 | `-SkipClaudeDesktop` | Leave Claude Desktop unchanged and do not download its fallback MCPB. |
+| `-SkipSkillInstallation` | Register selected MCP clients without installing or preparing the Agent Skill. |
+| `-SkillScope <User\|Project>` | Install Codex and Claude Code filesystem Skills for the user or a project. |
+| `-SkillProjectPath <path>` | Explicit project root for `-SkillScope Project`; the current directory is the default. |
+| `-ForceSkillUpdate` | Replace a locally modified or unowned same-name Skill. By default, local edits are preserved. |
 
 Examples:
 
@@ -153,7 +165,7 @@ Examples:
 # Install into two explicit Blender versions
 & $installer -BlenderPath @(
     "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe",
-    "C:\Program Files\Blender Foundation\Blender 5.2 LTS\blender.exe"
+    "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
 )
 
 # Install only the server
@@ -326,13 +338,14 @@ Download the latest assets from
 - `blender_mcp-<version>.zip` — Blender Extension
 - `blender_mcp-<version>-py3-none-any.whl` — Python MCP server
 - `blender_mcp-<version>.mcpb` — Windows Claude Desktop package
+- `blender-mcp-skill-<version>.zip` — portable Agent Skill for Claude Desktop upload and filesystem installation
 - `SHA256SUMS.txt` — integrity checks
 
 Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.9.3-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.10.0-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -340,7 +353,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.9.3-py3-none-any.whl
+python -m pip install ./blender_mcp-1.10.0-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -352,6 +365,27 @@ Install the Extension in Blender 4.2+:
 
 The legacy [addon.py](addon.py) remains available for Blender 3.x, but the
 Geometry Nodes v1 protocol is not supported or claimed there.
+
+### Install the Agent Skill manually
+
+The Skill complements MCP registration; it does not start or register the MCP
+server by itself. Use the same canonical folder from
+[skills/blender-mcp](skills/blender-mcp) on every client:
+
+- Codex Desktop and Codex CLI: copy the folder to
+  `~/.agents/skills/blender-mcp`, or to
+  `<project>/.agents/skills/blender-mcp` for project scope.
+- Claude Code: copy it to `~/.claude/skills/blender-mcp`, or to
+  `<project>/.claude/skills/blender-mcp`.
+- Claude Desktop: upload `blender-mcp-skill-<version>.zip` from
+  **Customize > Skills**. The ZIP contains the `blender-mcp` folder as its
+  root.
+
+Codex and Claude Code discover filesystem Skills separately. Claude Desktop
+uploads are also separate; installing on one surface does not synchronize the
+others. The Windows installer records hashes beside managed filesystem
+installations, skips identical content, updates unmodified managed copies, and
+preserves local edits unless `-ForceSkillUpdate` is used.
 
 ### Register a client manually
 

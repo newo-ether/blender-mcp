@@ -77,6 +77,19 @@ param(
     # Do not configure Claude Desktop or download its fallback MCPB package.
     [switch]$SkipClaudeDesktop,
 
+    # Do not install the portable Blender MCP Agent Skill for selected clients.
+    [switch]$SkipSkillInstallation,
+
+    # Install filesystem Skills for the current user or an explicit project.
+    [ValidateSet("User", "Project")]
+    [string]$SkillScope = "User",
+
+    # Project root used when -SkillScope Project; defaults to the current directory.
+    [string]$SkillProjectPath = "",
+
+    # Replace an existing Skill even when local modifications are detected.
+    [switch]$ForceSkillUpdate,
+
     # Show detected paths and commands without changing the machine.
     [switch]$DryRun,
 
@@ -100,6 +113,9 @@ $script:DryRunEnabled = [bool]$DryRun
 $script:CodexStatus = "not requested"
 $script:ClaudeCodeStatus = "not requested"
 $script:ClaudeDesktopStatus = "not requested"
+$script:CodexSkillStatus = "not requested"
+$script:ClaudeCodeSkillStatus = "not requested"
+$script:ClaudeDesktopSkillStatus = "not requested"
 $script:BlenderStatus = "not requested"
 $script:SelectedCodexCli = $false
 $script:SelectedCodexDesktop = $false
@@ -464,6 +480,237 @@ function Set-CurrentServerPointer {
     }
     Write-Ok (L "Current server pointer targets $relative" "当前服务端指针已指向 $relative")
     return $pointer
+}
+
+function Get-SkillInstallRoot {
+    param(
+        [ValidateSet("Codex", "ClaudeCode")][string]$Client,
+        [ValidateSet("User", "Project")][string]$Scope = "User",
+        [string]$UserHome = "",
+        [string]$ProjectPath = ""
+    )
+
+    if ($Scope -eq "User") {
+        if (-not $UserHome) {
+            $UserHome = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+        }
+        if (-not $UserHome) { $UserHome = $env:USERPROFILE }
+        if (-not $UserHome) { throw "Could not locate the current user's home directory." }
+        $base = [System.IO.Path]::GetFullPath($UserHome)
+    }
+    else {
+        if (-not $ProjectPath) { $ProjectPath = (Get-Location).Path }
+        $base = [System.IO.Path]::GetFullPath($ProjectPath)
+    }
+
+    if ($Client -eq "Codex") {
+        return Join-Path $base ".agents\skills"
+    }
+    return Join-Path $base ".claude\skills"
+}
+
+function Get-SkillFileHashes {
+    param([string]$SkillPath)
+
+    $root = [System.IO.Path]::GetFullPath($SkillPath).TrimEnd('\')
+    if (-not (Test-Path -LiteralPath (Join-Path $root "SKILL.md") -PathType Leaf)) {
+        throw "Skill folder does not contain SKILL.md: $root"
+    }
+    $hashes = [ordered]@{}
+    foreach ($file in Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName) {
+        $relative = $file.FullName.Substring($root.Length).TrimStart('\').Replace('\', '/')
+        $hashes[$relative] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+    return $hashes
+}
+
+function Test-SkillHashMapsEqual {
+    param($Left, $Right)
+
+    if ($null -eq $Left -or $null -eq $Right -or $Left.Count -ne $Right.Count) {
+        return $false
+    }
+    foreach ($key in $Left.Keys) {
+        if (-not $Right.Contains($key) -or [string]$Left[$key] -ne [string]$Right[$key]) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Get-SkillManifestHashes {
+    param([string]$ManifestPath)
+
+    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) { return $null }
+    try {
+        $manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $files = $manifest.PSObject.Properties["files"]
+        if ($null -eq $files -or $null -eq $files.Value) { return $null }
+        $hashes = [ordered]@{}
+        foreach ($property in $files.Value.PSObject.Properties) {
+            $hashes[$property.Name] = [string]$property.Value
+        }
+        return $hashes
+    }
+    catch {
+        return $null
+    }
+}
+
+function Write-SkillOwnershipManifest {
+    param(
+        [string]$ManifestPath,
+        [string]$Version,
+        [string]$Source,
+        $Hashes
+    )
+
+    $manifest = [ordered]@{
+        schema = "blender-mcp-skill-install/1"
+        name = "blender-mcp"
+        version = $Version
+        source = $Source
+        files = $Hashes
+    }
+    $temporaryPath = "$ManifestPath.tmp"
+    $json = $manifest | ConvertTo-Json -Depth 8
+    $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($temporaryPath, $json + [Environment]::NewLine, $utf8WithoutBom)
+    Move-Item -LiteralPath $temporaryPath -Destination $ManifestPath -Force
+}
+
+function Install-BlenderMcpSkill {
+    param(
+        [string]$SourcePath,
+        [string]$DestinationRoot,
+        [string]$Version,
+        [string]$SourceLabel,
+        [bool]$ForceUpdate = $false
+    )
+
+    $root = [System.IO.Path]::GetFullPath($DestinationRoot).TrimEnd('\')
+    $destination = Join-Path $root "blender-mcp"
+    $manifestPath = Join-Path $root ".blender-mcp-managed.json"
+    if ($script:DryRunEnabled -and -not (Test-Path -LiteralPath $SourcePath -PathType Container)) {
+        Write-Info (L "Would install Blender MCP Skill into $destination." "将把 Blender MCP Skill 安装到 $destination。")
+        return "would install"
+    }
+
+    $source = [System.IO.Path]::GetFullPath($SourcePath).TrimEnd('\')
+    $sourceHashes = Get-SkillFileHashes -SkillPath $source
+    $destinationExists = Test-Path -LiteralPath $destination -PathType Container
+    if ($destinationExists) {
+        $currentHashes = $null
+        try {
+            $currentHashes = Get-SkillFileHashes -SkillPath $destination
+        }
+        catch {
+            if (-not $ForceUpdate) {
+                Write-WarningLine (L "Preserved invalid or incomplete same-name Skill folder at $destination. Use -ForceSkillUpdate to replace it." "已保留无效或不完整的同名 Skill 文件夹：$destination。若要替换，请使用 -ForceSkillUpdate。")
+                return "preserved invalid install"
+            }
+        }
+        if (Test-SkillHashMapsEqual -Left $currentHashes -Right $sourceHashes) {
+            if (-not $script:DryRunEnabled) {
+                if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+                    New-Item -ItemType Directory -Path $root -Force | Out-Null
+                }
+                Write-SkillOwnershipManifest -ManifestPath $manifestPath -Version $Version -Source $SourceLabel -Hashes $sourceHashes
+            }
+            Write-Ok (L "Blender MCP Skill is already current at $destination." "Blender MCP Skill 已是最新版本：$destination。")
+            return "already installed"
+        }
+
+        $ownedHashes = Get-SkillManifestHashes -ManifestPath $manifestPath
+        $unmodifiedOwnedInstall = Test-SkillHashMapsEqual -Left $currentHashes -Right $ownedHashes
+        if (-not $unmodifiedOwnedInstall -and -not $ForceUpdate) {
+            Write-WarningLine (L "Preserved locally modified or unowned Skill at $destination. Use -ForceSkillUpdate to replace it." "已保留本地修改或非安装器管理的 Skill：$destination。若要替换，请使用 -ForceSkillUpdate。")
+            return "preserved local changes"
+        }
+    }
+
+    if ($script:DryRunEnabled) {
+        $action = if ($destinationExists) { "update" } else { "install" }
+        Write-Info (L "Would $action Blender MCP Skill at $destination." "将在 $destination $action Blender MCP Skill。")
+        return "would $action"
+    }
+
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        New-Item -ItemType Directory -Path $root -Force | Out-Null
+    }
+    $stage = Join-Path $root (".blender-mcp.stage-" + [guid]::NewGuid().ToString("N"))
+    $backup = Join-Path $root (".blender-mcp.backup-" + [guid]::NewGuid().ToString("N"))
+    try {
+        Copy-Item -LiteralPath $source -Destination $stage -Recurse -Force
+        $stageHashes = Get-SkillFileHashes -SkillPath $stage
+        if (-not (Test-SkillHashMapsEqual -Left $stageHashes -Right $sourceHashes)) {
+            throw "Staged Skill content differs from its source."
+        }
+        if ($destinationExists) {
+            Move-Item -LiteralPath $destination -Destination $backup
+        }
+        Move-Item -LiteralPath $stage -Destination $destination
+        Write-SkillOwnershipManifest -ManifestPath $manifestPath -Version $Version -Source $SourceLabel -Hashes $sourceHashes
+        if (Test-Path -LiteralPath $backup -PathType Container) {
+            Remove-Item -LiteralPath $backup -Recurse -Force
+        }
+    }
+    catch {
+        if (Test-Path -LiteralPath $destination -PathType Container) {
+            Remove-Item -LiteralPath $destination -Recurse -Force
+        }
+        if (Test-Path -LiteralPath $backup -PathType Container) {
+            Move-Item -LiteralPath $backup -Destination $destination
+        }
+        throw
+    }
+    finally {
+        if (Test-Path -LiteralPath $stage -PathType Container) {
+            Remove-Item -LiteralPath $stage -Recurse -Force
+        }
+    }
+
+    $status = if ($destinationExists) { "updated" } else { "installed" }
+    Write-Ok (L "Blender MCP Skill $status at $destination." "Blender MCP Skill 已$status：$destination。")
+    return $status
+}
+
+function Expand-BlenderMcpSkillArchive {
+    param(
+        [string]$ArchivePath,
+        [string]$InstallBase,
+        [string]$Version
+    )
+
+    $sourceParent = Join-Path ([System.IO.Path]::GetFullPath($InstallBase)) "skill-sources"
+    $versionRoot = Join-Path $sourceParent $Version
+    $skillSource = Join-Path $versionRoot "blender-mcp"
+    if ($script:DryRunEnabled) {
+        Write-Info (L "Would extract the verified Skill archive to $versionRoot." "将把已校验的 Skill 压缩包解压到 $versionRoot。")
+        return $skillSource
+    }
+    if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
+        throw "Verified Skill archive is missing: $ArchivePath"
+    }
+    if (-not (Test-Path -LiteralPath $sourceParent -PathType Container)) {
+        New-Item -ItemType Directory -Path $sourceParent -Force | Out-Null
+    }
+    $stage = Join-Path $sourceParent (".stage-" + [guid]::NewGuid().ToString("N"))
+    try {
+        Expand-Archive -LiteralPath $ArchivePath -DestinationPath $stage -Force
+        $stagedSkill = Join-Path $stage "blender-mcp"
+        Get-SkillFileHashes -SkillPath $stagedSkill | Out-Null
+        if (Test-Path -LiteralPath $versionRoot -PathType Container) {
+            Remove-Item -LiteralPath $versionRoot -Recurse -Force
+        }
+        Move-Item -LiteralPath $stage -Destination $versionRoot
+    }
+    finally {
+        if (Test-Path -LiteralPath $stage -PathType Container) {
+            Remove-Item -LiteralPath $stage -Recurse -Force
+        }
+    }
+    return $skillSource
 }
 
 function Set-CurrentWorkspacePointer {
@@ -1925,6 +2172,30 @@ try {
         $selectedBlenderPaths = @()
         $script:BlenderStatus = "skipped"
     }
+    $skillRequested = (
+        -not [bool]$SkipSkillInstallation -and (
+            $script:SelectedCodexCli -or
+            $script:SelectedCodexDesktop -or
+            $script:SelectedClaudeCode -or
+            $script:SelectedClaudeDesktop
+        )
+    )
+    if ($SkipSkillInstallation) {
+        $script:CodexSkillStatus = "skipped"
+        $script:ClaudeCodeSkillStatus = "skipped"
+        $script:ClaudeDesktopSkillStatus = "skipped"
+    }
+    else {
+        if (-not ($script:SelectedCodexCli -or $script:SelectedCodexDesktop)) {
+            $script:CodexSkillStatus = "not selected"
+        }
+        if (-not $script:SelectedClaudeCode) {
+            $script:ClaudeCodeSkillStatus = "not selected"
+        }
+        if (-not $script:SelectedClaudeDesktop) {
+            $script:ClaudeDesktopSkillStatus = "not selected"
+        }
+    }
 
     Write-Step (L "Installation plan" "安装计划")
     $modeName = if ($releaseMode) { "GitHub Release" } else { L "local source checkout" "本地源码" }
@@ -1932,6 +2203,7 @@ try {
     Write-Info (L "Install   : $installBase" "安装目录  ：$installBase")
     Write-Info (L "Workspace : $workspace" "工作区    ：$workspace")
     Write-Info (L "MCP port  : $blenderPort" "MCP 端口  ：$blenderPort")
+    Write-Info (L "Skill     : requested=$skillRequested, scope=$SkillScope" "Skill     ：请求=$skillRequested，范围=$SkillScope")
     Write-Info (L "Blender targets: $($selectedBlenderPaths.Count)" "Blender 目标：$($selectedBlenderPaths.Count)")
     Write-Info (L `
         "Codex / ChatGPT: $($script:SelectedCodexCli -or $script:SelectedCodexDesktop) (shared configuration)" `
@@ -1957,6 +2229,9 @@ try {
     $archivePath = $null
     $wheelPath = $null
     $mcpbPath = $null
+    $skillArchivePath = $null
+    $skillSourcePath = $null
+    $skillVersion = $null
     $release = $null
     $releaseVersion = $null
     if ($releaseMode) {
@@ -1972,6 +2247,7 @@ try {
             throw "Stable Release tag must use vMAJOR.MINOR.PATCH: $releaseTagName"
         }
         $releaseVersion = $Matches[1]
+        $skillVersion = $releaseVersion
         $venvRoot = Join-Path $installBase ("venv-{0}" -f $releaseVersion)
         $venvPython = Join-Path $venvRoot "Scripts\python.exe"
         $serverExecutable = Join-Path $venvRoot "Scripts\blender-mcp.exe"
@@ -1989,6 +2265,14 @@ try {
         if ($script:SelectedClaudeDesktop) {
             $assetsToDownload += Get-ReleaseAsset -Release $release -Pattern "blender_mcp-*.mcpb" -Purpose "Claude Desktop MCPB"
         }
+        if ($skillRequested) {
+            $skillAsset = Get-ReleaseAsset -Release $release -Pattern "blender-mcp-skill-*.zip" -Purpose "portable Agent Skill ZIP"
+            $expectedSkillName = "blender-mcp-skill-{0}.zip" -f $releaseVersion
+            if ([string]$skillAsset.name -ne $expectedSkillName) {
+                throw "Release tag/Skill mismatch: expected $expectedSkillName, found $($skillAsset.name)"
+            }
+            $assetsToDownload += $skillAsset
+        }
 
         $downloaded = @()
         foreach ($asset in $assetsToDownload) {
@@ -1998,8 +2282,16 @@ try {
         $verifiedAssets = @($downloaded | Where-Object { (Split-Path -Leaf $_) -ne "SHA256SUMS.txt" })
         Test-ReleaseChecksums -ChecksumPath $checksumPath -AssetPaths $verifiedAssets
         $wheelPath = @($verifiedAssets | Where-Object { $_ -like "*.whl" })[0]
-        $archivePath = $verifiedAssets | Where-Object { $_ -like "*.zip" } | Select-Object -First 1
+        $archivePath = $verifiedAssets | Where-Object { (Split-Path -Leaf $_) -like "blender_mcp-*.zip" } | Select-Object -First 1
         $mcpbPath = $verifiedAssets | Where-Object { $_ -like "*.mcpb" } | Select-Object -First 1
+        $skillArchivePath = $verifiedAssets | Where-Object { (Split-Path -Leaf $_) -like "blender-mcp-skill-*.zip" } | Select-Object -First 1
+    }
+    else {
+        $projectText = Get-Content -LiteralPath (Join-Path $repoRoot "pyproject.toml") -Raw -Encoding UTF8
+        if ($projectText -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+            throw "Could not read the local project version."
+        }
+        $skillVersion = $Matches[1]
     }
 
     Write-Step (L "Python MCP server" "Python MCP 服务端")
@@ -2052,6 +2344,26 @@ try {
         Set-CurrentWorkspacePointer -InstallBase $installBase -Workspace $workspace | Out-Null
         if ($script:SelectedClaudeDesktop) {
             Set-ClaudeDesktopFallbackPointers -ServerExecutable $serverExecutable -Workspace $workspace
+        }
+    }
+
+    if ($skillRequested) {
+        if ($releaseMode) {
+            $skillSourcePath = Expand-BlenderMcpSkillArchive -ArchivePath $skillArchivePath -InstallBase $installBase -Version $skillVersion
+        }
+        else {
+            $skillSourcePath = Join-Path $repoRoot "skills\blender-mcp"
+            Get-SkillFileHashes -SkillPath $skillSourcePath | Out-Null
+            if ($script:SelectedClaudeDesktop) {
+                $skillArchivePath = Join-Path $downloadDirectory ("blender-mcp-skill-{0}.zip" -f $skillVersion)
+                Invoke-CheckedCommand -FilePath $venvPython -ArgumentList @(
+                    (Join-Path $repoRoot "scripts\build_skill_package.py"),
+                    "--output-dir",
+                    $downloadDirectory,
+                    "--version",
+                    $skillVersion
+                ) -Description (L "Building the portable Agent Skill ZIP..." "正在构建可移植 Agent Skill ZIP……")
+            }
         }
     }
 
@@ -2158,6 +2470,35 @@ try {
         $script:ClaudeDesktopStatus = "not selected"
     }
 
+    if ($skillRequested) {
+        Write-Step (L "Portable Agent Skill" "可移植 Agent Skill")
+        $skillSourceLabel = if ($releaseMode) { "$Repository@$($release.tag_name)" } else { "local source checkout" }
+        $skillProjectRoot = if ($SkillProjectPath) { $SkillProjectPath } else { (Get-Location).Path }
+
+        if ($script:SelectedCodexCli -or $script:SelectedCodexDesktop) {
+            $codexSkillRoot = Get-SkillInstallRoot -Client "Codex" -Scope $SkillScope -ProjectPath $skillProjectRoot
+            $script:CodexSkillStatus = Install-BlenderMcpSkill -SourcePath $skillSourcePath -DestinationRoot $codexSkillRoot -Version $skillVersion -SourceLabel $skillSourceLabel -ForceUpdate ([bool]$ForceSkillUpdate)
+        }
+        if ($script:SelectedClaudeCode) {
+            $claudeCodeSkillRoot = Get-SkillInstallRoot -Client "ClaudeCode" -Scope $SkillScope -ProjectPath $skillProjectRoot
+            $script:ClaudeCodeSkillStatus = Install-BlenderMcpSkill -SourcePath $skillSourcePath -DestinationRoot $claudeCodeSkillRoot -Version $skillVersion -SourceLabel $skillSourceLabel -ForceUpdate ([bool]$ForceSkillUpdate)
+        }
+        if ($script:SelectedClaudeDesktop) {
+            if (-not $skillArchivePath) {
+                throw "Claude Desktop Skill archive was not prepared."
+            }
+            if ($script:DryRunEnabled) {
+                $script:ClaudeDesktopSkillStatus = "would prepare upload"
+                Write-Info (L "Would prepare Claude Desktop Skill upload: $skillArchivePath" "将准备 Claude Desktop Skill 上传包：$skillArchivePath")
+            }
+            else {
+                $script:ClaudeDesktopSkillStatus = "manual upload required"
+                Write-Ok (L "Verified Claude Desktop Skill ZIP: $skillArchivePath" "已校验 Claude Desktop Skill ZIP：$skillArchivePath")
+                Write-Info (L "In Claude Desktop, open Customize > Skills, choose Create skill, then Upload a skill and select this ZIP." "在 Claude Desktop 中打开「Customize > Skills」，选择「Create skill」，再选择「Upload a skill」并上传此 ZIP。")
+            }
+        }
+    }
+
     Write-Step (L "Finished" "完成")
     Write-Host ""
     if ($script:DryRunEnabled) {
@@ -2171,7 +2512,10 @@ try {
     Write-Info (L "Codex         : $script:CodexStatus" "Codex         ：$script:CodexStatus")
     Write-Info (L "Claude Code   : $script:ClaudeCodeStatus" "Claude Code   ：$script:ClaudeCodeStatus")
     Write-Info (L "Claude Desktop: $script:ClaudeDesktopStatus" "Claude Desktop：$script:ClaudeDesktopStatus")
+    Write-Info (L "Codex Skill   : $script:CodexSkillStatus" "Codex Skill   ：$script:CodexSkillStatus")
+    Write-Info (L "Claude Skill  : Code=$script:ClaudeCodeSkillStatus, Desktop=$script:ClaudeDesktopSkillStatus" "Claude Skill  ：Code=$script:ClaudeCodeSkillStatus，Desktop=$script:ClaudeDesktopSkillStatus")
     if ($archivePath) { Write-Info "ZIP           : $archivePath" }
+    if ($skillArchivePath) { Write-Info "Skill ZIP     : $skillArchivePath" }
     if ($release) { Write-Info "Release       : $($release.html_url)" }
     Write-Host ""
     Write-Host (L "  Next steps" "  后续步骤") -ForegroundColor Cyan
@@ -2200,6 +2544,12 @@ try {
     }
     if ($script:ClaudeDesktopMcpbFallbackUsed) {
         Write-Info (L "Complete the MCPB confirmation inside Claude Desktop." "请在 Claude Desktop 中完成 MCPB 确认。")
+    }
+    if ($script:SelectedCodexCli -or $script:SelectedCodexDesktop -or $script:SelectedClaudeCode) {
+        Write-Info (L "Start a new client task, or restart the client if the installed Skill is not discovered immediately." "请新建客户端任务；若没有立即发现已安装的 Skill，请重启客户端。")
+    }
+    if ($script:SelectedClaudeDesktop -and -not $SkipSkillInstallation) {
+        Write-Info (L "Complete the Blender MCP Skill upload in Claude Desktop." "请在 Claude Desktop 中完成 Blender MCP Skill 上传。")
     }
     Write-Host ""
 }
