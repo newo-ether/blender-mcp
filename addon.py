@@ -44,7 +44,7 @@ except ImportError:  # Legacy/direct source install with both files side by side
 bl_info = {
     "name": "Blender MCP",
     "author": "BlenderMCP",
-    "version": (1, 10, 0),
+    "version": (1, 11, 0),
     "blender": (3, 0, 0),
     "location": "View3D > Sidebar > BlenderMCP",
     "description": "Connect Blender to MCP clients",
