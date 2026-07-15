@@ -49,7 +49,7 @@ permanently change the user or machine execution policy. The ASCII
 [install.ps1](install.ps1). For a reproducible, version-pinned install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.11.3/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.11.3
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.11.4/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.11.4
 ```
 
 The explicit `TrimStart` removes the UTF-8 BOM carried by the localized full
@@ -64,7 +64,7 @@ Before changing the machine, the installer:
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
 4. verifies the wheel, Extension ZIP, portable Skill ZIP, and optional fallback MCPB against `SHA256SUMS.txt`;
 5. installs into a versioned environment such as
-   `%LOCALAPPDATA%\BlenderMCP\venv-1.11.3`;
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.11.4`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients;
 8. installs the same portable Skill for selected Codex and Claude Code clients,
@@ -373,7 +373,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.11.3-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.11.4-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -381,7 +381,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.11.3-py3-none-any.whl
+python -m pip install ./blender_mcp-1.11.4-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:

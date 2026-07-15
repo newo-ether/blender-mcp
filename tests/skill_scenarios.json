@@ -35,6 +35,9 @@
     "live_state": true,
     "required_phrases": [
       "view=operations",
+      "semantic is high-detail output",
+      "all is maximum-detail output",
+      "Never request all speculatively",
       "validate_node_tree_patch",
       "apply_node_tree_patch",
       "one-hop neighbors"

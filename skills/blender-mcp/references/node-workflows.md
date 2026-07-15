@@ -12,10 +12,15 @@ The Geometry-specific list_geometry_node_trees family remains useful for exact g
 ## Inspect only the relevant subgraph
 
 1. Search get_node_tree_index with a distinctive node name, label, or type.
-2. Call export_node_tree with view=auto by default. It selects operations for a complete graph and semantic for a targeted subgraph; explicit view=operations remains available. Pass selected node_names and neighbor_depth=1 for local rewiring.
-3. Increase neighbor depth only when the current export omits a required connection.
-4. Request semantic or all only when defaults, interface details, or layout are necessary.
-5. Record the returned revision and stable node names. Never invent node names from UI labels.
+2. Call export_node_tree with view=auto by default. It selects operations for a complete graph and semantic for a targeted subgraph. Pass selected node_names and neighbor_depth=1 for local rewiring.
+3. Treat the views as materially different context costs:
+   - operations is the compact working view for formulas, operation enums, relevant defaults, interfaces, and links. Prefer it for most graph inspection, including targeted subgraphs that do not need complete socket or RNA records.
+   - semantic is high-detail output with complete socket and RNA semantics. Request it only when a specific socket contract, property, or default is missing from operations.
+   - layout contains node placement, dimensions, and parent frames for presentation work.
+   - all is maximum-detail output combining semantic and layout data. It can consume substantial model context even for a medium graph. Never request all speculatively or merely for completeness.
+4. Remember that auto selects semantic for a targeted subgraph. Explicitly request view=operations when a targeted inspection only needs formulas, relevant defaults, interfaces, or links.
+5. Increase neighbor depth only when the current export omits a required connection. Escalate detail only for an identified missing fact.
+6. Record the returned revision and stable node names. Never invent node names from UI labels.
 
 For Geometry-specific tools, use get_geometry_node_tree_index and export_geometry_node_tree with the same targeted pattern.
 
