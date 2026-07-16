@@ -111,7 +111,15 @@ def _gn_validate_patch_runtime(tree, patch):
         for item in tree.interface.items_tree
     }
 
-    temp_tree = bpy.data.node_groups.new(".BlenderMCP_PatchValidation", "GeometryNodeTree")
+    # Probe added nodes on a copy of the real tree rather than an empty group.
+    # NodeGroupInput/NodeGroupOutput sockets are mirrored from the tree
+    # interface, so an interface-less probe tree leaves them with only the
+    # __extend__ socket and makes same-patch links/hides to those sockets fail
+    # spuriously. Copying also makes projected auto-names (e.g. "Grid.001",
+    # "Group Input.009") match what apply actually produces, avoiding false
+    # duplicate_node_name diagnostics when a node type already exists by name.
+    temp_tree = tree.copy()
+    temp_tree.name = ".BlenderMCP_PatchValidation"
     try:
         for index, operation in enumerate(patch.get("operations", ())):
             path = f"/operations/{index}"
@@ -607,11 +615,13 @@ def _gn_validate_patch_runtime(tree, patch):
 
     candidate_revision = None
     candidate_stats = None
+    created_interface = None
     if not any(item["severity"] == "error" for item in diagnostics):
         execution_probe = tree.copy()
         execution_probe.name = f".{tree.name}.MCP Dry Run"
         try:
-            _gn_apply_operations_to_working(execution_probe, patch)
+            dry_run = _gn_apply_operations_to_working(execution_probe, patch)
+            created_interface = dry_run.get("created_interface") or None
             invalid_links = [link for link in execution_probe.links if not link.is_valid]
             if invalid_links:
                 raise RuntimeError(
@@ -646,4 +656,9 @@ def _gn_validate_patch_runtime(tree, patch):
     if candidate_revision is not None:
         result["candidate_revision"] = candidate_revision
         result["candidate_stats"] = candidate_stats
+    if created_interface:
+        # Echo the reference -> Blender identifier map (e.g. "GEO" -> "Socket_0")
+        # so callers can wire Group Input/Output sockets in a follow-up patch
+        # without applying first. Mirrors apply's created_interface_sockets.
+        result["created_interface_sockets"] = created_interface
     return result
