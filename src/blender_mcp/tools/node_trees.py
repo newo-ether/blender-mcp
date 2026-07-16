@@ -253,7 +253,11 @@ def query_node_graph(
 
     Query contracts:
     - fields: optional node_names; fields may contain id, name, label,
-      bl_idname, properties, inputs, outputs, or special_structures.
+      bl_idname, properties, inputs, outputs, or special_structures. This is
+      the cheapest way to read one node before patching it. inputs reports only
+      the sockets whose value differs from the node type's own default, so an
+      untouched node reports none; request outputs or an export when you need
+      every socket regardless.
     - socket_links: optional node_names; socket_id requires exactly one node.
     - named_attributes: optional node_names and exact attribute_name filter.
     - shortest_path: requires from_node and to_node; direction is downstream,

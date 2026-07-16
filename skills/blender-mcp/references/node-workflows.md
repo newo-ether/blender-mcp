@@ -18,22 +18,32 @@ The Geometry-specific list_geometry_node_trees family remains useful for exact g
 
 1. Search get_node_tree_index with a distinctive node name, label, or type.
 2. Use query_node_graph before export when the question is bounded:
-   - fields for an allowlisted projection of compact node records;
+   - fields for an allowlisted projection of compact node records. inputs
+     reports only the sockets whose value differs from the node type's own
+     default, so an untouched node reports none and a reported socket is one
+     somebody deliberately set;
    - socket_links for incident links or one exact socket;
    - named_attributes for Named Attribute readers and writers;
    - shortest_path for one route between exact nodes;
    - upstream, downstream, or slice for bounded reachability.
+
+   These are the right tools for reading one node or a few: a fields projection
+   of a single node costs a few hundred bytes against tens of kilobytes for a
+   whole-graph export, and every query returns the same revision an export
+   does, so it is directly usable as a patch base_revision.
 3. Call export_node_tree with view=auto by default. It selects slim for a complete graph and semantic for a targeted subgraph. Pass selected node_names and neighbor_depth=1 for local rewiring.
 4. Treat the views as materially different context costs. Each step up roughly doubles the bytes and buys strictly less per byte:
 
    | view | ~bytes, 30-node group | ~bytes, 2048-node graph | what it adds |
    | --- | --- | --- | --- |
-   | slim | ~9 KB | ~530 KB | node types, operation enums, links, only defaults that are neither linked over nor at the type default |
+   | slim | ~9 KB | ~330 KB | node types, operation enums, links, only defaults that are neither linked over nor at the node type's own default |
    | operations | ~29 KB (3x slim) | ~820 KB | every socket record, including linked and default-valued ones |
    | semantic | ~43 KB (5x slim) | ~1.5 MB | full RNA properties and socket contracts |
    | all | ~45 KB (5x slim) | ~1.6 MB | layout on top of semantic |
 
-   - slim is the reading view. Prefer it to understand what a graph computes: it preserves every operation enum and every link, and states omitted Frame nodes in stats.omitted_node_count rather than hiding them.
+   Those figures are a Geometry group, where slim's saving is mostly structural. On a Shader or Compositor graph, whose nodes ship many non-zero defaults, slim also drops them: one Principled BSDF reads as 2 sockets rather than 30.
+
+   - slim is the reading view. Prefer it to understand what a graph computes: it preserves every operation enum and every link, and states omitted Frame nodes in stats.omitted_node_count rather than hiding them. A socket it reports is one somebody deliberately set.
    - operations adds complete socket records. Request it when a socket's presence, order, or default matters even where slim judged it uninformative.
    - semantic adds full RNA detail. Request it only for an identified missing socket contract, property, or default.
    - layout contains node placement, dimensions, and parent frames for presentation work.
@@ -46,6 +56,7 @@ The Geometry-specific list_geometry_node_trees family remains useful for exact g
 Use this routing rule:
 
 ```text
+one node, before a patch   -> get_node_tree_index + query_node_graph
 fields, paths, links       -> query_node_graph
 whole graph, what it does  -> export slim
 local formulas and wiring  -> export slim with node_names
@@ -73,7 +84,7 @@ For Geometry-specific tools, use get_geometry_node_tree_index and export_geometr
 1. Select the mutation pair from the exact tree domain:
    - GeometryNodeTree / NODE_GROUP: validate_geometry_node_patch, then apply_geometry_node_patch;
    - ShaderNodeTree or CompositorNodeTree: validate_node_tree_patch, then apply_node_tree_patch.
-2. Build a patch against the exact tree reference and exported base revision.
+2. Build a patch against the exact tree reference and exported base revision. Read the nodes you intend to change with get_node_tree_index for the exact name, then query_node_graph fields for their current values and socket_links for the exact socket ids and incident wiring. That is a few hundred bytes per node and carries the revision the patch needs; a whole-graph export to change one socket is the expensive mistake.
 3. Limit operations to the requested nodes, links, properties, socket defaults, or interface changes.
 4. Submit exactly one of an inline patch or a workspace-relative patch path.
 5. Call the selected validator. Do not send a Geometry patch to the generic validator.

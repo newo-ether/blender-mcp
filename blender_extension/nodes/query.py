@@ -30,6 +30,16 @@ _NODE_GRAPH_QUERY_FIELDS = frozenset({
 })
 _NODE_GRAPH_QUERY_DEFAULT_FIELDS = ("name", "label", "bl_idname")
 
+# Fields the slim record can answer on its own. Anything outside this set is
+# filled in from the operations record, so every advertised field stays
+# answerable even though the projection reads from slim.
+_NODE_GRAPH_QUERY_SLIM_FIELDS = frozenset({
+    "name",
+    "bl_idname",
+    "properties",
+    "inputs",
+})
+
 
 def _node_soft_limit_response(snapshot):
     """Return bounded guidance instead of carrying an oversized full graph."""
@@ -231,9 +241,25 @@ def _node_query_graph(
                 f"fields contains unsupported values: {', '.join(unsupported)}; "
                 f"expected: {choices}"
             )
+        # A fields query exists to answer "what does this node do", and the
+        # operations record answers it with every socket the node type
+        # declares, including those still at their factory value: reading one
+        # Principled BSDF that way returned 30 sockets when 2 had been touched
+        # (2033 bytes vs 310). Project from the slim record instead.
+        #
+        # Slim omits what it considers inferable, so fall back to the
+        # operations record for any field the caller explicitly asked for that
+        # slim does not carry. Requesting an advertised field must never
+        # silently return nothing.
+        slim_omits = allowed - _NODE_GRAPH_QUERY_SLIM_FIELDS
         for name in sorted(requested or set(node_map)):
             node = node_map[name]
-            full = _node_graph_record(node, "operations")
+            full = _node_graph_record(node, "slim")
+            if slim_omits:
+                detailed = _node_graph_record(node, "operations")
+                for key in slim_omits:
+                    if key in detailed:
+                        full[key] = detailed[key]
             records.append({key: value for key, value in full.items() if key in allowed})
     total = len(records)
     records = records[:limit]

@@ -339,6 +339,56 @@ def run_test():
         "Socket-link query changed stable link identity",
     )
 
+    # A fields projection reads from the slim record, so it must not report
+    # sockets that are still at the value their node type ships with, nor the
+    # warning_propagation UI enum.
+    fields_probe = material.node_tree.nodes.new("ShaderNodeBrightContrast")
+    try:
+        pristine_fields = server.query_node_graph(
+            material_ref,
+            "fields",
+            node_names=[fields_probe.name],
+            fields=["name", "properties", "inputs"],
+        )["records"][0]
+        assert_true(
+            not pristine_fields.get("inputs"),
+            "Fields projection reported sockets still at the node type's defaults: "
+            f"{pristine_fields.get('inputs')}",
+        )
+        assert_true(
+            "warning_propagation" not in pristine_fields.get("properties", {}),
+            "Fields projection leaked the warning_propagation UI enum",
+        )
+        fields_probe.inputs["Bright"].default_value = 0.75
+        touched_fields = server.query_node_graph(
+            material_ref,
+            "fields",
+            node_names=[fields_probe.name],
+            fields=["inputs"],
+        )["records"][0]
+        assert_true(
+            any(
+                abs(item.get("default", 0.0) - 0.75) < 1e-6
+                for item in touched_fields.get("inputs", [])
+            ),
+            "Fields projection dropped a socket default the user actually set",
+        )
+        # Fields the slim record does not carry must still be answerable, or an
+        # advertised field would silently return nothing.
+        for omitted_field in ("id", "outputs"):
+            fallback = server.query_node_graph(
+                material_ref,
+                "fields",
+                node_names=[fields_probe.name],
+                fields=[omitted_field],
+            )["records"][0]
+            assert_true(
+                omitted_field in fallback,
+                f"Fields projection cannot answer the advertised field {omitted_field!r}",
+            )
+    finally:
+        material.node_tree.nodes.remove(fields_probe)
+
     for invalid_kwargs, expected_text in (
         (
             {"query_type": "fields", "fields": ["unknown_field"]},
