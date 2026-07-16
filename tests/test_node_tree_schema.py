@@ -50,19 +50,38 @@ def sample_snapshot() -> dict:
 
 
 class NodeTreeSchemaTests(unittest.TestCase):
-    def test_valid_snapshot_writes_atomically(self):
+    def test_all_concrete_views_write_atomically(self):
+        self.assertEqual(
+            schema.VIEWS,
+            {"semantic", "operations", "layout", "all"},
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
-            destination = schema.write_snapshot_json(
-                sample_snapshot(), "graphs/shader.json", temp_dir
-            )
-            self.assertEqual(
-                destination.resolve(),
-                (Path(temp_dir) / "graphs" / "shader.json").resolve(),
-            )
-            self.assertEqual(
-                json.loads(destination.read_text(encoding="utf-8")), sample_snapshot()
-            )
+            for view in sorted(schema.VIEWS):
+                with self.subTest(view=view):
+                    snapshot = sample_snapshot()
+                    snapshot["view"] = view
+                    destination = schema.write_snapshot_json(
+                        snapshot, f"graphs/{view}.json", temp_dir
+                    )
+                    self.assertEqual(
+                        destination.resolve(),
+                        (Path(temp_dir) / "graphs" / f"{view}.json").resolve(),
+                    )
+                    self.assertEqual(
+                        json.loads(destination.read_text(encoding="utf-8")),
+                        snapshot,
+                    )
             self.assertEqual(list(destination.parent.glob("*.tmp")), [])
+
+    def test_rejects_non_concrete_views_with_complete_choices(self):
+        expected = "snapshot.view must be one of: all, layout, operations, semantic"
+        for view in ("auto", "summary", "unknown"):
+            with self.subTest(view=view):
+                snapshot = sample_snapshot()
+                snapshot["view"] = view
+                with self.assertRaises(schema.NodeTreeSchemaError) as error:
+                    schema.validate_snapshot_structure(snapshot)
+                self.assertEqual(str(error.exception), expected)
 
     def test_path_must_stay_in_workspace_and_use_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:

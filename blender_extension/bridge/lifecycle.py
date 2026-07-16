@@ -249,6 +249,7 @@ class BridgeLifecycleMixin:
         read_only = {
             "blender_mcp_handshake", "get_scene_info", "get_object_info",
             "get_blender_version_context", "get_runtime_automation_context",
+            "get_node_editor_context",
             "list_node_trees", "export_node_tree", "get_node_tree_index",
             "get_node_type_schema", "validate_node_tree_patch",
             "list_geometry_node_trees", "export_geometry_node_tree",
@@ -565,6 +566,7 @@ class BridgeLifecycleMixin:
             "bake_simulation": self.bake_simulation,
             "get_blender_version_context": self.get_blender_version_context,
             "get_runtime_automation_context": self.get_runtime_automation_context,
+            "get_node_editor_context": self.get_node_editor_context,
             "list_node_trees": self.list_node_trees,
             "ensure_scene_compositor_tree": self.ensure_scene_compositor_tree,
             "export_node_tree": self.export_node_tree,

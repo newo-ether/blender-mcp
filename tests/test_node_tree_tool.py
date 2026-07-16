@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SRC_ROOT = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_ROOT) not in sys.path:
@@ -23,15 +26,68 @@ class _FakeBlenderConnection:
     def __init__(self):
         self.commands = []
 
+    @staticmethod
+    def _complete_snapshot(params):
+        requested_view = params["view"]
+        view = (
+            "semantic" if params.get("node_names") else "operations"
+        ) if requested_view == "auto" else requested_view
+        return {
+            "schema": "blender-node-tree/1",
+            "blender_version": [5, 2, 0],
+            "view": view,
+            "tree_ref": params["tree_ref"],
+            "owner": {
+                "kind": "MATERIAL",
+                "name": "Hero",
+                "id_type": "Material",
+                "library": None,
+                "editable": True,
+                "user_count": 1,
+            },
+            "capabilities": {
+                "read": True,
+                "index": True,
+                "export": True,
+                "schema": True,
+                "validate": True,
+                "apply": True,
+                "editable": True,
+                "mutation_reason": "available",
+                "transaction_adapter": "embedded_shader_owner",
+                "interface": True,
+            },
+            "tree": {
+                "name": "Shader Nodetree",
+                "bl_idname": params["tree_ref"]["tree_type"],
+                "editable": True,
+                "library": None,
+                "interface": [],
+                "nodes": {},
+                "links": [],
+            },
+            "scope": {
+                "kind": "full",
+                "requested_nodes": [],
+                "neighbor_depth": 0,
+                "included_nodes": [],
+                "content_revision": "sha256:" + "b" * 64,
+            },
+            "revision": "sha256:" + "a" * 64,
+            "users": [],
+            "diagnostics": [],
+            "stats": {
+                "node_count": 0,
+                "link_count": 0,
+                "interface_item_count": 0,
+                "json_bytes": 0,
+            },
+        }
+
     def send_command(self, command, params=None):
         self.commands.append((command, params))
         if command == "export_node_tree" and params.get("allow_large_response"):
-            return {
-                "tree_ref": params["tree_ref"],
-                "view": params["view"],
-                "revision": "sha256:" + "a" * 64,
-                "stats": {"node_count": 1},
-            }
+            return self._complete_snapshot(params)
         return {"command": command, "params": params}
 
 
@@ -63,6 +119,20 @@ class NodeTreeToolTests(unittest.TestCase):
             "owner_kinds": ["MATERIAL", "WORLD"],
         })
 
+    def test_editor_context_forwards_stale_guards_and_bound(self):
+        response = json.loads(server.get_node_editor_context(
+            None,
+            expected_file_session_id="file-one",
+            expected_context_revision="sha256:" + "a" * 64,
+            max_editors=8,
+        ))
+        self.assertEqual(response["command"], "get_node_editor_context")
+        self.assertEqual(response["params"], {
+            "expected_file_session_id": "file-one",
+            "expected_context_revision": "sha256:" + "a" * 64,
+            "max_editors": 8,
+        })
+
     def test_export_forwards_structured_reference_and_targeting(self):
         response = json.loads(server.export_node_tree(
             None,
@@ -90,20 +160,30 @@ class NodeTreeToolTests(unittest.TestCase):
         self.assertEqual(redacted["nested"]["api_key"], "<redacted>")
         self.assertEqual(redacted["nested"]["name"], "safe")
 
-    def test_file_export_explicitly_requests_the_complete_snapshot(self):
-        original_writer = server.write_node_tree_snapshot_json
-        server.write_node_tree_snapshot_json = lambda _result, path: Path(path).resolve()
-        try:
-            response = json.loads(server.export_node_tree(
-                None,
-                tree_ref=self.tree_ref,
-                view="auto",
-                output_path="complete.json",
-            ))
-        finally:
-            server.write_node_tree_snapshot_json = original_writer
-        self.assertEqual(response["status"], "written")
-        self.assertTrue(self.fake.commands[-1][1]["allow_large_response"])
+    def test_file_export_validates_and_writes_complete_auto_snapshot(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch.dict(
+                os.environ,
+                {"BLENDER_MCP_WORKSPACE": temp_dir},
+            ):
+                response = json.loads(server.export_node_tree(
+                    None,
+                    tree_ref=self.tree_ref,
+                    view="auto",
+                    output_path="complete.json",
+                ))
+            destination = Path(response["path"])
+            self.assertEqual(response["status"], "written")
+            self.assertEqual(destination, Path(temp_dir) / "complete.json")
+            self.assertTrue(destination.is_file())
+            snapshot = json.loads(destination.read_text(encoding="utf-8"))
+            self.assertEqual(snapshot["view"], "operations")
+            self.assertEqual(snapshot["tree_ref"], self.tree_ref)
+            self.assertEqual(list(Path(temp_dir).glob("*.tmp")), [])
+        command, params = self.fake.commands[-1]
+        self.assertEqual(command, "export_node_tree")
+        self.assertEqual(params["view"], "auto")
+        self.assertTrue(params["allow_large_response"])
 
     def test_scene_compositor_initialization_requires_explicit_flag(self):
         response = json.loads(server.ensure_scene_compositor_tree(
@@ -131,6 +211,31 @@ class NodeTreeToolTests(unittest.TestCase):
             "query": "Principled",
             "offset": 3,
             "limit": 20,
+        })
+
+    def test_query_forwards_complete_bounded_contract(self):
+        response = json.loads(server.query_node_graph(
+            None,
+            tree_ref=self.tree_ref,
+            query_type="shortest_path",
+            node_names=["Principled BSDF"],
+            from_node="Principled BSDF",
+            to_node="Material Output",
+            direction="downstream",
+            limit=25,
+        ))
+        self.assertEqual(response["command"], "query_node_graph")
+        self.assertEqual(response["params"], {
+            "tree_ref": self.tree_ref,
+            "query_type": "shortest_path",
+            "node_names": ["Principled BSDF"],
+            "from_node": "Principled BSDF",
+            "to_node": "Material Output",
+            "attribute_name": "",
+            "socket_id": "",
+            "direction": "downstream",
+            "fields": [],
+            "limit": 25,
         })
 
     def test_schema_forwards_exact_owner_context(self):
@@ -199,14 +304,46 @@ class NodeTreeToolTests(unittest.TestCase):
     def test_all_generic_tools_are_registered(self):
         names = {tool.name for tool in server.mcp._tool_manager.list_tools()}
         self.assertTrue({
+            "get_node_editor_context",
             "list_node_trees",
             "ensure_scene_compositor_tree",
             "export_node_tree",
             "get_node_tree_index",
+            "query_node_graph",
             "get_node_type_schema",
             "validate_node_tree_patch",
             "apply_node_tree_patch",
         }.issubset(names))
+
+    def test_query_tool_description_lists_every_contract(self):
+        tool = next(
+            item for item in server.mcp._tool_manager.list_tools()
+            if item.name == "query_node_graph"
+        )
+        for query_type in (
+            "fields",
+            "socket_links",
+            "named_attributes",
+            "shortest_path",
+            "upstream/downstream",
+            "slice",
+        ):
+            with self.subTest(query_type=query_type):
+                self.assertIn(query_type, tool.description)
+
+    def test_editor_context_description_rejects_implicit_selection(self):
+        tool = next(
+            item for item in server.mcp._tool_manager.list_tools()
+            if item.name == "get_node_editor_context"
+        )
+        for phrase in (
+            "MULTIPLE_EDITORS",
+            "STALE_CONTEXT",
+            "never chosen",
+            "tree_ref",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, tool.description)
 
 
 if __name__ == "__main__":

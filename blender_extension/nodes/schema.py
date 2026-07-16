@@ -21,6 +21,7 @@ from .constants import (
     NODE_TYPE_SCHEMA,
     _GNAssetCleanupError,
 )
+from .dynamic import _node_dynamic_collection_record
 from .query import _node_soft_limit_response
 from .serialization import (
     _gn_canonical_json,
@@ -114,38 +115,7 @@ def _gn_node_owned_properties(node):
 
 def _gn_dynamic_collection_schema(owner, prop, limit=50):
     """Describe dynamic node-owned item collections without inherited RNA."""
-    record = {
-        "identifier": prop.identifier,
-        "type": "COLLECTION",
-        "readonly": bool(getattr(prop, "is_readonly", False)),
-        "item_rna_type": getattr(getattr(prop, "fixed_type", None), "identifier", None),
-        "count": 0,
-        "items": [],
-        "truncated": False,
-    }
-    try:
-        collection = getattr(owner, prop.identifier)
-        record["count"] = len(collection)
-        for item in list(collection)[:limit]:
-            values = {}
-            for item_prop in item.bl_rna.properties:
-                identifier = item_prop.identifier
-                if identifier == "rna_type" or item_prop.type == "COLLECTION":
-                    continue
-                if getattr(item_prop, "is_hidden", False):
-                    continue
-                try:
-                    values[identifier] = _gn_json_value(getattr(item, identifier))
-                except (AttributeError, TypeError, ValueError, RuntimeError):
-                    continue
-            record["items"].append({
-                "rna_type": item.bl_rna.identifier,
-                "values": values,
-            })
-        record["truncated"] = record["count"] > limit
-    except (AttributeError, TypeError, ValueError, RuntimeError):
-        record["unavailable"] = True
-    return record
+    return _node_dynamic_collection_record(owner, prop, _gn_json_value, limit)
 
 def _gn_socket_type_schema(socket, direction, index):
     record = _gn_socket_record(socket, direction, index)

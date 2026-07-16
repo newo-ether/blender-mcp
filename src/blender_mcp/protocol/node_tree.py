@@ -12,7 +12,7 @@ from typing import Any, Mapping
 SNAPSHOT_SCHEMA = "blender-node-tree/1"
 TREE_TYPES = {"GeometryNodeTree", "ShaderNodeTree", "CompositorNodeTree"}
 OWNER_KINDS = {"MATERIAL", "WORLD", "LIGHT", "SCENE", "NODE_GROUP"}
-VIEWS = {"semantic", "layout", "all"}
+VIEWS = {"semantic", "operations", "layout", "all"}
 _REVISION_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
@@ -44,7 +44,8 @@ def validate_snapshot_structure(snapshot: Any) -> None:
         )
     validate_tree_ref(snapshot.get("tree_ref"))
     if snapshot.get("view") not in VIEWS:
-        raise NodeTreeSchemaError("snapshot.view must be semantic, layout, or all")
+        choices = ", ".join(sorted(VIEWS))
+        raise NodeTreeSchemaError(f"snapshot.view must be one of: {choices}")
     revision = snapshot.get("revision")
     if not isinstance(revision, str) or not _REVISION_PATTERN.fullmatch(revision):
         raise NodeTreeSchemaError("snapshot.revision must be sha256:<64 lowercase hex>")

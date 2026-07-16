@@ -5,6 +5,7 @@ from __future__ import annotations
 import bpy
 
 from .common import _gn_patch_diagnostic
+from .dynamic import _NODE_DYNAMIC_COLLECTION_ALLOWLIST
 from .patch_values import (
     _gn_decode_patch_value,
     _gn_resolve_patch_socket,
@@ -141,18 +142,6 @@ def _node_apply_curve_mapping(node, operation):
             if "handle_type" in point_patch:
                 point.handle_type = point_patch["handle_type"]
     mapping.update()
-
-_NODE_DYNAMIC_COLLECTION_ALLOWLIST = {
-    "GeometryNodeFieldToList": {"list_items"},
-    "GeometryNodeClosureToList": {"list_items"},
-    "GeometryNodeRepeatOutput": {"repeat_items"},
-    "GeometryNodeSimulationOutput": {"state_items"},
-    "GeometryNodeForeachGeometryElementOutput": {
-        "input_items", "main_items", "generation_items",
-    },
-    "NodeClosureOutput": {"input_items", "output_items"},
-    "NodeEvaluateClosure": {"input_items", "output_items"},
-}
 
 def _node_dynamic_collection(node, collection_name):
     allowed = _NODE_DYNAMIC_COLLECTION_ALLOWLIST.get(node.bl_idname, set())

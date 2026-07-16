@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/newo-ether/blender-mcp/schemas/node-editor-context-v1.json",
+  "title": "Blender MCP live Node Editor context v1",
+  "type": "object",
+  "required": [
+    "schema", "file_session_id", "context_revision", "state", "observed_state",
+    "selected_context_id", "next_action", "stale_reasons", "total_editors",
+    "editors", "truncated"
+  ],
+  "properties": {
+    "schema": {"const": "blender-node-editor-context/1"},
+    "file_session_id": {"type": "string", "minLength": 1},
+    "context_revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "state": {
+      "enum": ["NO_EDITOR", "UNIQUE_EDITOR", "MULTIPLE_EDITORS", "PINNED_EDITOR", "STALE_CONTEXT"]
+    },
+    "observed_state": {
+      "enum": ["NO_EDITOR", "UNIQUE_EDITOR", "MULTIPLE_EDITORS", "PINNED_EDITOR"]
+    },
+    "selected_context_id": {"type": ["string", "null"]},
+    "next_action": {
+      "enum": [
+        "open_a_node_editor", "use_selected_tree_ref", "choose_an_editor_explicitly",
+        "refresh_node_editor_context"
+      ]
+    },
+    "stale_reasons": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["file_session_changed", "context_changed"]}
+    },
+    "total_editors": {"type": "integer", "minimum": 0},
+    "editors": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"$ref": "#/$defs/editor"}
+    },
+    "truncated": {"type": "boolean"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "treeRef": {
+      "type": "object",
+      "required": ["tree_type", "owner"],
+      "properties": {
+        "tree_type": {"enum": ["GeometryNodeTree", "ShaderNodeTree", "CompositorNodeTree"]},
+        "owner": {
+          "type": "object",
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": {"enum": ["MATERIAL", "WORLD", "LIGHT", "SCENE", "NODE_GROUP"]},
+            "name": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "id": {
+      "type": ["object", "null"],
+      "required": ["id_type", "name", "library"],
+      "properties": {
+        "id_type": {"type": "string"},
+        "name": {"type": "string"},
+        "library": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "tree": {
+      "type": ["object", "null"],
+      "required": ["name", "bl_idname", "library", "tree_ref", "tree_ref_candidates"],
+      "properties": {
+        "name": {"type": "string"},
+        "bl_idname": {"type": "string"},
+        "library": {"type": ["string", "null"]},
+        "tree_ref": {"oneOf": [{"$ref": "#/$defs/treeRef"}, {"type": "null"}]},
+        "tree_ref_candidates": {"type": "array", "items": {"$ref": "#/$defs/treeRef"}}
+      },
+      "additionalProperties": false
+    },
+    "editor": {
+      "type": "object",
+      "required": [
+        "context_id", "window_id", "area_id", "screen", "workspace", "area",
+        "pinned", "space_tree_type", "shader_type", "owner", "node_tree", "edit_tree",
+        "path", "tree_ref", "tree_ref_candidates", "active_node", "selected_nodes"
+      ],
+      "properties": {
+        "context_id": {"type": "string", "minLength": 1},
+        "window_id": {"type": "string", "pattern": "^window:[0-9a-f]+$"},
+        "area_id": {"type": "string", "pattern": "^area:[0-9a-f]+$"},
+        "screen": {"type": "string"},
+        "workspace": {"type": "string"},
+        "area": {
+          "type": "object",
+          "required": ["x", "y", "width", "height", "ui_type"],
+          "properties": {
+            "x": {"type": "integer"},
+            "y": {"type": "integer"},
+            "width": {"type": "integer", "minimum": 0},
+            "height": {"type": "integer", "minimum": 0},
+            "ui_type": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
+        "pinned": {"type": "boolean"},
+        "space_tree_type": {"type": "string"},
+        "shader_type": {"type": ["string", "null"]},
+        "owner": {"$ref": "#/$defs/id"},
+        "node_tree": {"$ref": "#/$defs/tree"},
+        "edit_tree": {"$ref": "#/$defs/tree"},
+        "path": {"type": "array", "items": {"$ref": "#/$defs/tree"}},
+        "tree_ref": {"oneOf": [{"$ref": "#/$defs/treeRef"}, {"type": "null"}]},
+        "tree_ref_candidates": {"type": "array", "items": {"$ref": "#/$defs/treeRef"}},
+        "active_node": {"type": ["string", "null"]},
+        "selected_nodes": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
+  }
+}

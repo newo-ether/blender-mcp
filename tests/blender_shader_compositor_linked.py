@@ -162,9 +162,19 @@ def main():
         for item in list(result["owners"].values()) + list(result["groups"].values()):
             if item["editable"] or item["tree_editable"]:
                 raise AssertionError(f"linked target unexpectedly editable: {item}")
-        if material_export["capabilities"]["editable"] or material_export["capabilities"]["apply"]:
+        if (
+            material_export["capabilities"]["editable"]
+            or material_export["capabilities"]["validate"]
+            or material_export["capabilities"]["apply"]
+            or material_export["capabilities"]["mutation_reason"] != "linked_or_read_only"
+        ):
             raise AssertionError("generic Material capabilities did not fail closed")
-        if shader_export["capabilities"]["editable"] or shader_export["capabilities"]["apply"]:
+        if (
+            shader_export["capabilities"]["editable"]
+            or shader_export["capabilities"]["validate"]
+            or shader_export["capabilities"]["apply"]
+            or shader_export["capabilities"]["mutation_reason"] != "linked_or_read_only"
+        ):
             raise AssertionError("generic Shader group capabilities did not fail closed")
         if linked_validation["valid"] or "tree_not_editable" not in {
             item["code"] for item in linked_validation["diagnostics"]
@@ -175,7 +185,8 @@ def main():
         if not override_export["capabilities"]["editable"]:
             raise AssertionError("local override should remain readable and dry-run capable")
         if (
-            override_export["capabilities"]["apply"]
+            not override_export["capabilities"]["validate"]
+            or override_export["capabilities"]["apply"]
             or override_export["capabilities"]["mutation_reason"]
             != "library_override_apply_not_supported"
         ):

@@ -341,6 +341,9 @@ def validate_geometry_node_patch(
 ) -> str:
     """Dry-run a Geometry Nodes semantic patch without changing Blender data.
 
+    This is the mutation validator for GeometryNodeTree/NODE_GROUP targets;
+    ShaderNodeTree and CompositorNodeTree targets use validate_node_tree_patch.
+
     Provide exactly one of patch or patch_path. patch_path must point to a JSON
     file below BLENDER_MCP_WORKSPACE (or the MCP server working directory), so a
     client can create and incrementally edit it using its existing file tools.
@@ -442,6 +445,9 @@ def apply_geometry_node_patch(
     user_prompt: str = "",
 ) -> str:
     """Apply a Geometry Nodes patch through a copy-on-write transaction.
+
+    This is the mutation application tool for GeometryNodeTree/NODE_GROUP
+    targets; ShaderNodeTree and CompositorNodeTree use apply_node_tree_patch.
 
     Provide exactly one of patch or patch_path. The server validates structure,
     Blender repeats runtime dry-run validation, then operations are applied to a

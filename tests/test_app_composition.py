@@ -28,6 +28,7 @@ EXPECTED_TOOL_NAMES = {
     "get_hunyuan3d_status",
     "get_hyper3d_status",
     "get_node_tree_index",
+    "get_node_editor_context",
     "get_node_type_schema",
     "get_object_info",
     "get_polyhaven_categories",
@@ -77,6 +78,33 @@ class ApplicationCompositionTests(unittest.TestCase):
         for name in EXPECTED_TOOL_NAMES:
             with self.subTest(tool=name):
                 self.assertTrue(callable(getattr(server, name)))
+
+    def test_mutation_tool_descriptions_route_by_tree_domain(self):
+        from blender_mcp.app import mcp
+
+        tools = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
+        expected_routes = {
+            "validate_geometry_node_patch": (
+                "GeometryNodeTree/NODE_GROUP",
+                "validate_node_tree_patch",
+            ),
+            "apply_geometry_node_patch": (
+                "GeometryNodeTree/NODE_GROUP",
+                "apply_node_tree_patch",
+            ),
+            "validate_node_tree_patch": (
+                "ShaderNodeTree and CompositorNodeTree",
+                "validate_geometry_node_patch",
+            ),
+            "apply_node_tree_patch": (
+                "Shader node-group",
+                "apply_geometry_node_patch",
+            ),
+        }
+        for tool_name, phrases in expected_routes.items():
+            for phrase in phrases:
+                with self.subTest(tool=tool_name, phrase=phrase):
+                    self.assertIn(phrase, tools[tool_name].description)
 
 
 if __name__ == "__main__":

@@ -65,6 +65,8 @@ class SkillPackageTests(unittest.TestCase):
                 [
                     "__init__.py",
                     "blender_manifest.toml",
+                    "nodes/editor_context.py",
+                    "schemas/node-editor-context-v1.json",
                     "schemas/node-tree-v1.json",
                     "schemas/node-tree-patch-v1.json",
                 ],
@@ -74,7 +76,9 @@ class SkillPackageTests(unittest.TestCase):
                 [
                     "blender_mcp/app.py",
                     "blender_mcp/tools/nodes.py",
+                    "blender_mcp/tools/node_trees.py",
                     "blender_mcp/protocol/node_patch.py",
+                    "blender_mcp/schemas/node-editor-context-v1.json",
                     "blender_mcp/schemas/node-tree-v1.json",
                     "blender_mcp/schemas/node-tree-patch-v1.json",
                 ],
@@ -86,6 +90,8 @@ class SkillPackageTests(unittest.TestCase):
                     "server/run.cmd",
                     "server/python/blender_mcp/app.py",
                     "server/python/blender_mcp/tools/nodes.py",
+                    "server/python/blender_mcp/tools/node_trees.py",
+                    "server/schemas/node-editor-context-v1.json",
                     "server/schemas/node-tree-v1.json",
                 ],
             )

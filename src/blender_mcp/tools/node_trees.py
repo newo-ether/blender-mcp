@@ -36,6 +36,41 @@ from ..protocol.node_tree import (
 logger = logging.getLogger("BlenderMCPServer")
 
 @mcp.tool()
+@telemetry_tool("get_node_editor_context")
+def get_node_editor_context(
+    ctx: Context,
+    expected_file_session_id: str = "",
+    expected_context_revision: str = "",
+    max_editors: int = 32,
+    user_prompt: str = "",
+) -> str:
+    """Inspect the visible Node Editor context without changing Blender.
+
+    Returns an explicit NO_EDITOR, UNIQUE_EDITOR, PINNED_EDITOR,
+    MULTIPLE_EDITORS, or STALE_CONTEXT state. Multiple editors are never chosen
+    by window order or focus. Use returned tree_ref values with graph tools.
+
+    Parameters:
+    - expected_file_session_id: Optional prior file session for stale detection
+    - expected_context_revision: Optional prior context revision for stale detection
+    - max_editors: Maximum editor records returned, from 1 to 32
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        result = get_blender_connection().send_command(
+            "get_node_editor_context",
+            {
+                "expected_file_session_id": expected_file_session_id,
+                "expected_context_revision": expected_context_revision,
+                "max_editors": max_editors,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error inspecting Node Editor context: {str(e)}")
+        return f"Error inspecting Node Editor context: {str(e)}"
+
+@mcp.tool()
 @telemetry_tool("list_node_trees")
 def list_node_trees(
     ctx: Context,
@@ -209,7 +244,22 @@ def query_node_graph(
     limit: int = 200,
     user_prompt: str = "",
 ) -> str:
-    """Query fields, socket links, Named Attributes, paths, or bounded graph slices."""
+    """Run one bounded, deterministic query against an owner-addressed graph.
+
+    Query contracts:
+    - fields: optional node_names; fields may contain id, name, label,
+      bl_idname, properties, inputs, outputs, or special_structures.
+    - socket_links: optional node_names; socket_id requires exactly one node.
+    - named_attributes: optional node_names and exact attribute_name filter.
+    - shortest_path: requires from_node and to_node; direction is downstream,
+      upstream, or both.
+    - upstream/downstream: require node_names and follow that fixed direction.
+    - slice: requires node_names; direction is downstream, upstream, or both.
+
+    All query types accept limit from 1 to 1000 and return the same full-graph
+    revision used by exports. Use fields/paths/links queries before exporting
+    graph payload that is not needed.
+    """
     try:
         result = get_blender_connection().send_command(
             "query_node_graph",
@@ -277,6 +327,10 @@ def validate_node_tree_patch(
     user_prompt: str = "",
 ) -> str:
     """Dry-run an owner-addressed node-tree patch without changing live data.
+
+    Use this tool only for ShaderNodeTree and CompositorNodeTree targets.
+    GeometryNodeTree mutations use validate_geometry_node_patch so modifier
+    inputs, shared-tree policy, and the Geometry v1 contract remain explicit.
 
     Provide exactly one inline patch or workspace-relative patch_path. Structural
     validation runs in the MCP process, then Blender repeats semantic validation
@@ -388,6 +442,7 @@ def apply_node_tree_patch(
     Compositor node-group owners. Validation is repeated immediately before the
     version-aware owner copy/remap or selected-Scene tree swap. On failure,
     owner users, names, fake-user state, and graph identity are restored.
+    GeometryNodeTree targets must use apply_geometry_node_patch.
 
     Parameters:
     - patch: Inline blender-node-tree-patch/1 object

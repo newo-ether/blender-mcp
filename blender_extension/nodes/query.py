@@ -9,6 +9,28 @@ from .serialization import _gn_link_record, _node_graph_record
 from .targets import _node_export_target, _node_target_capabilities
 
 
+_NODE_GRAPH_QUERY_TYPES = frozenset({
+    "fields",
+    "socket_links",
+    "named_attributes",
+    "shortest_path",
+    "upstream",
+    "downstream",
+    "slice",
+})
+_NODE_GRAPH_QUERY_FIELDS = frozenset({
+    "id",
+    "name",
+    "label",
+    "bl_idname",
+    "properties",
+    "inputs",
+    "outputs",
+    "special_structures",
+})
+_NODE_GRAPH_QUERY_DEFAULT_FIELDS = ("name", "label", "bl_idname")
+
+
 def _node_soft_limit_response(snapshot):
     """Return bounded guidance instead of carrying an oversized full graph."""
     if snapshot["scope"]["kind"] != "full":
@@ -62,9 +84,47 @@ def _node_query_graph(
     """Run bounded deterministic graph queries without exporting a full graph."""
     tree = target["tree"]
     query_type = str(query_type or "").strip().lower()
-    limit = int(limit)
+    if query_type not in _NODE_GRAPH_QUERY_TYPES:
+        choices = ", ".join(sorted(_NODE_GRAPH_QUERY_TYPES))
+        raise ValueError(f"query_type must be one of: {choices}")
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("limit must be an integer from 1 to 1000") from exc
     if not 1 <= limit <= 1000:
         raise ValueError("limit must be from 1 to 1000")
+    if isinstance(node_names, (str, bytes)) or not isinstance(
+        node_names or [], (list, tuple, set)
+    ):
+        raise ValueError("node_names must be an array of node names")
+    if any(not isinstance(name, str) or not name for name in node_names or []):
+        raise ValueError("node_names must contain non-empty strings")
+    if isinstance(fields, (str, bytes)) or not isinstance(
+        fields or [], (list, tuple, set)
+    ):
+        raise ValueError("fields must be an array of field names")
+    if any(not isinstance(field, str) or not field for field in fields or []):
+        raise ValueError("fields must contain non-empty strings")
+    fields = tuple(sorted(set(fields or ())))
+    from_node = str(from_node or "")
+    to_node = str(to_node or "")
+    attribute_name = str(attribute_name or "")
+    socket_id = str(socket_id or "")
+    if query_type != "fields" and fields:
+        raise ValueError("fields is only supported for query_type='fields'")
+    if query_type != "socket_links" and socket_id:
+        raise ValueError("socket_id is only supported for query_type='socket_links'")
+    if query_type != "named_attributes" and attribute_name:
+        raise ValueError(
+            "attribute_name is only supported for query_type='named_attributes'"
+        )
+    if query_type != "shortest_path" and (from_node or to_node):
+        raise ValueError(
+            "from_node and to_node are only supported for query_type='shortest_path'"
+        )
+    direction = str(direction or "downstream").strip().lower()
+    if direction not in {"upstream", "downstream", "both"}:
+        raise ValueError("direction must be upstream, downstream, or both")
     node_map = {node.name: node for node in tree.nodes}
     links = sorted(
         (_gn_link_record(link) for link in tree.links),
@@ -72,7 +132,8 @@ def _node_query_graph(
     )
     requested = set(node_names or [])
     if requested - set(node_map):
-        raise ValueError("One or more requested nodes do not exist")
+        missing = ", ".join(sorted(requested - set(node_map)))
+        raise ValueError(f"node_names contains unknown nodes: {missing}")
     records = []
     if query_type == "socket_links":
         if socket_id and len(requested) != 1:
@@ -91,6 +152,8 @@ def _node_query_graph(
     elif query_type == "named_attributes":
         wanted = str(attribute_name or "").casefold()
         for node in sorted(tree.nodes, key=lambda item: item.name):
+            if requested and node.name not in requested:
+                continue
             name = _node_named_attribute_name(node)
             if wanted and name.casefold() != wanted:
                 continue
@@ -109,6 +172,8 @@ def _node_query_graph(
                 "data_type": getattr(node, "data_type", None),
             })
     elif query_type == "shortest_path":
+        if not from_node or not to_node:
+            raise ValueError("from_node and to_node are required for shortest_path")
         if from_node not in node_map or to_node not in node_map:
             raise ValueError("from_node and to_node must name existing nodes")
         if direction not in {"upstream", "downstream", "both"}:
@@ -158,15 +223,18 @@ def _node_query_graph(
                         queue.append(neighbor)
         records = [{"node": name, "node_type": node_map[name].bl_idname} for name in sorted(included)]
     elif query_type == "fields":
-        allowed = set(fields or ["name", "label", "bl_idname"])
+        allowed = set(fields or _NODE_GRAPH_QUERY_DEFAULT_FIELDS)
+        unsupported = sorted(allowed - _NODE_GRAPH_QUERY_FIELDS)
+        if unsupported:
+            choices = ", ".join(sorted(_NODE_GRAPH_QUERY_FIELDS))
+            raise ValueError(
+                f"fields contains unsupported values: {', '.join(unsupported)}; "
+                f"expected: {choices}"
+            )
         for name in sorted(requested or set(node_map)):
             node = node_map[name]
             full = _node_graph_record(node, "operations")
             records.append({key: value for key, value in full.items() if key in allowed})
-    else:
-        raise ValueError(
-            "query_type must be fields, socket_links, named_attributes, shortest_path, upstream, downstream, or slice"
-        )
     total = len(records)
     records = records[:limit]
     snapshot = _node_export_target(target, "operations", list(requested), 0) if requested else None
@@ -182,8 +250,16 @@ def _node_query_graph(
             "to_node": to_node,
             "attribute_name": attribute_name,
             "socket_id": socket_id,
-            "direction": direction,
-            "fields": list(fields or []),
+            "direction": (
+                query_type
+                if query_type in {"upstream", "downstream"}
+                else direction
+            ),
+            "fields": list(
+                fields or _NODE_GRAPH_QUERY_DEFAULT_FIELDS
+                if query_type == "fields"
+                else fields
+            ),
             "limit": limit,
         },
         "total_matches": total,

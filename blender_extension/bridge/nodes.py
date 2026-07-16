@@ -28,6 +28,7 @@ from ..nodes.constants import (
 )
 from ..nodes.geometry_transactions import _gn_apply_patch_transaction
 from ..nodes.geometry_validation import _gn_validate_patch_runtime
+from ..nodes.editor_context import _node_editor_context
 from ..nodes.node_transactions import _node_apply_patch_transaction
 from ..nodes.node_validation import _node_validate_patch_runtime
 from ..nodes.query import _node_query_graph, _node_soft_limit_response, _node_tree_index
@@ -99,6 +100,22 @@ class NodeCommandsMixin:
     def get_runtime_automation_context(self):
         """Return live render, Action, compositor, and instance compatibility."""
         return _runtime_automation_context()
+
+    def get_node_editor_context(
+        self,
+        expected_file_session_id="",
+        expected_context_revision="",
+        max_editors=32,
+    ):
+        """Return deterministic live Node Editor UI context without mutation."""
+        from .. import state
+
+        return _node_editor_context(
+            state.file_session_id,
+            expected_file_session_id,
+            expected_context_revision,
+            max_editors,
+        )
 
     def ensure_scene_compositor_tree(
         self, scene_name, create_if_missing=False,

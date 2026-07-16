@@ -26,6 +26,7 @@ CORE_CASES = (
     ("geometry-scale", "blender_geometry_nodes_scale.py"),
     ("instance-lifecycle", "blender_instance_lifecycle.py"),
     ("node-corners", "blender_node_tree_corner_cases.py"),
+    ("node-editor-context", "blender_node_editor_context.py"),
     ("node-efficiency", "blender_node_tree_model_efficiency.py"),
     ("node-validation", "blender_node_tree_validation.py"),
     ("node-readonly", "blender_node_trees_readonly.py"),

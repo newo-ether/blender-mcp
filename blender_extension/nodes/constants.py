@@ -26,6 +26,8 @@ NODE_TREE_SNAPSHOT_SCHEMA = "blender-node-tree/1"
 
 NODE_TREE_INDEX_SCHEMA = "blender-node-tree-index/1"
 
+NODE_EDITOR_CONTEXT_SCHEMA = "blender-node-editor-context/1"
+
 NODE_TYPE_SCHEMA = "blender-node-type-schema/1"
 
 NODE_TREE_TYPES = {"GeometryNodeTree", "ShaderNodeTree", "CompositorNodeTree"}

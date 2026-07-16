@@ -75,12 +75,15 @@ def verify(dist: Path, version: str) -> list[Path]:
     extension_names = archive_files(assets[0])
     require_member(extension_names, "__init__.py", assets[0])
     require_member(extension_names, "blender_manifest.toml", assets[0])
+    require_member(extension_names, "nodes/editor_context.py", assets[0])
+    require_member(extension_names, "schemas/node-editor-context-v1.json", assets[0])
     require_member(extension_names, "schemas/node-tree-v1.json", assets[0])
     require_member(extension_names, "schemas/node-tree-patch-v1.json", assets[0])
 
     wheel_names = archive_files(assets[1])
     require_member(wheel_names, "blender_mcp/app.py", assets[1])
     require_member(wheel_names, "blender_mcp/tools/nodes.py", assets[1])
+    require_member(wheel_names, "blender_mcp/tools/node_trees.py", assets[1])
     require_member(wheel_names, "blender_mcp/protocol/node_patch.py", assets[1])
     require_suffix(
         wheel_names, "/blender_mcp/schemas/node-tree-v1.json", assets[1]
@@ -88,13 +91,20 @@ def verify(dist: Path, version: str) -> list[Path]:
     require_suffix(
         wheel_names, "/blender_mcp/schemas/node-tree-patch-v1.json", assets[1]
     )
+    require_suffix(
+        wheel_names, "/blender_mcp/schemas/node-editor-context-v1.json", assets[1]
+    )
 
     mcpb_names = archive_files(assets[2])
     require_suffix(mcpb_names, "/manifest.json", assets[2])
     require_suffix(mcpb_names, "/server/run.cmd", assets[2])
     require_suffix(mcpb_names, "/server/python/blender_mcp/app.py", assets[2])
     require_suffix(mcpb_names, "/server/python/blender_mcp/tools/nodes.py", assets[2])
+    require_suffix(mcpb_names, "/server/python/blender_mcp/tools/node_trees.py", assets[2])
     require_suffix(mcpb_names, "/server/schemas/node-tree-v1.json", assets[2])
+    require_suffix(
+        mcpb_names, "/server/schemas/node-editor-context-v1.json", assets[2]
+    )
 
     skill_root = ROOT / "skills" / "blender-mcp"
     expected_skill = {

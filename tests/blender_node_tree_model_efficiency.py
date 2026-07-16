@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import runpy
@@ -296,6 +297,56 @@ def model_tasks(server, namespace):
     return tasks
 
 
+def structured_metadata_budget(server):
+    nested = bpy.data.node_groups.new(PREFIX + "MetadataNested", "GeometryNodeTree")
+    tree = bpy.data.node_groups.new(PREFIX + "Metadata", "GeometryNodeTree")
+    group = tree.nodes.new("GeometryNodeGroup")
+    group.node_tree = nested
+    dynamic_nodes = 0
+    for input_type, output_type, collection_name, item_name in (
+        (
+            "GeometryNodeSimulationInput",
+            "GeometryNodeSimulationOutput",
+            "state_items",
+            "Velocity",
+        ),
+        (
+            "GeometryNodeRepeatInput",
+            "GeometryNodeRepeatOutput",
+            "repeat_items",
+            "Value",
+        ),
+    ):
+        if (
+            getattr(bpy.types, input_type, None) is None
+            or getattr(bpy.types, output_type, None) is None
+        ):
+            continue
+        output_node = tree.nodes.new(output_type)
+        input_node = tree.nodes.new(input_type)
+        input_node.pair_with_output(output_node)
+        getattr(output_node, collection_name).new("FLOAT", item_name)
+        dynamic_nodes += 1
+
+    snapshot = server.export_node_tree(tree_ref(tree), "operations")
+    without_metadata = copy.deepcopy(snapshot)
+    for node in without_metadata["tree"]["nodes"].values():
+        node["properties"].pop("node_tree", None)
+        node["properties"].pop("paired_input", None)
+        node["properties"].pop("paired_output", None)
+        node.pop("special_structures", None)
+        for socket in node["inputs"] + node["outputs"]:
+            socket.pop("name", None)
+    overhead_bytes = encoded_bytes(snapshot) - encoded_bytes(without_metadata)
+    assert_true(dynamic_nodes > 0, "No dynamic Zone nodes available for metadata budget")
+    assert_true(overhead_bytes <= 4096, f"Structured metadata overhead: {overhead_bytes}")
+    return {
+        "dynamic_nodes": dynamic_nodes,
+        "overhead_bytes": overhead_bytes,
+        "budget_bytes": 4096,
+    }
+
+
 def run_test():
     cleanup()
     active_scene = bpy.context.scene
@@ -319,11 +370,13 @@ def run_test():
         for domain, domain_trees in trees.items()
     }
     tasks = model_tasks(server, namespace)
+    metadata = structured_metadata_budget(server)
     result = {
         "version": list(bpy.app.version[:3]),
         "sizes": list(SIZES),
         "metrics": metrics,
         "tasks": tasks,
+        "structured_metadata": metadata,
         "all_tasks_succeeded": all(task["success"] for task in tasks.values()),
         "flat_json_default": all(
             item["flat_nodes_object"]

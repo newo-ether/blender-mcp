@@ -2,25 +2,49 @@
 
 ## Select the exact tree
 
-1. Call list_node_trees and filter by tree type or owner kind when possible.
-2. Select the returned owner-addressed tree_ref; do not identify embedded Shader or Compositor trees by display name alone.
-3. Check edit capability, library state, graph size, users, and revision before planning a mutation.
-4. For a missing Scene compositor tree, call ensure_scene_compositor_tree read-only first. Set create_if_missing=true only when the user requested creation or the requested edit clearly requires it.
+1. When the request refers to the visible, open, or current nodes, call get_node_editor_context first.
+   - UNIQUE_EDITOR or PINNED_EDITOR: use the selected editor and its tree_ref.
+   - MULTIPLE_EDITORS: show the bounded editor identities and require an explicit choice; never choose by focus, order, or recency.
+   - STALE_CONTEXT: refresh before using any UI-derived target.
+   - NO_EDITOR: ask the user to open one, or continue with owner discovery only when the request already names the target.
+2. Otherwise call list_node_trees and filter by tree type or owner kind when possible.
+3. Select the returned owner-addressed tree_ref; do not identify embedded Shader or Compositor trees by display name alone.
+4. Check edit capability, library state, graph size, users, and revision before planning a mutation.
+5. For a missing Scene compositor tree, call ensure_scene_compositor_tree read-only first. Set create_if_missing=true only when the user requested creation or the requested edit clearly requires it.
 
 The Geometry-specific list_geometry_node_trees family remains useful for exact group-name workflows. Prefer the generic owner-addressed family when Material, World, Light, Scene, or cross-domain identity matters.
 
 ## Inspect only the relevant subgraph
 
 1. Search get_node_tree_index with a distinctive node name, label, or type.
-2. Call export_node_tree with view=auto by default. It selects operations for a complete graph and semantic for a targeted subgraph. Pass selected node_names and neighbor_depth=1 for local rewiring.
-3. Treat the views as materially different context costs:
+2. Use query_node_graph before export when the question is bounded:
+   - fields for an allowlisted projection of compact node records;
+   - socket_links for incident links or one exact socket;
+   - named_attributes for Named Attribute readers and writers;
+   - shortest_path for one route between exact nodes;
+   - upstream, downstream, or slice for bounded reachability.
+3. Call export_node_tree with view=auto by default. It selects operations for a complete graph and semantic for a targeted subgraph. Pass selected node_names and neighbor_depth=1 for local rewiring.
+4. Treat the views as materially different context costs:
    - operations is the compact working view for formulas, operation enums, relevant defaults, interfaces, and links. Prefer it for most graph inspection, including targeted subgraphs that do not need complete socket or RNA records.
    - semantic is high-detail output with complete socket and RNA semantics. Request it only when a specific socket contract, property, or default is missing from operations.
    - layout contains node placement, dimensions, and parent frames for presentation work.
    - all is maximum-detail output combining semantic and layout data. It can consume substantial model context even for a medium graph. Never request all speculatively or merely for completeness.
-4. Remember that auto selects semantic for a targeted subgraph. Explicitly request view=operations when a targeted inspection only needs formulas, relevant defaults, interfaces, or links.
-5. Increase neighbor depth only when the current export omits a required connection. Escalate detail only for an identified missing fact.
-6. Record the returned revision and stable node names. Never invent node names from UI labels.
+5. Remember that auto selects semantic for a targeted subgraph. Explicitly request view=operations when a targeted inspection only needs formulas, relevant defaults, interfaces, or links.
+6. Increase neighbor depth only when the current export omits a required connection. Escalate detail only for an identified missing fact.
+7. Record the returned revision and stable node names. Never invent node names from UI labels.
+
+Use this routing rule:
+
+```text
+fields, paths, links       -> query_node_graph
+local formulas and wiring -> export operations
+exact socket/RNA contract  -> semantic export or node-type schema
+presentation               -> layout export
+```
+
+The fields query does not replace a targeted export when incident links and
+socket defaults are required together. Treat unsupported-field and invalid
+parameter diagnostics as authoritative; do not retry with guessed field names.
 
 For Geometry-specific tools, use get_geometry_node_tree_index and export_geometry_node_tree with the same targeted pattern.
 
@@ -34,13 +58,16 @@ For Geometry-specific tools, use get_geometry_node_tree_index and export_geometr
 
 ## Patch transaction
 
-1. Build a patch against the exact tree reference and exported base revision.
-2. Limit operations to the requested nodes, links, properties, socket defaults, or interface changes.
-3. Submit exactly one of an inline patch or a workspace-relative patch path.
-4. Call validate_node_tree_patch or validate_geometry_node_patch.
-5. Require valid=true, inspect diagnostics and semantic diff, and confirm that the plan matches the request.
-6. Call apply_node_tree_patch or apply_geometry_node_patch with keep_backup=true unless the user declines a backup.
-7. Read back the changed nodes plus one-hop neighbors and compare the new revision and intended connections.
+1. Select the mutation pair from the exact tree domain:
+   - GeometryNodeTree / NODE_GROUP: validate_geometry_node_patch, then apply_geometry_node_patch;
+   - ShaderNodeTree or CompositorNodeTree: validate_node_tree_patch, then apply_node_tree_patch.
+2. Build a patch against the exact tree reference and exported base revision.
+3. Limit operations to the requested nodes, links, properties, socket defaults, or interface changes.
+4. Submit exactly one of an inline patch or a workspace-relative patch path.
+5. Call the selected validator. Do not send a Geometry patch to the generic validator.
+6. Require valid=true, inspect diagnostics and semantic diff, and confirm that the plan matches the request.
+7. Call the matching apply tool with keep_backup=true unless the user declines a backup.
+8. Read back the changed nodes plus one-hop neighbors and compare the new revision and intended connections.
 
 For a single guarded sequence, use modify_verify_save with the same Patch plus
 bounded assertions over node_count, link_count, or interface_item_count. Keep

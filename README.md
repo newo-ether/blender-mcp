@@ -49,7 +49,7 @@ permanently change the user or machine execution policy. The ASCII
 [install.ps1](install.ps1). For a reproducible, version-pinned install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.11.4/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.11.4
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.12.0/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.12.0
 ```
 
 The explicit `TrimStart` removes the UTF-8 BOM carried by the localized full
@@ -64,7 +64,7 @@ Before changing the machine, the installer:
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
 4. verifies the wheel, Extension ZIP, portable Skill ZIP, and optional fallback MCPB against `SHA256SUMS.txt`;
 5. installs into a versioned environment such as
-   `%LOCALAPPDATA%\BlenderMCP\venv-1.11.4`;
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.12.0`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients;
 8. installs the same portable Skill for selected Codex and Claude Code clients,
@@ -266,11 +266,12 @@ Supported generic owners:
 
 | Tool | Purpose | Mutates Blender |
 | --- | --- | --- |
+| `get_node_editor_context` | Resolve visible Node Editors, pin state, active/selected nodes, and owner-addressed `tree_ref` values without guessing by focus or order. | No |
 | `list_node_trees` | List owner-addressed Geometry, Shader, and Compositor trees, users, capabilities, limits, and revisions. | No |
 | `ensure_scene_compositor_tree` | Inspect an exact Scene, or explicitly create and verify its missing compositor tree with rollback. | Only with `create_if_missing=true` |
 | `get_node_tree_index` | Search and page a compact index without putting the full graph in model context. | No |
 | `export_node_tree` | Return or write a full flat graph or targeted N-hop subgraph. | No |
-| `query_node_graph` | Project fields or query socket links, Named Attributes, shortest paths, and bounded slices. | No |
+| `query_node_graph` | Project allowlisted fields or query socket links, Named Attributes, shortest paths, upstream/downstream reachability, and bounded slices. | No |
 | `get_node_type_schema` | Probe exact runtime sockets, properties, dynamic structures, and owner restrictions. | No |
 | `validate_node_tree_patch` | Check structure, stale state, typed references, runtime semantics, and limits on a disposable copy. | No |
 | `apply_node_tree_patch` | Revalidate, commit through the owner adapter, re-export, and roll back exactly on failure. | Yes |
@@ -283,16 +284,23 @@ import is a separate opt-in transaction.
 
 ### Recommended workflow
 
-1. For a Scene with no compositor tree, call `ensure_scene_compositor_tree`
+1. When the request refers to "the open/current nodes", call
+   `get_node_editor_context`. Continue automatically only for
+   `UNIQUE_EDITOR` or `PINNED_EDITOR`; require an explicit editor choice for
+   `MULTIPLE_EDITORS`, and refresh on `STALE_CONTEXT`.
+2. For a Scene with no compositor tree, call `ensure_scene_compositor_tree`
    read-only first, then repeat with `create_if_missing=true` only when wanted.
-2. Call `list_node_trees` and retain the exact `tree_ref`.
-3. Search large graphs with `get_node_tree_index`.
-4. Export only the relevant nodes and neighbors. Keep `view="auto"`: complete
+3. Call `list_node_trees` and retain the exact `tree_ref` when no visible
+   editor uniquely identifies the target.
+4. Search large graphs with `get_node_tree_index`.
+5. Export only the relevant nodes and neighbors. Keep `view="auto"`: complete
    graphs select operations, while targeted subgraphs select semantic detail.
-5. Put the returned `revision` and `tree_ref` into a small patch JSON file.
-6. Edit that file with the client's normal file-edit tool.
-7. Call `validate_node_tree_patch`.
-8. Apply only a valid patch, then inspect `actual_diff`, `new_revision`, users,
+6. Put the returned `revision` and `tree_ref` into a small patch JSON file.
+7. Edit that file with the client's normal file-edit tool.
+8. For Geometry use `validate_geometry_node_patch`; for Shader or Compositor
+   use `validate_node_tree_patch`.
+9. Apply with the matching Geometry or generic tool only after validation, then
+   inspect `actual_diff`, `new_revision`, users,
    and backup disposition.
 
 For an atomic agent-facing sequence, `modify_verify_save` combines dry-run
@@ -373,7 +381,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.11.4-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.12.0-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -381,7 +389,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.11.4-py3-none-any.whl
+python -m pip install ./blender_mcp-1.12.0-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:

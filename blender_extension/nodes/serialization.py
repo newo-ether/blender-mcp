@@ -13,6 +13,10 @@ from .constants import (
     GEOMETRY_NODES_VIEWS,
     NODE_TREE_SNAPSHOT_SCHEMA,
 )
+from .dynamic import (
+    _node_dynamic_collection_names,
+    _node_dynamic_collection_record,
+)
 
 
 def _node_normalize_view(view, label="Node tree"):
@@ -89,6 +93,9 @@ def _gn_socket_record(socket, direction, index, include_default=True):
 
 def _gn_operation_socket_record(socket, direction, index):
     record = {"id": _gn_socket_id(socket, direction, index)}
+    identifier = getattr(socket, "identifier", "") or socket.name
+    if socket.name != identifier:
+        record["name"] = socket.name
     if not bool(socket.enabled):
         record["enabled"] = False
     if bool(getattr(socket, "is_multi_input", False)):
@@ -99,6 +106,18 @@ def _gn_operation_socket_record(socket, direction, index):
         except (AttributeError, TypeError, ValueError):
             pass
     return record
+
+def _gn_explicit_node_references(node):
+    """Expose stable references that Blender may mark as read-only RNA."""
+    result = {}
+    node_tree = getattr(node, "node_tree", None)
+    if isinstance(node_tree, bpy.types.NodeTree):
+        result["node_tree"] = _gn_json_value(node_tree)
+    for identifier in ("paired_input", "paired_output"):
+        paired_node = getattr(node, identifier, None)
+        if isinstance(paired_node, bpy.types.Node):
+            result[identifier] = _gn_json_value(paired_node)
+    return result
 
 def _gn_operation_properties(node):
     """Keep operation-defining enums and non-default writable scalar values."""
@@ -126,6 +145,8 @@ def _gn_operation_properties(node):
                 include = False
         if include:
             result[identifier] = value
+    for identifier, value in _gn_explicit_node_references(node).items():
+        result.setdefault(identifier, value)
     return result
 
 def _gn_operation_node_record(node):
@@ -187,6 +208,8 @@ def _gn_node_record(node, view):
             excludes=_GN_NODE_PROPERTY_EXCLUDES,
             include_readonly={"paired_input", "paired_output"},
         )
+        for identifier, value in _gn_explicit_node_references(node).items():
+            record["properties"].setdefault(identifier, value)
         record["inputs"] = [
             _gn_socket_record(socket, "INPUT", index)
             for index, socket in enumerate(node.inputs)
@@ -555,6 +578,10 @@ def _node_special_structure_schema(node):
             ),
             "items": items,
         })
+    for identifier in _node_dynamic_collection_names(node):
+        structures.append(
+            _node_dynamic_collection_record(node, identifier, _gn_json_value)
+        )
     return structures
 
 def _node_graph_record(node, view):

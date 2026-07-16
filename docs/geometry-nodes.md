@@ -42,6 +42,12 @@ The public contracts are in [`schemas/`](../schemas):
 
 ## Recommended file-edit workflow
 
+Use this document's `validate_geometry_node_patch` and
+`apply_geometry_node_patch` for every `GeometryNodeTree` / `NODE_GROUP`
+mutation. The generic `validate_node_tree_patch` and `apply_node_tree_patch`
+pair is reserved for Shader and Compositor trees. This split preserves modifier
+inputs, shared-tree policy, rollback, and Geometry v1 compatibility.
+
 Set `BLENDER_MCP_WORKSPACE` to the project directory in which the MCP process is
 allowed to read and write JSON files. If it is unset, the server's current
 working directory is the boundary. Paths outside this boundary, non-JSON files,

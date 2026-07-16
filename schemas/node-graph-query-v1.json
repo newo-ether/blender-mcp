@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/newo-ether/blender-mcp/schemas/node-graph-query-v1.json",
+  "title": "Blender MCP bounded node-graph query v1",
+  "type": "object",
+  "required": [
+    "schema", "tree_ref", "revision", "query_type", "query",
+    "total_matches", "truncated", "records"
+  ],
+  "properties": {
+    "schema": {"const": "blender-node-graph-query/1"},
+    "tree_ref": {"$ref": "#/$defs/treeRef"},
+    "revision": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "query_type": {
+      "enum": [
+        "fields", "socket_links", "named_attributes", "shortest_path",
+        "upstream", "downstream", "slice"
+      ]
+    },
+    "query": {"$ref": "#/$defs/query"},
+    "total_matches": {"type": "integer", "minimum": 0},
+    "truncated": {"type": "boolean"},
+    "records": {"type": "array"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"query_type": {"enum": ["socket_links", "shortest_path"]}}},
+      "then": {"properties": {"records": {"items": {"$ref": "#/$defs/link"}}}}
+    },
+    {
+      "if": {"properties": {"query_type": {"const": "named_attributes"}}},
+      "then": {"properties": {"records": {"items": {"$ref": "#/$defs/namedAttribute"}}}}
+    },
+    {
+      "if": {"properties": {"query_type": {"enum": ["upstream", "downstream", "slice"]}}},
+      "then": {"properties": {"records": {"items": {"$ref": "#/$defs/nodeIdentity"}}}}
+    },
+    {
+      "if": {"properties": {"query_type": {"const": "fields"}}},
+      "then": {
+        "properties": {
+          "query": {"properties": {"fields": {"minItems": 1}}},
+          "records": {"items": {"$ref": "#/$defs/projectedNode"}}
+        }
+      },
+      "else": {"properties": {"query": {"properties": {"fields": {"maxItems": 0}}}}}
+    },
+    {
+      "if": {"properties": {"query_type": {"const": "shortest_path"}}},
+      "then": {
+        "properties": {
+          "query": {
+            "properties": {
+              "from_node": {"minLength": 1},
+              "to_node": {"minLength": 1}
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "query": {
+            "properties": {
+              "from_node": {"maxLength": 0},
+              "to_node": {"maxLength": 0}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"query_type": {"enum": ["upstream", "downstream", "slice"]}}},
+      "then": {"properties": {"query": {"properties": {"node_names": {"minItems": 1}}}}}
+    },
+    {
+      "if": {"properties": {"query_type": {"const": "named_attributes"}}},
+      "else": {"properties": {"query": {"properties": {"attribute_name": {"maxLength": 0}}}}}
+    },
+    {
+      "if": {"properties": {"query_type": {"const": "socket_links"}}},
+      "else": {"properties": {"query": {"properties": {"socket_id": {"maxLength": 0}}}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "query_type": {"const": "socket_links"},
+          "query": {"properties": {"socket_id": {"minLength": 1}}}
+        }
+      },
+      "then": {
+        "properties": {
+          "query": {"properties": {"node_names": {"minItems": 1, "maxItems": 1}}}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "treeRef": {
+      "type": "object",
+      "required": ["tree_type", "owner"],
+      "properties": {
+        "tree_type": {"enum": ["GeometryNodeTree", "ShaderNodeTree", "CompositorNodeTree"]},
+        "owner": {
+          "type": "object",
+          "required": ["kind", "name"],
+          "properties": {
+            "kind": {"enum": ["MATERIAL", "WORLD", "LIGHT", "SCENE", "NODE_GROUP"]},
+            "name": {"type": "string", "minLength": 1, "maxLength": 1024}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "query": {
+      "type": "object",
+      "required": [
+        "node_names", "from_node", "to_node", "attribute_name", "socket_id",
+        "direction", "fields", "limit"
+      ],
+      "properties": {
+        "node_names": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "from_node": {"type": "string"},
+        "to_node": {"type": "string"},
+        "attribute_name": {"type": "string"},
+        "socket_id": {"type": "string"},
+        "direction": {"enum": ["upstream", "downstream", "both"]},
+        "fields": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "id", "name", "label", "bl_idname", "properties", "inputs",
+              "outputs", "special_structures"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "limit": {"type": "integer", "minimum": 1, "maximum": 1000}
+      },
+      "additionalProperties": false
+    },
+    "link": {
+      "type": "object",
+      "required": ["from_node", "from_socket", "to_node", "to_socket"],
+      "properties": {
+        "from_node": {"type": "string"},
+        "from_socket": {"type": "string"},
+        "to_node": {"type": "string"},
+        "to_socket": {"type": "string"},
+        "multi_input_sort_id": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "namedAttribute": {
+      "type": "object",
+      "required": ["node", "node_type", "attribute", "access", "data_type"],
+      "properties": {
+        "node": {"type": "string"},
+        "node_type": {"type": "string"},
+        "attribute": {"type": "string"},
+        "access": {"enum": ["reader", "writer"]},
+        "data_type": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "nodeIdentity": {
+      "type": "object",
+      "required": ["node", "node_type"],
+      "properties": {
+        "node": {"type": "string"},
+        "node_type": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "projectedNode": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "label": {"type": "string"},
+        "bl_idname": {"type": "string"},
+        "properties": {"type": "object"},
+        "inputs": {"type": "array"},
+        "outputs": {"type": "array"},
+        "special_structures": {"type": "array"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

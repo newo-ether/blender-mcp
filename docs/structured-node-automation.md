@@ -16,14 +16,19 @@ stable random access, deterministic serialization, and small reviewable patches.
 Flattening does not make a complete large graph cheap for a Transformer. Socket
 and RNA metadata still dominate the payload, so the intended context path is:
 
-1. `list_node_trees` to choose an exact owner.
-2. `get_node_tree_index` to search and page node names and types.
-3. `export_node_tree` with `view="operations"`, selected names, and a small
+1. `get_node_editor_context` when the request refers to the visible/current
+   editor, continuing only when its state identifies one editor unambiguously.
+2. `list_node_trees` to choose an exact owner when UI context is absent or the
+   request names a datablock directly.
+3. `get_node_tree_index` to search and page node names and types.
+4. `query_node_graph` for projected fields, links, paths, Named Attributes, or
+   a bounded directional slice.
+5. `export_node_tree` with `view="operations"`, selected names, and a small
    neighbor depth when only formulas, socket values, and links are needed.
-4. `get_node_type_schema` only when an exact runtime socket or property is
+6. `get_node_type_schema` only when an exact runtime socket or property is
    needed.
-5. Edit a small patch with the client's normal file-edit tool.
-6. Validate, apply, and inspect the actual diff.
+7. Edit a small patch with the client's normal file-edit tool.
+8. Validate, apply, and inspect the actual diff.
 
 ## Owner references
 
@@ -39,17 +44,59 @@ their owning Blender ID because their display names are not reliable identities.
 Always retain the complete `tree_ref` returned by `list_node_trees`; do not
 reconstruct it from a UI label.
 
+Mutation tools are selected by tree domain, not by whichever validator is
+easiest to discover:
+
+```text
+GeometryNodeTree / NODE_GROUP
+  -> validate_geometry_node_patch
+  -> apply_geometry_node_patch
+
+ShaderNodeTree or CompositorNodeTree
+  -> validate_node_tree_patch
+  -> apply_node_tree_patch
+```
+
+For a local Geometry tree, generic capabilities report `validate=false`,
+`apply=false`, and `mutation_reason="geometry_uses_v1_mutation_tools"`.
+Linked/read-only targets report both false; local library overrides may be
+dry-run with the generic validator but remain non-applicable. A
+`recommended_tools` capability is deliberately not added to v1 because its
+strict schema rejects additional capability properties; first-class tool names
+belong in a versioned v2 envelope.
+
 ## Public tools
 
 | Tool | Role | Changes Blender |
 | --- | --- | --- |
+| `get_node_editor_context` | Resolve visible Node Editors and their current owner-addressed tree without implicit focus/order selection | No |
 | `list_node_trees` | Discover owners, capabilities, revisions, size, users, and limits | No |
 | `ensure_scene_compositor_tree` | Inspect a Scene or explicitly initialize its missing compositor tree | Only with `create_if_missing=true` |
 | `get_node_tree_index` | Search/page a compact index | No |
+| `query_node_graph` | Project fields or query links, Named Attributes, paths, and bounded slices | No |
 | `export_node_tree` | Return or atomically write a full graph or targeted N-hop subgraph | No |
 | `get_node_type_schema` | Probe the live Blender version in an exact owner context | No |
 | `validate_node_tree_patch` | Run structure and runtime checks on a disposable copy | No |
 | `apply_node_tree_patch` | Revalidate, commit a verified copy, and verify or roll back | Yes |
+
+## Live Node Editor context
+
+`get_node_editor_context` returns `blender-node-editor-context/1` with a
+file-session-scoped `context_id`, deterministic `context_revision`, pin state,
+active and selected node names, navigation path, and resolvable `tree_ref`
+values. Its state machine is explicit:
+
+| State | Meaning | Action |
+| --- | --- | --- |
+| `NO_EDITOR` | No Node Editor is open | Open one or select by owner with `list_node_trees` |
+| `UNIQUE_EDITOR` | Exactly one unpinned editor exists | Use `selected_context_id` and its `tree_ref` |
+| `PINNED_EDITOR` | Exactly one pinned editor exists | Honor the pinned target |
+| `MULTIPLE_EDITORS` | More than one editor exists | Require an explicit choice; never infer from focus, order, or recency |
+| `STALE_CONTEXT` | The expected file session or context revision changed | Refresh before using any editor target |
+
+Pass the previous `file_session_id` and `context_revision` back as expectations
+when a later operation depends on the same UI target. `selected_context_id` is
+null for ambiguous and stale states.
 
 The JSON contracts live in [`schemas/`](../schemas). Both validation and
 application accept exactly one of an inline `patch` or a workspace-relative
@@ -59,6 +106,34 @@ diffable, and easy to edit incrementally.
 The `operations` export view omits inherited RNA metadata while retaining node
 operation enums, non-default writable scalars, enabled/linked socket defaults,
 interfaces, and links. It uses the same full-graph revision as every other view.
+
+## Bounded graph queries
+
+`query_node_graph` returns `blender-node-graph-query/1` and the same full-graph
+revision as exports. Its query types are:
+
+| Need | Query | Required parameters |
+| --- | --- | --- |
+| Selected compact fields | `fields` | Optional `node_names`; optional allowlisted `fields` |
+| Incident or exact-socket links | `socket_links` | Optional `node_names`; `socket_id` requires exactly one name |
+| Named Attribute readers/writers | `named_attributes` | Optional `node_names` and exact `attribute_name` |
+| One shortest path | `shortest_path` | `from_node`, `to_node`; optional `direction` |
+| Directional reachability | `upstream`, `downstream` | `node_names` |
+| Bounded bidirectional/directional reachability | `slice` | `node_names`; optional `direction` |
+
+Use this routing rule:
+
+```text
+fields, paths, links       -> query_node_graph
+local formulas and wiring -> export operations
+exact socket/RNA contract  -> semantic export or node-type schema
+presentation               -> layout export
+```
+
+The `fields` query projects compact node records. It does not replace a
+targeted operations export when incident links and socket defaults are both
+needed. Unknown projected fields and invalid parameter combinations fail with
+parameter-specific errors instead of silently producing partial records.
 
 ## Empty Scene compositor setup
 

@@ -127,6 +127,43 @@ def run_test():
         PREFIX + "GeometryGroup", "GeometryNodeTree"
     )
     geometry_group.nodes.new("GeometryNodeMeshCube")
+    named_attribute_nodes = []
+    for suffix in ("A", "B"):
+        node = geometry_group.nodes.new("GeometryNodeInputNamedAttribute")
+        node.name = f"Velocity Reader {suffix}"
+        node.inputs["Name"].default_value = "velocity"
+        named_attribute_nodes.append(node.name)
+    zone_items = []
+    for input_type, output_type, collection_name, item_name in (
+        (
+            "GeometryNodeSimulationInput",
+            "GeometryNodeSimulationOutput",
+            "state_items",
+            "Velocity",
+        ),
+        (
+            "GeometryNodeRepeatInput",
+            "GeometryNodeRepeatOutput",
+            "repeat_items",
+            "Value",
+        ),
+    ):
+        if (
+            getattr(bpy.types, input_type, None) is None
+            or getattr(bpy.types, output_type, None) is None
+        ):
+            continue
+        output_node = geometry_group.nodes.new(output_type)
+        input_node = geometry_group.nodes.new(input_type)
+        input_node.pair_with_output(output_node)
+        collection = getattr(output_node, collection_name)
+        item = collection.new("FLOAT", item_name)
+        zone_items.append({
+            "input": input_node.name,
+            "output": output_node.name,
+            "collection": collection_name,
+            "item_name": item.name,
+        })
 
     listing = server.list_node_trees()
     listed_refs = {
@@ -148,9 +185,20 @@ def run_test():
         expected_apply = expected["tree_type"] in {
             "ShaderNodeTree", "CompositorNodeTree",
         }
+        capabilities = listed_refs[key]["capabilities"]
         assert_true(
-            listed_refs[key]["capabilities"]["apply"] == expected_apply,
+            capabilities["apply"] == expected_apply
+            and capabilities["validate"] == expected_apply,
             f"unexpected apply capability for {expected}",
+        )
+        expected_reason = (
+            "available"
+            if expected_apply
+            else "geometry_uses_v1_mutation_tools"
+        )
+        assert_true(
+            capabilities["mutation_reason"] == expected_reason,
+            f"unexpected mutation route for {expected}",
         )
 
     shader_only = server.list_node_trees(
@@ -168,6 +216,7 @@ def run_test():
     material_ref = tree_ref("ShaderNodeTree", "MATERIAL", material.name)
     first = server.export_node_tree(material_ref, "semantic")
     second = server.export_node_tree(material_ref, "semantic")
+    material_operations = server.export_node_tree(material_ref, "operations")
     assert_true(first == second, "unchanged material export is not deterministic")
     assert_true(first["schema"] == "blender-node-tree/1", "wrong generic schema")
     assert_true(first["tree_ref"] == material_ref, "tree_ref drifted")
@@ -184,6 +233,134 @@ def run_test():
         any(user["id_type"] == "Mesh" for user in first["users"] if user["kind"] == "ID"),
         "Material user map missing Mesh",
     )
+    for snapshot in (first, material_operations):
+        group_reference = snapshot["tree"]["nodes"][shader_group_node.name][
+            "properties"
+        ]["node_tree"]
+        assert_true(
+            group_reference["$type"] == "ID"
+            and group_reference["id_type"] == "ShaderNodeTree"
+            and group_reference["name"] == shader_group.name
+            and group_reference["library"] is None,
+            f"Shader group reference missing from {snapshot['view']} view",
+        )
+    compact_output = material_operations["tree"]["nodes"][shader_group_node.name][
+        "outputs"
+    ][0]
+    semantic_output = first["tree"]["nodes"][shader_group_node.name]["outputs"][0]
+    assert_true(
+        compact_output["id"] == semantic_output["id"],
+        "Compact socket display metadata changed the stable socket ID",
+    )
+    if semantic_output["name"] != semantic_output["identifier"]:
+        assert_true(
+            compact_output.get("name") == semantic_output["name"],
+            "Compact socket omitted its human-readable name",
+        )
+
+    material_link = first["tree"]["links"][0]
+    query_cases = {
+        "fields": server.query_node_graph(
+            material_ref,
+            "fields",
+            node_names=[shader_group_node.name],
+            fields=["name", "bl_idname", "properties"],
+        ),
+        "socket_links": server.query_node_graph(
+            material_ref,
+            "socket_links",
+            node_names=[material_link["from_node"]],
+            socket_id=material_link["from_socket"],
+        ),
+        "shortest_path": server.query_node_graph(
+            material_ref,
+            "shortest_path",
+            from_node=material_link["from_node"],
+            to_node=material_link["to_node"],
+        ),
+        "upstream": server.query_node_graph(
+            material_ref,
+            "upstream",
+            node_names=[material_link["to_node"]],
+        ),
+        "downstream": server.query_node_graph(
+            material_ref,
+            "downstream",
+            node_names=[material_link["from_node"]],
+        ),
+        "slice": server.query_node_graph(
+            material_ref,
+            "slice",
+            node_names=[material_link["to_node"]],
+            direction="both",
+        ),
+    }
+    for query_type, query_result in query_cases.items():
+        assert_true(
+            query_result["schema"] == "blender-node-graph-query/1"
+            and query_result["query_type"] == query_type
+            and query_result["revision"] == first["revision"],
+            f"Invalid {query_type} query envelope",
+        )
+        repeated = server.query_node_graph(
+            material_ref,
+            query_type,
+            **{
+                "fields": {
+                    "node_names": [shader_group_node.name],
+                    "fields": ["name", "bl_idname", "properties"],
+                },
+                "socket_links": {
+                    "node_names": [material_link["from_node"]],
+                    "socket_id": material_link["from_socket"],
+                },
+                "shortest_path": {
+                    "from_node": material_link["from_node"],
+                    "to_node": material_link["to_node"],
+                },
+                "upstream": {"node_names": [material_link["to_node"]]},
+                "downstream": {"node_names": [material_link["from_node"]]},
+                "slice": {
+                    "node_names": [material_link["to_node"]],
+                    "direction": "both",
+                },
+            }[query_type],
+        )
+        assert_true(repeated == query_result, f"{query_type} query is not deterministic")
+    assert_true(
+        query_cases["fields"]["records"][0]["properties"]["node_tree"]["name"]
+        == shader_group.name,
+        "Field projection omitted compact group identity",
+    )
+    assert_true(
+        query_cases["socket_links"]["records"][0] == material_link,
+        "Socket-link query changed stable link identity",
+    )
+
+    for invalid_kwargs, expected_text in (
+        (
+            {"query_type": "fields", "fields": ["unknown_field"]},
+            "fields contains unsupported values: unknown_field",
+        ),
+        (
+            {"query_type": "upstream", "node_names": ["Missing Node"]},
+            "node_names contains unknown nodes: Missing Node",
+        ),
+        (
+            {"query_type": "shortest_path", "from_node": material_link["from_node"]},
+            "from_node and to_node are required for shortest_path",
+        ),
+        (
+            {"query_type": "socket_links", "fields": ["name"]},
+            "fields is only supported for query_type='fields'",
+        ),
+    ):
+        try:
+            server.query_node_graph(material_ref, **invalid_kwargs)
+        except ValueError as exc:
+            assert_true(expected_text in str(exc), f"Wrong query diagnostic: {exc}")
+        else:
+            raise AssertionError(f"Invalid query was accepted: {invalid_kwargs}")
 
     index = server.get_node_tree_index(material_ref, query="Reference", limit=10)
     assert_true(index["revision"] == first["revision"], "index revision mismatch")
@@ -205,6 +382,7 @@ def run_test():
 
     scene_ref = tree_ref("CompositorNodeTree", "SCENE", compositor_scene.name)
     scene_export = server.export_node_tree(scene_ref, "all")
+    scene_operations = server.export_node_tree(scene_ref, "operations")
     assert_true(
         scene_export["capabilities"]["transaction_adapter"] == expected_scene_adapter,
         "wrong Scene compositor adapter",
@@ -213,6 +391,69 @@ def run_test():
         scene_export["owner"]["kind"] == "SCENE",
         "Scene owner metadata missing",
     )
+    for snapshot in (scene_export, scene_operations):
+        group_reference = snapshot["tree"]["nodes"][compositor_group_node.name][
+            "properties"
+        ]["node_tree"]
+        assert_true(
+            group_reference["id_type"] == "CompositorNodeTree"
+            and group_reference["name"] == compositor_group.name,
+            f"Compositor group reference missing from {snapshot['view']} view",
+        )
+
+    geometry_ref = tree_ref(
+        "GeometryNodeTree", "NODE_GROUP", geometry_group.name
+    )
+    geometry_semantic = server.export_node_tree(geometry_ref, "semantic")
+    geometry_operations = server.export_node_tree(geometry_ref, "operations")
+    geometry_layout = server.export_node_tree(geometry_ref, "layout")
+    assert_true(
+        geometry_semantic["revision"]
+        == geometry_operations["revision"]
+        == geometry_layout["revision"],
+        "Geometry revisions drifted across views",
+    )
+    named_attributes = server.query_node_graph(
+        geometry_ref,
+        "named_attributes",
+        node_names=named_attribute_nodes,
+        attribute_name="velocity",
+        limit=1,
+    )
+    assert_true(
+        named_attributes["revision"] == geometry_semantic["revision"]
+        and named_attributes["total_matches"] == 2
+        and named_attributes["truncated"]
+        and len(named_attributes["records"]) == 1,
+        "Named Attribute query did not filter and truncate deterministically",
+    )
+    for zone in zone_items:
+        compact_input = geometry_operations["tree"]["nodes"][zone["input"]]
+        pair = compact_input["properties"].get("paired_output")
+        assert_true(
+            pair and pair["name"] == zone["output"],
+            f"Compact Zone pair missing for {zone['input']}",
+        )
+        compact_output = geometry_operations["tree"]["nodes"][zone["output"]]
+        structure = next(
+            item for item in compact_output["special_structures"]
+            if item["identifier"] == zone["collection"]
+        )
+        named_item = next(
+            item for item in structure["items"]
+            if item["values"].get("name") == zone["item_name"]
+        )
+        assert_true(
+            named_item["index"] >= 0
+            and bool(named_item["values"].get("socket_type")),
+            f"Dynamic item identity missing for {zone['collection']}",
+        )
+        layout_output = geometry_layout["tree"]["nodes"][zone["output"]]
+        assert_true(
+            "special_structures" not in layout_output
+            and layout_output["properties"] == {},
+            "Layout-only export leaked dynamic semantic metadata",
+        )
 
     ramp_schema = server.get_node_type_schema(
         "ShaderNodeTree", "ShaderNodeValToRGB", "MATERIAL", "compact"
@@ -267,6 +508,8 @@ def run_test():
         "material_revision": first["revision"],
         "material_bytes": first["stats"]["json_bytes"],
         "targeted_bytes": targeted["stats"]["json_bytes"],
+        "zone_items": len(zone_items),
+        "query_types": len(query_cases) + 1,
         "active_scene_unchanged": bpy.context.scene == active_scene,
     }
     assert_true(result["active_scene_unchanged"], "active Scene changed")

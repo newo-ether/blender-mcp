@@ -233,22 +233,26 @@ def _node_target_capabilities(target):
     )
     if not editable:
         mutation_reason = "linked_or_read_only"
+        validate_supported = False
         apply_supported = False
     elif is_override:
         mutation_reason = "library_override_apply_not_supported"
+        validate_supported = True
         apply_supported = False
     elif target["domain"] in {"shader", "compositor"}:
         mutation_reason = "available"
+        validate_supported = True
         apply_supported = True
     else:
-        mutation_reason = "geometry_uses_v1_apply_tool"
+        mutation_reason = "geometry_uses_v1_mutation_tools"
+        validate_supported = False
         apply_supported = False
     return {
         "read": True,
         "index": True,
         "export": True,
         "schema": True,
-        "validate": editable,
+        "validate": validate_supported,
         "apply": apply_supported,
         "editable": editable,
         "mutation_reason": mutation_reason,
