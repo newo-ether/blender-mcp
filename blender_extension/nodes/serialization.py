@@ -448,6 +448,7 @@ def _gn_interface_record(item):
         for property_name in (
             "default_value", "default_attribute_name", "attribute_domain",
             "default_input", "structure_type", "force_non_field",
+            "min_value", "max_value",
         ):
             if hasattr(item, property_name):
                 try:
@@ -475,7 +476,9 @@ def _gn_operation_interface_record(item):
     full = _gn_interface_record(item)
     keys = {
         "item_type", "identifier", "name", "parent", "in_out", "socket_type",
-        "default", "default_input", "structure_type",
+        "description", "default", "hide_value", "default_attribute_name",
+        "attribute_domain", "default_input", "structure_type", "force_non_field",
+        "min_value", "max_value", "default_closed",
     }
     return {key: value for key, value in full.items() if key in keys}
 

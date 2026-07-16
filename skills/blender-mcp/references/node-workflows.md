@@ -18,6 +18,7 @@
 4. Select the returned owner-addressed tree_ref; do not identify embedded Shader or Compositor trees by display name alone.
 5. Check edit capability, library state, graph size, users, and revision before planning a mutation.
 6. For a missing Scene compositor tree, call ensure_scene_compositor_tree read-only first. Set create_if_missing=true only when the user requested creation or the requested edit clearly requires it.
+7. For a missing standalone Geometry, Shader, or Compositor group, call create_node_group and continue from its returned tree_ref and initial revision. For a Geometry Nodes modifier workflow, call ensure_geometry_nodes_modifier read-only first; enable object creation, modifier creation, or reassignment only when the requested outcome authorizes that mutation.
 
 The Geometry-specific list_geometry_node_trees family remains useful for exact group-name workflows. Prefer the generic owner-addressed family when Material, World, Light, Scene, or cross-domain identity matters.
 
@@ -107,6 +108,19 @@ file after verification, while required rejects an Untitled file before mutation
 Use add_dynamic_item, remove_dynamic_item, and set_dynamic_item only on collections reported by the live node schema. Prefer add_foreach_zone and add_closure_zone over constructing paired zone nodes manually. Blender-version rejection is authoritative and the transaction must leave the original tree unchanged.
 
 Never apply after transport-stage validation failure. Script nodes and File Output mutations fail closed in the generic transaction surface; do not evade those safeguards.
+
+## Minimize Python in node workflows
+
+Use the structured surface for node-group creation, Geometry Nodes host/modifier setup, interface panels and sockets, nodes, links, properties, defaults, validation, transactions, and readback. execute_blender_code is reserved for a confirmed capability gap.
+
+When a gap remains:
+
+1. Name the missing structured primitive precisely.
+2. Use Python only for that primitive; do not rebuild the surrounding graph in the same script.
+3. Export the affected tree immediately after the call and obtain a fresh revision.
+4. Resume with runtime schema inspection and validated patches for all remaining work.
+
+An entire graph may be scripted only when the graph cannot be represented by the structured protocol and the unsupported part cannot be isolated. Do not choose whole-graph Python merely because it is shorter to write.
 
 ## Evaluate Blender 5.2 List migrations
 

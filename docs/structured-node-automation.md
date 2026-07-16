@@ -71,7 +71,9 @@ belong in a versioned v2 envelope.
 | --- | --- | --- |
 | `get_node_editor_context` | Resolve visible Node Editors and their current owner-addressed tree without implicit focus/order selection | No |
 | `list_node_trees` | Discover owners, capabilities, revisions, size, users, and limits | No |
+| `create_node_group` | Create an empty local Geometry, Shader, or Compositor group with an initial revision | Yes |
 | `ensure_scene_compositor_tree` | Inspect a Scene or explicitly initialize its missing compositor tree | Only with `create_if_missing=true` |
+| `ensure_geometry_nodes_modifier` | Inspect a Geometry Nodes host/modifier or explicitly create/assign it | Only with explicit create/reassign flags |
 | `get_node_tree_index` | Search/page a compact index | No |
 | `query_node_graph` | Project fields or query links, Named Attributes, paths, and bounded slices | No |
 | `export_node_tree` | Return or atomically write a full graph or targeted N-hop subgraph | No |
@@ -161,7 +163,8 @@ Supported generic operations are:
 - graph: `add_node`, `remove_node`, `rename_node`, `add_link`, `remove_link`;
 - values: `set_node_property`, `set_socket_default`;
 - presentation: `set_node_layout`, `set_annotation`;
-- groups: `add_interface_socket`, `remove_interface_socket`;
+- groups: `add_interface_panel`, `add_interface_socket`,
+  `remove_interface_socket`, `set_interface_item`;
 - dynamic data: `set_color_ramp`, `set_curve_mapping`.
 
 New nodes use a patch-local `id`. Later operations in the same patch may use

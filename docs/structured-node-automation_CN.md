@@ -50,7 +50,9 @@ ShaderNodeTree 或 CompositorNodeTree
 | --- | --- | --- |
 | `get_node_editor_context` | 解析可见节点编辑器及当前归属节点树，不按焦点或顺序猜测 | 否 |
 | `list_node_trees` | 列出归属对象、能力、revision、规模、使用者和上限 | 否 |
+| `create_node_group` | 创建空的本地几何、着色器或合成器节点组，并返回初始 revision | 是 |
 | `ensure_scene_compositor_tree` | 检查 Scene，或显式初始化缺失的合成树 | 仅 `create_if_missing=true` 时 |
+| `ensure_geometry_nodes_modifier` | 检查几何节点宿主/修改器，或显式创建并分配节点组 | 仅显式创建或改绑时 |
 | `get_node_tree_index` | 搜索并分页读取精简索引 | 否 |
 | `query_node_graph` | 投影字段，或查询连接、Named Attribute、路径和有界切片 | 否 |
 | `export_node_tree` | 返回或原子写入完整图、局部 N 跳子图 | 否 |
@@ -115,7 +117,7 @@ Blender 5.1 起，创建过程会新建独立 `CompositorNodeTree`，添加 Imag
 - 图结构：`add_node`、`remove_node`、`rename_node`、`add_link`、`remove_link`；
 - 数值：`set_node_property`、`set_socket_default`；
 - 排版：`set_node_layout`、`set_annotation`；
-- 节点组接口：`add_interface_socket`、`remove_interface_socket`；
+- 节点组接口：`add_interface_panel`、`add_interface_socket`、`remove_interface_socket`、`set_interface_item`；
 - 动态数据：`set_color_ramp`、`set_curve_mapping`。
 
 新增节点先使用 patch 内的临时 `id`；同一 patch 的后续操作可以引用它，应用结果会给出最终 Blender 节点名称。插槽选择器采用导出的 `input:<序号>:<名称>` 与 `output:<序号>:<名称>`，序号可区分重名插槽，不应根据界面文字猜测。

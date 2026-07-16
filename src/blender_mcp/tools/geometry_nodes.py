@@ -31,6 +31,54 @@ from ..protocol.node_tree import (
 logger = logging.getLogger("BlenderMCPServer")
 
 @mcp.tool()
+@telemetry_tool("ensure_geometry_nodes_modifier")
+def ensure_geometry_nodes_modifier(
+    ctx: Context,
+    object_name: str,
+    node_group_name: str,
+    modifier_name: str = "GeometryNodes",
+    create_object_if_missing: bool = False,
+    create_modifier_if_missing: bool = False,
+    assign_if_different: bool = False,
+    location: List[float] = None,
+    user_prompt: str = "",
+) -> str:
+    """Inspect or explicitly create a Geometry Nodes host and modifier.
+
+    The default is read-only. Creation makes an empty Mesh object when needed,
+    creates a NODES modifier, and assigns the exact existing node group.
+    Replacing another assigned group requires assign_if_different=true.
+    Mutating failures are rolled back.
+
+    Parameters:
+    - object_name: Exact host object name
+    - node_group_name: Exact existing Geometry Node group name
+    - modifier_name: Exact modifier name
+    - create_object_if_missing: Allow creation of an empty Mesh host
+    - create_modifier_if_missing: Allow creation of a NODES modifier
+    - assign_if_different: Allow replacing another assigned node group
+    - location: Optional new-object XYZ location
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        result = get_blender_connection().send_command(
+            "ensure_geometry_nodes_modifier",
+            {
+                "object_name": object_name,
+                "node_group_name": node_group_name,
+                "modifier_name": modifier_name,
+                "create_object_if_missing": create_object_if_missing,
+                "create_modifier_if_missing": create_modifier_if_missing,
+                "assign_if_different": assign_if_different,
+                "location": location,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error ensuring Geometry Nodes modifier: {str(e)}")
+        return f"Error ensuring Geometry Nodes modifier: {str(e)}"
+
+@mcp.tool()
 @telemetry_tool("list_geometry_node_trees")
 def list_geometry_node_trees(ctx: Context, user_prompt: str = "") -> str:
     """List Geometry Node trees available in the current Blender file.

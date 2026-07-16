@@ -3,6 +3,7 @@
 from .automation import execute_blender_code, get_viewport_screenshot
 from .geometry_nodes import (
     apply_geometry_node_patch,
+    ensure_geometry_nodes_modifier,
     export_blender_node_asset,
     export_geometry_node_tree,
     get_geometry_node_tree_index,
@@ -16,6 +17,7 @@ from .geometry_nodes import (
 )
 from .node_trees import (
     apply_node_tree_patch,
+    create_node_group,
     ensure_scene_compositor_tree,
     export_node_tree,
     get_node_editor_context,
@@ -29,6 +31,8 @@ from .node_trees import (
 __all__ = [
     "apply_geometry_node_patch",
     "apply_node_tree_patch",
+    "create_node_group",
+    "ensure_geometry_nodes_modifier",
     "ensure_scene_compositor_tree",
     "execute_blender_code",
     "export_blender_node_asset",

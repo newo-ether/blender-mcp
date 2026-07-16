@@ -18,6 +18,8 @@ from .tools.instances import (
 from .tools.nodes import (
     apply_geometry_node_patch,
     apply_node_tree_patch,
+    create_node_group,
+    ensure_geometry_nodes_modifier,
     ensure_scene_compositor_tree,
     execute_blender_code,
     export_blender_node_asset,
@@ -103,7 +105,9 @@ __all__ = [
     "search_blender_docs",
     "get_blender_doc_page",
     "list_node_trees",
+    "create_node_group",
     "ensure_scene_compositor_tree",
+    "ensure_geometry_nodes_modifier",
     "export_node_tree",
     "get_node_editor_context",
     "get_node_tree_index",

@@ -103,6 +103,39 @@ try {
         -NoGui $true
     Assert-True -Condition (-not $desktopOnlySelection.CodexCli) -Message "Desktop-only selection incorrectly claimed that Codex CLI was installed."
     Assert-True -Condition $desktopOnlySelection.CodexDesktop -Message "Codex Desktop was not selected when Codex CLI was absent."
+    $originalTuiSelector = (Get-Item -LiteralPath Function:\Select-InstallTargetsTui).ScriptBlock
+    $script:DesktopOnlyTuiCalled = $false
+    function Select-InstallTargetsTui {
+        param(
+            $Detection,
+            [object[]]$BlenderInstallations,
+            [bool]$DisableBlender,
+            [bool]$DisableCodex,
+            [bool]$DisableClaudeCode,
+            [bool]$DisableClaudeDesktop
+        )
+        $script:DesktopOnlyTuiCalled = $true
+        return [PSCustomObject]@{
+            Cancelled = $false
+            CodexCli = $false
+            CodexDesktop = $true
+            ClaudeCode = $false
+            ClaudeDesktop = $false
+            BlenderPaths = @()
+        }
+    }
+    try {
+        $interactiveDesktopOnlySelection = Select-InstallTargets `
+            -Detection $desktopOnlyDetection `
+            -BlenderInstallations @() `
+            -NoGui $false `
+            -UseGui $false
+        Assert-True -Condition $script:DesktopOnlyTuiCalled -Message "Interactive Desktop-only detection skipped the target selector."
+        Assert-True -Condition $interactiveDesktopOnlySelection.CodexDesktop -Message "Interactive Desktop-only selector result was lost."
+    }
+    finally {
+        Set-Item -LiteralPath Function:\Select-InstallTargetsTui -Value $originalTuiSelector
+    }
     Assert-True -Condition ((Get-CodexConfigPath -CodexHome "" -UserHome "C:\test-home") -eq "C:\test-home\.codex\config.toml") -Message "Codex Desktop shared config path is incorrect."
     Assert-True -Condition ($source -match 'Kind = "Codex"') -Message "The selector lacks the combined Codex target."
     Assert-True -Condition ($source -notmatch 'Kind = "CodexCli"|Kind = "CodexDesktop"') -Message "The selector still exposes separate Codex and ChatGPT targets."

@@ -7,7 +7,11 @@ import bpy
 from .common import _gn_patch_diagnostic
 from .constants import GEOMETRY_NODES_PATCH_VALIDATION_SCHEMA
 from .geometry_operations import _gn_apply_operations_to_working
-from .patch_operations import _node_add_paired_zone, _node_dynamic_collection
+from .patch_operations import (
+    _node_add_paired_zone,
+    _node_dynamic_collection,
+    _node_interface_property_allowed,
+)
 from .patch_values import (
     _gn_decode_patch_value,
     _gn_resolve_patch_node,
@@ -34,8 +38,10 @@ def _gn_validate_patch_runtime(tree, patch):
         "links_added": 0,
         "links_removed": 0,
         "layouts_changed": 0,
+        "interface_panels_added": 0,
         "interface_sockets_added": 0,
         "interface_sockets_removed": 0,
+        "interface_items_changed": 0,
         "modifier_inputs_changed": 0,
         "dynamic_structures_changed": 0,
     }
@@ -99,6 +105,7 @@ def _gn_validate_patch_runtime(tree, patch):
             "removed": False,
             "in_out": getattr(item, "in_out", None),
             "item_type": item.item_type,
+            "existing": True,
         }
         for item in tree.interface.items_tree
     }
@@ -371,9 +378,38 @@ def _gn_validate_patch_runtime(tree, patch):
                 interface_items[reference] = {
                     "item": probe_socket if socket_type_valid else None, "removed": False,
                     "in_out": operation["in_out"], "item_type": "SOCKET",
+                    "existing": False,
                 }
                 diff["interface_sockets_added"] += 1
                 summary = f"Add {operation['in_out']} interface socket {reference}"
+
+            elif op == "add_interface_panel":
+                reference = operation["id"]
+                if reference in interface_items and not interface_items[reference]["removed"]:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "duplicate_interface_reference", f"{path}/id",
+                        f"Interface reference already exists: {reference}",
+                    ))
+                try:
+                    probe_panel = temp_tree.interface.new_panel(
+                        name=operation["name"],
+                        description=operation.get("description", ""),
+                        default_closed=operation.get("default_closed", False),
+                    )
+                except (TypeError, ValueError, RuntimeError) as exc:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "unsupported_interface_panel", path, str(exc),
+                    ))
+                    probe_panel = None
+                interface_items[reference] = {
+                    "item": probe_panel,
+                    "removed": False,
+                    "in_out": None,
+                    "item_type": "PANEL",
+                    "existing": False,
+                }
+                diff["interface_panels_added"] += 1
+                summary = f"Add interface panel {reference}"
 
             elif op == "remove_interface_socket":
                 reference = operation["identifier"]
@@ -387,6 +423,41 @@ def _gn_validate_patch_runtime(tree, patch):
                     item["removed"] = True
                     diff["interface_sockets_removed"] += 1
                     summary = f"Remove interface socket {reference}"
+
+            elif op == "set_interface_item":
+                reference = operation["identifier"]
+                record = interface_items.get(reference)
+                if not record or record["removed"] or record["item"] is None:
+                    diagnostics.append(_gn_patch_diagnostic(
+                        "error", "interface_item_not_found", f"{path}/identifier",
+                        f"Interface item not found: {reference}",
+                    ))
+                else:
+                    item = record["item"]
+                    property_name = operation["property"]
+                    if not _node_interface_property_allowed(item, property_name):
+                        diagnostics.append(_gn_patch_diagnostic(
+                            "error", "unsupported_interface_property", f"{path}/property",
+                            f"Interface {item.item_type.lower()} property is not supported: "
+                            f"{property_name}",
+                        ))
+                    elif _gn_validate_value(
+                        item, property_name, operation["value"], f"{path}/value",
+                        diagnostics, node_refs,
+                    ):
+                        if not record["existing"]:
+                            try:
+                                setattr(
+                                    item,
+                                    property_name,
+                                    _gn_decode_patch_value(operation["value"], node_refs),
+                                )
+                            except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                                diagnostics.append(_gn_patch_diagnostic(
+                                    "error", "rna_assignment_rejected", f"{path}/value", str(exc),
+                                ))
+                        diff["interface_items_changed"] += 1
+                        summary = f"Set interface {reference}.{property_name}"
 
             elif op in {"add_dynamic_item", "remove_dynamic_item", "set_dynamic_item"}:
                 item = _gn_resolve_patch_node(

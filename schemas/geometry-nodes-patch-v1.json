@@ -150,6 +150,18 @@
         },
         {
           "type": "object",
+          "required": ["op", "id", "name"],
+          "properties": {
+            "op": {"const": "add_interface_panel"},
+            "id": {"type": "string", "minLength": 1},
+            "name": {"type": "string", "minLength": 1},
+            "description": {"type": "string"},
+            "default_closed": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
           "required": ["op", "id", "name", "in_out", "socket_type"],
           "properties": {
             "op": {"const": "add_interface_socket"},
@@ -168,6 +180,17 @@
           "properties": {
             "op": {"const": "remove_interface_socket"},
             "identifier": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "identifier", "property", "value"],
+          "properties": {
+            "op": {"const": "set_interface_item"},
+            "identifier": {"type": "string", "minLength": 1},
+            "property": {"type": "string", "minLength": 1},
+            "value": true
           },
           "additionalProperties": false
         },

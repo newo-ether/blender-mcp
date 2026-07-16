@@ -36,6 +36,48 @@ from ..protocol.node_tree import (
 logger = logging.getLogger("BlenderMCPServer")
 
 @mcp.tool()
+@telemetry_tool("create_node_group")
+def create_node_group(
+    ctx: Context,
+    name: str,
+    tree_type: str,
+    geometry_is_modifier: bool = False,
+    description: str = "",
+    reuse_existing: bool = False,
+    user_prompt: str = "",
+) -> str:
+    """Create an empty local node group and return its initial revision.
+
+    Use the returned tree_ref/revision with structured node patch tools. Exact
+    name collisions are rejected unless reuse_existing=true; a compatible
+    existing group is then returned without mutation after verifying type,
+    editability, and Geometry Nodes usage.
+
+    Parameters:
+    - name: Exact node-group datablock name
+    - tree_type: GeometryNodeTree, ShaderNodeTree, or CompositorNodeTree
+    - geometry_is_modifier: Mark a Geometry Node group for modifier use
+    - description: Optional node-group description
+    - reuse_existing: Return a compatible existing group instead of rejecting
+    - user_prompt: Original user prompt for telemetry
+    """
+    try:
+        result = get_blender_connection().send_command(
+            "create_node_group",
+            {
+                "name": name,
+                "tree_type": tree_type,
+                "geometry_is_modifier": geometry_is_modifier,
+                "description": description,
+                "reuse_existing": reuse_existing,
+            },
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error creating node group: {str(e)}")
+        return f"Error creating node group: {str(e)}"
+
+@mcp.tool()
 @telemetry_tool("get_node_editor_context")
 def get_node_editor_context(
     ctx: Context,

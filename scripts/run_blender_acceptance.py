@@ -19,6 +19,7 @@ TESTS = ROOT / "tests"
 ALL_VERSIONS = ("4.2", "5.1", "5.2")
 ALL_SUITES = ("smoke", "core", "improve", "multi", "extension")
 CORE_CASES = (
+    ("node-bootstrap", "blender_node_bootstrap.py"),
     ("compositor-initialization", "blender_compositor_initialization.py"),
     ("compositor-transactions", "blender_compositor_nodes_transactions.py"),
     ("geometry-linked", "blender_geometry_nodes_linked.py"),
@@ -222,6 +223,7 @@ def main() -> int:
                     name = f"core-{version}-{case_name}"
                     arguments: tuple[str, ...] = ()
                     if script_name in {
+                        "blender_node_bootstrap.py",
                         "blender_compositor_initialization.py",
                         "blender_instance_lifecycle.py",
                     }:

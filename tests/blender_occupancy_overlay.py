@@ -130,6 +130,26 @@ def run_test():
         claimed._command_writes("ensure_scene_compositor_tree", {"create_if_missing": True}),
         "creating a compositor tree is a write and must light the border",
     )
+    assert_true(
+        not claimed._command_writes("ensure_geometry_nodes_modifier", {
+            "create_object_if_missing": False,
+            "create_modifier_if_missing": False,
+            "assign_if_different": False,
+        }),
+        "a read-only Geometry Nodes modifier probe must not light the border",
+    )
+    assert_true(
+        claimed._command_writes("ensure_geometry_nodes_modifier", {
+            "create_modifier_if_missing": True,
+        }),
+        "creating a Geometry Nodes modifier is a write and must light the border",
+    )
+    assert_true(
+        lifecycle._command_tree_type(
+            "create_node_group", {"tree_type": "ShaderNodeTree"}
+        ) == "ShaderNodeTree",
+        "node-group creation did not disclose its requested node editor type",
+    )
 
     # 3. A read never names itself in the badge or lights a node editor. The
     #    viewport is not part of this: it answers the claim, not the command.

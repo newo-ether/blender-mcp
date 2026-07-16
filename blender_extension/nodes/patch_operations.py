@@ -5,6 +5,10 @@ from __future__ import annotations
 import bpy
 
 from .common import _gn_patch_diagnostic
+from .constants import (
+    NODE_INTERFACE_PANEL_PROPERTIES,
+    NODE_INTERFACE_SOCKET_PROPERTIES,
+)
 from .dynamic import _NODE_DYNAMIC_COLLECTION_ALLOWLIST
 from .patch_values import (
     _gn_decode_patch_value,
@@ -75,6 +79,15 @@ def _node_interface_mutable(target):
         target["owner_kind"] == "NODE_GROUP"
         or target["adapter"] == "scene_compositing_node_group"
     )
+
+def _node_interface_property_allowed(item, property_name):
+    if item is None:
+        return False
+    if item.item_type == "PANEL":
+        return property_name in NODE_INTERFACE_PANEL_PROPERTIES
+    if item.item_type == "SOCKET":
+        return property_name in NODE_INTERFACE_SOCKET_PROPERTIES
+    return False
 
 def _node_mutation_allowed(node, operation, path, diagnostics, property_name=None):
     if getattr(node.__class__, "__module__", None) != "bpy.types":
@@ -186,8 +199,10 @@ def _node_execute_patch_operations(target, patch):
         "links_removed": 0,
         "layouts_changed": 0,
         "annotations_changed": 0,
+        "interface_panels_added": 0,
         "interface_sockets_added": 0,
         "interface_sockets_removed": 0,
+        "interface_items_changed": 0,
         "dynamic_structures_changed": 0,
     }
     node_refs = {
@@ -462,6 +477,23 @@ def _node_execute_patch_operations(target, patch):
                 diff["interface_sockets_added"] += 1
                 summary = f"Add interface socket {operation['id']}"
 
+            elif op == "add_interface_panel":
+                if not _node_interface_mutable(target):
+                    raise ValueError("This owner does not expose a mutable node interface")
+                if operation["id"] in interface_refs:
+                    raise ValueError(f"Interface reference already exists: {operation['id']}")
+                item = tree.interface.new_panel(
+                    name=operation["name"],
+                    description=operation.get("description", ""),
+                    default_closed=operation.get("default_closed", False),
+                )
+                interface_refs[operation["id"]] = {"item": item, "removed": False}
+                created_interface[operation["id"]] = (
+                    getattr(item, "identifier", "") or item.name
+                )
+                diff["interface_panels_added"] += 1
+                summary = f"Add interface panel {operation['id']}"
+
             elif op == "remove_interface_socket":
                 if not _node_interface_mutable(target):
                     raise ValueError("This owner does not expose a mutable node interface")
@@ -475,6 +507,35 @@ def _node_execute_patch_operations(target, patch):
                 created_interface.pop(operation["identifier"], None)
                 diff["interface_sockets_removed"] += 1
                 summary = f"Remove interface socket {operation['identifier']}"
+
+            elif op == "set_interface_item":
+                if not _node_interface_mutable(target):
+                    raise ValueError("This owner does not expose a mutable node interface")
+                record = interface_refs.get(operation["identifier"])
+                if record is None or record["removed"]:
+                    raise ValueError(
+                        f"Interface item not found: {operation['identifier']}"
+                    )
+                item = record["item"]
+                property_name = operation["property"]
+                if not _node_interface_property_allowed(item, property_name):
+                    raise ValueError(
+                        f"Interface {item.item_type.lower()} property is not supported: "
+                        f"{property_name}"
+                    )
+                if _gn_validate_value(
+                    item, property_name, operation["value"], f"{path}/value",
+                    diagnostics, node_refs,
+                ):
+                    setattr(
+                        item,
+                        property_name,
+                        _gn_decode_patch_value(operation["value"], node_refs),
+                    )
+                    diff["interface_items_changed"] += 1
+                    summary = (
+                        f"Set interface {operation['identifier']}.{property_name}"
+                    )
 
             elif op == "set_color_ramp":
                 node = resolve_node(operation["node"], f"{path}/node")

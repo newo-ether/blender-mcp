@@ -18,7 +18,9 @@ Use the connected Blender MCP server as the primary interface for live Blender w
 7. Prefer, in order:
    - a dedicated structured tool;
    - a runtime schema plus a validated transactional node patch;
-   - small, auditable execute_blender_code calls when the structured surface cannot express the operation.
+   - a small, auditable execute_blender_code call only for the exact primitive the structured surface cannot express.
+
+Treat execute_blender_code as a capability-gap fallback, not a shortcut. In node workflows, do not use arbitrary Python for nodes, interfaces, links, properties, defaults, node-group creation, or Geometry Nodes modifier setup when structured tools can express them. If one primitive still requires Python, isolate that primitive in the smallest call possible, then return immediately to structured export, validation, patching, and readback. Use Python for an entire graph only when the structured surface genuinely cannot express the graph and the missing primitive cannot be isolated; state that limitation before execution.
 
 Do not call every status or inspection tool preemptively. Let the requested outcome determine what evidence is necessary.
 
@@ -50,7 +52,7 @@ Do not call every status or inspection tool preemptively. Let the requested outc
 - Use get_viewport_screenshot only when appearance or spatial composition materially affects success. A screenshot is not a substitute for structured verification.
 - Do not save, overwrite, or change the path of a .blend file unless the user asked for that outcome.
 - Do not begin a provider download, paid generation job, or destructive cleanup unless the request already authorizes it or the user confirms it.
-- Break arbitrary Python into small steps, avoid global context assumptions, and return compact evidence from each step.
+- When arbitrary Python is necessary, confine it to the unsupported primitive, avoid global context assumptions, return compact evidence, and resume the structured workflow immediately afterward.
 
 ## Handle failures
 

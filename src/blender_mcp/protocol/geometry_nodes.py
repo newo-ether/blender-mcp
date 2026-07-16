@@ -29,8 +29,10 @@ SUPPORTED_PATCH_OPERATIONS = frozenset({
     "add_link",
     "remove_link",
     "set_node_layout",
+    "add_interface_panel",
     "add_interface_socket",
     "remove_interface_socket",
+    "set_interface_item",
     "set_modifier_input",
     "add_dynamic_item",
     "remove_dynamic_item",
@@ -65,11 +67,18 @@ _PATCH_OPERATION_FIELDS = {
         {"op", "node"},
         {"location", "width", "height", "parent"},
     ),
+    "add_interface_panel": (
+        {"op", "id", "name"},
+        {"description", "default_closed"},
+    ),
     "add_interface_socket": (
         {"op", "id", "name", "in_out", "socket_type"},
         {"parent", "default"},
     ),
     "remove_interface_socket": ({"op", "identifier"}, set()),
+    "set_interface_item": (
+        {"op", "identifier", "property", "value"}, set()
+    ),
     "set_modifier_input": (
         {"op", "object", "modifier", "socket", "value"},
         set(),
@@ -409,6 +418,27 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                         "invalid_direction",
                         f"{path}/in_out",
                         "in_out must be INPUT or OUTPUT",
+                    )
+                )
+        elif operation_name == "add_interface_panel":
+            if "description" in operation and not isinstance(
+                operation["description"], str
+            ):
+                diagnostics.append(
+                    _diagnostic(
+                        "invalid_string",
+                        f"{path}/description",
+                        "description must be a string",
+                    )
+                )
+            if "default_closed" in operation and not isinstance(
+                operation["default_closed"], bool
+            ):
+                diagnostics.append(
+                    _diagnostic(
+                        "invalid_boolean",
+                        f"{path}/default_closed",
+                        "default_closed must be boolean",
                     )
                 )
         elif operation_name in {"remove_dynamic_item", "set_dynamic_item"}:

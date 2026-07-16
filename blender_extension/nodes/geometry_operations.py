@@ -133,11 +133,35 @@ def _gn_apply_operations_to_working(working, patch):
             created_interface[reference] = actual_identifier
             result["interface_identifier"] = actual_identifier
 
+        elif op == "add_interface_panel":
+            item = working.interface.new_panel(
+                name=operation["name"],
+                description=operation.get("description", ""),
+                default_closed=operation.get("default_closed", False),
+            )
+            reference = operation["id"]
+            actual_identifier = getattr(item, "identifier", "") or item.name
+            interface_refs[reference] = {
+                "item": item,
+                "actual_identifier": actual_identifier,
+                "removed": False,
+            }
+            created_interface[reference] = actual_identifier
+            result["interface_identifier"] = actual_identifier
+
         elif op == "remove_interface_socket":
             item = interface_refs[operation["identifier"]]
             working.interface.remove(item["item"])
             item["removed"] = True
             created_interface.pop(operation["identifier"], None)
+
+        elif op == "set_interface_item":
+            item = interface_refs[operation["identifier"]]["item"]
+            setattr(
+                item,
+                operation["property"],
+                _gn_decode_patch_value(operation["value"], node_refs),
+            )
 
         elif op == "add_dynamic_item":
             node = node_refs[operation["node"]]["node"]

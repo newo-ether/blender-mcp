@@ -31,8 +31,10 @@ SUPPORTED_OPERATIONS = frozenset({
     "remove_link",
     "set_node_layout",
     "set_annotation",
+    "add_interface_panel",
     "add_interface_socket",
     "remove_interface_socket",
+    "set_interface_item",
     "set_color_ramp",
     "set_curve_mapping",
     "add_dynamic_item",
@@ -66,10 +68,16 @@ _OPERATION_FIELDS = {
         {"op", "node"}, {"location", "width", "height", "parent"}
     ),
     "set_annotation": ({"op", "node", "text"}, set()),
+    "add_interface_panel": (
+        {"op", "id", "name"}, {"description", "default_closed"}
+    ),
     "add_interface_socket": (
         {"op", "id", "name", "in_out", "socket_type"}, {"parent", "default"}
     ),
     "remove_interface_socket": ({"op", "identifier"}, set()),
+    "set_interface_item": (
+        {"op", "identifier", "property", "value"}, set()
+    ),
     "set_color_ramp": ({"op", "node", "elements"}, {"interpolation"}),
     "set_curve_mapping": ({"op", "node", "curves"}, {"use_clip"}),
     "add_dynamic_item": (
@@ -98,8 +106,10 @@ _OPERATION_CAPABILITY = {
     "remove_link": "graph",
     "set_node_layout": "layout",
     "set_annotation": "annotation",
+    "add_interface_panel": "interface",
     "add_interface_socket": "interface",
     "remove_interface_socket": "interface",
+    "set_interface_item": "interface",
     "set_color_ramp": "dynamic",
     "set_curve_mapping": "dynamic",
     "add_dynamic_item": "dynamic",
@@ -532,6 +542,25 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                 contains_id_reference = _validate_finite_json_value(
                     operation["default"], f"{path}/default", diagnostics
                 ) or contains_id_reference
+        elif operation_name == "add_interface_panel":
+            if "description" in operation and not isinstance(
+                operation["description"], str
+            ):
+                diagnostics.append(diagnostic(
+                    "invalid_string", f"{path}/description",
+                    "description must be a string",
+                ))
+            if "default_closed" in operation and not isinstance(
+                operation["default_closed"], bool
+            ):
+                diagnostics.append(diagnostic(
+                    "invalid_boolean", f"{path}/default_closed",
+                    "default_closed must be boolean",
+                ))
+        elif operation_name == "set_interface_item":
+            contains_id_reference = _validate_finite_json_value(
+                operation.get("value"), f"{path}/value", diagnostics
+            ) or contains_id_reference
         elif operation_name == "set_color_ramp":
             _validate_color_ramp(operation, path, diagnostics)
         elif operation_name == "set_curve_mapping":

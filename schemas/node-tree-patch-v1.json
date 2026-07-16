@@ -29,8 +29,10 @@
           {"$ref": "#/$defs/removeLink"},
           {"$ref": "#/$defs/setNodeLayout"},
           {"$ref": "#/$defs/setAnnotation"},
+          {"$ref": "#/$defs/addInterfacePanel"},
           {"$ref": "#/$defs/addInterfaceSocket"},
           {"$ref": "#/$defs/removeInterfaceSocket"},
+          {"$ref": "#/$defs/setInterfaceItem"},
           {"$ref": "#/$defs/setColorRamp"},
           {"$ref": "#/$defs/setCurveMapping"}
         ]
@@ -129,8 +131,10 @@
       "additionalProperties": false
     },
     "setAnnotation": {"type": "object", "required": ["op", "node", "text"], "properties": {"op": {"const": "set_annotation"}, "node": {"type": "string", "minLength": 1}, "text": {"type": "string", "maxLength": 16384}}, "additionalProperties": false},
+    "addInterfacePanel": {"type": "object", "required": ["op", "id", "name"], "properties": {"op": {"const": "add_interface_panel"}, "id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}, "description": {"type": "string"}, "default_closed": {"type": "boolean"}}, "additionalProperties": false},
     "addInterfaceSocket": {"type": "object", "required": ["op", "id", "name", "in_out", "socket_type"], "properties": {"op": {"const": "add_interface_socket"}, "id": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}, "in_out": {"enum": ["INPUT", "OUTPUT"]}, "socket_type": {"type": "string", "minLength": 1}, "parent": {"type": "string", "minLength": 1}, "default": {"$ref": "#/$defs/typedValue"}}, "additionalProperties": false},
     "removeInterfaceSocket": {"type": "object", "required": ["op", "identifier"], "properties": {"op": {"const": "remove_interface_socket"}, "identifier": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+    "setInterfaceItem": {"type": "object", "required": ["op", "identifier", "property", "value"], "properties": {"op": {"const": "set_interface_item"}, "identifier": {"type": "string", "minLength": 1}, "property": {"type": "string", "minLength": 1}, "value": {"$ref": "#/$defs/typedValue"}}, "additionalProperties": false},
     "rampElement": {"type": "object", "required": ["position", "color"], "properties": {"position": {"type": "number", "minimum": 0, "maximum": 1}, "color": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4}}, "additionalProperties": false},
     "setColorRamp": {"type": "object", "required": ["op", "node", "elements"], "properties": {"op": {"const": "set_color_ramp"}, "node": {"type": "string", "minLength": 1}, "interpolation": {"type": "string", "minLength": 1}, "elements": {"type": "array", "minItems": 2, "maxItems": 32, "items": {"$ref": "#/$defs/rampElement"}}}, "additionalProperties": false},
     "curvePoint": {"type": "object", "required": ["location"], "properties": {"location": {"type": "array", "prefixItems": [{"type": "number"}, {"type": "number"}], "minItems": 2, "maxItems": 2}, "handle_type": {"type": "string", "minLength": 1}}, "additionalProperties": false},

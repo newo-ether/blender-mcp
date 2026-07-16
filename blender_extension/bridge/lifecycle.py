@@ -68,6 +68,10 @@ def _command_tree_type(cmd_type, params):
             tree_type = tree_ref.get("tree_type")
             if tree_type in _NODE_TREE_TYPES:
                 return tree_type
+    if cmd_type == "create_node_group":
+        tree_type = params.get("tree_type")
+        if tree_type in _NODE_TREE_TYPES:
+            return tree_type
     if "geometry_node" in cmd_type:
         return "GeometryNodeTree"
     return ""
@@ -321,6 +325,12 @@ class BridgeLifecycleMixin:
             return False
         if command_type == "ensure_scene_compositor_tree":
             return bool(params.get("create_if_missing", False))
+        if command_type == "ensure_geometry_nodes_modifier":
+            return any(bool(params.get(field, False)) for field in (
+                "create_object_if_missing",
+                "create_modifier_if_missing",
+                "assign_if_different",
+            ))
         return True
 
     def _authorize_command(self, command_type, params):
@@ -331,6 +341,14 @@ class BridgeLifecycleMixin:
         if command_type in read_only or command_type in claim_commands:
             return
         if command_type == "ensure_scene_compositor_tree" and not params.get("create_if_missing", False):
+            return
+        if command_type == "ensure_geometry_nodes_modifier" and not any(
+            bool(params.get(field, False)) for field in (
+                "create_object_if_missing",
+                "create_modifier_if_missing",
+                "assign_if_different",
+            )
+        ):
             return
         if not self._claim_is_live():
             code = self.last_claim_end_reason or "claim_expired"
@@ -629,7 +647,9 @@ class BridgeLifecycleMixin:
             "get_runtime_automation_context": self.get_runtime_automation_context,
             "get_node_editor_context": self.get_node_editor_context,
             "list_node_trees": self.list_node_trees,
+            "create_node_group": self.create_node_group,
             "ensure_scene_compositor_tree": self.ensure_scene_compositor_tree,
+            "ensure_geometry_nodes_modifier": self.ensure_geometry_nodes_modifier,
             "export_node_tree": self.export_node_tree,
             "get_node_tree_index": self.get_node_tree_index,
             "query_node_graph": self.query_node_graph,

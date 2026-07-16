@@ -22,6 +22,28 @@ BLENDER_RUNTIME_AUTOMATION_CONTEXT_SCHEMA = "blender-runtime-automation-context/
 
 SCENE_COMPOSITOR_TREE_SCHEMA = "blender-scene-compositor-tree/1"
 
+NODE_GROUP_CREATION_SCHEMA = "blender-node-group-creation/1"
+
+GEOMETRY_NODES_MODIFIER_SCHEMA = "blender-geometry-nodes-modifier/1"
+NODE_INTERFACE_PANEL_PROPERTIES = frozenset({
+    "name",
+    "description",
+    "default_closed",
+})
+NODE_INTERFACE_SOCKET_PROPERTIES = frozenset({
+    "name",
+    "description",
+    "hide_value",
+    "default_value",
+    "default_attribute_name",
+    "attribute_domain",
+    "default_input",
+    "structure_type",
+    "force_non_field",
+    "min_value",
+    "max_value",
+})
+
 NODE_TREE_SNAPSHOT_SCHEMA = "blender-node-tree/1"
 
 NODE_TREE_INDEX_SCHEMA = "blender-node-tree-index/1"

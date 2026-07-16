@@ -119,6 +119,24 @@ class NodeTreeToolTests(unittest.TestCase):
             "owner_kinds": ["MATERIAL", "WORLD"],
         })
 
+    def test_create_node_group_forwards_exact_bootstrap_contract(self):
+        response = json.loads(server.create_node_group(
+            None,
+            name="PCB Generator",
+            tree_type="GeometryNodeTree",
+            geometry_is_modifier=True,
+            description="Structured procedural circuit traces",
+            reuse_existing=True,
+        ))
+        self.assertEqual(response["command"], "create_node_group")
+        self.assertEqual(response["params"], {
+            "name": "PCB Generator",
+            "tree_type": "GeometryNodeTree",
+            "geometry_is_modifier": True,
+            "description": "Structured procedural circuit traces",
+            "reuse_existing": True,
+        })
+
     def test_editor_context_forwards_stale_guards_and_bound(self):
         response = json.loads(server.get_node_editor_context(
             None,
@@ -284,6 +302,40 @@ class NodeTreeToolTests(unittest.TestCase):
             {item["code"] for item in rejected["diagnostics"]},
         )
 
+    def test_interface_panel_and_metadata_require_interface_capability(self):
+        patch = {
+            "schema": "blender-node-tree-patch/1",
+            "tree_ref": self.tree_ref,
+            "base_revision": "sha256:" + "a" * 64,
+            "capabilities": ["interface"],
+            "operations": [
+                {
+                    "op": "add_interface_panel",
+                    "id": "routing",
+                    "name": "Routing",
+                    "description": "Trace controls",
+                    "default_closed": True,
+                },
+                {
+                    "op": "set_interface_item",
+                    "identifier": "routing",
+                    "property": "description",
+                    "value": "Shortest-path routing controls",
+                },
+            ],
+        }
+        response = json.loads(server.validate_node_tree_patch(None, patch=patch))
+        self.assertEqual(response["command"], "validate_node_tree_patch")
+        self.assertEqual(response["params"], {"patch": patch})
+
+        patch["capabilities"] = ["graph"]
+        rejected = json.loads(server.validate_node_tree_patch(None, patch=patch))
+        self.assertFalse(rejected["valid"])
+        self.assertIn(
+            "undeclared_capability",
+            {item["code"] for item in rejected["diagnostics"]},
+        )
+
     def test_apply_repeats_structure_gate_and_forwards_backup_policy(self):
         patch = {
             "schema": "blender-node-tree-patch/1",
@@ -309,6 +361,7 @@ class NodeTreeToolTests(unittest.TestCase):
         names = {tool.name for tool in server.mcp._tool_manager.list_tools()}
         self.assertTrue({
             "get_node_editor_context",
+            "create_node_group",
             "list_node_trees",
             "ensure_scene_compositor_tree",
             "export_node_tree",

@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "blender_mcp"
-version = "1.14.2"
+version = "1.15.0"
 name = "Blender MCP"
 tagline = "Connect Blender to Model Context Protocol clients"
 maintainer = "BlenderMCP Contributors"
@@ -39,6 +39,7 @@ paths = [
   "nodes/common.py",
   "nodes/compositor.py",
   "nodes/constants.py",
+  "nodes/creation.py",
   "nodes/diagnostics.py",
   "nodes/dynamic.py",
   "nodes/editor_context.py",

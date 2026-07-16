@@ -12,6 +12,7 @@ from ..automation import (
 from ..errors import BlenderMCPAddonError
 from ..nodes.common import _gn_patch_diagnostic
 from ..nodes.compositor import _node_ensure_scene_compositor_tree
+from ..nodes.creation import _gn_ensure_modifier, _node_create_group
 from ..nodes.constants import (
     _GN_ASSET_SCOPES,
     _GN_NODE_PROPERTY_EXCLUDES,
@@ -123,6 +124,44 @@ class NodeCommandsMixin:
         """Inspect or transactionally initialize one local Scene compositor."""
         return _node_ensure_scene_compositor_tree(
             scene_name, bool(create_if_missing),
+        )
+
+    def create_node_group(
+        self,
+        name,
+        tree_type,
+        geometry_is_modifier=False,
+        description="",
+        reuse_existing=False,
+    ):
+        """Create one empty local node group for structured patching."""
+        return _node_create_group(
+            name,
+            tree_type,
+            bool(geometry_is_modifier),
+            description,
+            bool(reuse_existing),
+        )
+
+    def ensure_geometry_nodes_modifier(
+        self,
+        object_name,
+        node_group_name,
+        modifier_name="GeometryNodes",
+        create_object_if_missing=False,
+        create_modifier_if_missing=False,
+        assign_if_different=False,
+        location=None,
+    ):
+        """Inspect or explicitly create a Geometry Nodes host and modifier."""
+        return _gn_ensure_modifier(
+            object_name,
+            node_group_name,
+            modifier_name,
+            bool(create_object_if_missing),
+            bool(create_modifier_if_missing),
+            bool(assign_if_different),
+            location,
         )
 
     def list_node_trees(self, tree_types=None, owner_kinds=None):

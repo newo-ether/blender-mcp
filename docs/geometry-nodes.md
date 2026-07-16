@@ -22,6 +22,8 @@ operations outside the supported patch schema.
 
 | Tool | Purpose | Mutates Blender |
 | --- | --- | --- |
+| `create_node_group` | Create an empty local Geometry group and return its initial revision | Yes |
+| `ensure_geometry_nodes_modifier` | Inspect or explicitly create an empty Mesh host and NODES modifier, then assign an existing group | Only with explicit create/reassign flags |
 | `list_geometry_node_trees` | List trees, users, editability, size, and revisions | No |
 | `get_geometry_node_tree_index` | Search/page compact node names and types | No |
 | `export_geometry_node_tree` | Return or write a full graph or N-hop subgraph | No |
@@ -53,7 +55,10 @@ allowed to read and write JSON files. If it is unset, the server's current
 working directory is the boundary. Paths outside this boundary, non-JSON files,
 and patch files larger than 4 MiB are rejected.
 
-1. Call `list_geometry_node_trees` and select an editable tree.
+1. If the group does not exist, call `create_node_group` with
+   `tree_type="GeometryNodeTree"`; otherwise call `list_geometry_node_trees`
+   and select an editable tree. Use `ensure_geometry_nodes_modifier` read-only
+   first when the workflow also needs a host object and modifier.
 2. For a non-trivial graph, call `get_geometry_node_tree_index`. Search by node
    name, label, `bl_idname`, or Blender label and page through results if needed.
 3. Call `export_geometry_node_tree` with the chosen `node_names` and a
@@ -93,7 +98,8 @@ Version 1 supports:
 - `set_node_property` and `set_socket_default`
 - `add_link` and `remove_link`
 - `set_node_layout`
-- `add_interface_socket` and `remove_interface_socket`
+- `add_interface_panel`, `add_interface_socket`, `remove_interface_socket`, and
+  `set_interface_item` for allowlisted panel/socket metadata
 - `set_modifier_input`
 
 Node names and exported socket IDs are selectors. A socket ID has the form
@@ -189,8 +195,10 @@ generic owner-addressed tools add transactional Shader and Compositor editing;
 see [Structured node automation](structured-node-automation.md). Texture trees,
 animation/drivers, simulation bake state, lossless cross-version migration,
 linked-tree mutation, and arbitrary node-specific operators remain outside the
-contracts. Unsupported work may use `execute_blender_code`, but doing so bypasses
-revision, schema, dry-run, copy-on-write, and actual-diff guarantees.
+contracts. Unsupported work may use `execute_blender_code`, but only for the
+smallest isolated missing primitive before returning to structured export and
+patching. Arbitrary code bypasses revision, schema, dry-run, copy-on-write, and
+actual-diff guarantees.
 
 ## Configured node assets
 

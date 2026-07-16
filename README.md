@@ -51,7 +51,7 @@ permanently change the user or machine execution policy. The ASCII
 GitHub source archive. For a reproducible, version-pinned install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.14.2/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.14.2
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.15.0/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.15.0
 ```
 
 The explicit `TrimStart` removes the UTF-8 BOM carried by the localized full
@@ -66,7 +66,7 @@ Before changing the machine, the installer:
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
 4. verifies the wheel, Extension ZIP, portable Skill ZIP, and optional fallback MCPB against `SHA256SUMS.txt`;
 5. installs into a versioned environment such as
-   `%LOCALAPPDATA%\BlenderMCP\venv-1.14.2`;
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.15.0`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients;
    Codex CLI is used when available, while a Codex Desktop-only installation is
@@ -275,7 +275,9 @@ Supported generic owners:
 | --- | --- | --- |
 | `get_node_editor_context` | Resolve visible Node Editors, pin state, active/selected nodes, and owner-addressed `tree_ref` values without guessing by focus or order. | No |
 | `list_node_trees` | List owner-addressed Geometry, Shader, and Compositor trees, users, capabilities, limits, and revisions. | No |
+| `create_node_group` | Create an empty local Geometry, Shader, or Compositor group and return its initial patch revision. | Yes |
 | `ensure_scene_compositor_tree` | Inspect an exact Scene, or explicitly create and verify its missing compositor tree with rollback. | Only with `create_if_missing=true` |
+| `ensure_geometry_nodes_modifier` | Inspect an exact Geometry Nodes host/modifier, or explicitly create an empty Mesh host/modifier and assign an existing group. | Only with explicit create/reassign flags |
 | `get_node_tree_index` | Search and page a compact index without putting the full graph in model context. | No |
 | `export_node_tree` | Return or write a full flat graph or targeted N-hop subgraph. | No |
 | `query_node_graph` | Project allowlisted fields or query socket links, Named Attributes, shortest paths, upstream/downstream reachability, and bounded slices. | No |
@@ -297,16 +299,19 @@ import is a separate opt-in transaction.
    `MULTIPLE_EDITORS`, and refresh on `STALE_CONTEXT`.
 2. For a Scene with no compositor tree, call `ensure_scene_compositor_tree`
    read-only first, then repeat with `create_if_missing=true` only when wanted.
-3. Call `list_node_trees` and retain the exact `tree_ref` when no visible
+3. For a missing standalone group, call `create_node_group`; for a Geometry
+   Nodes host, probe with `ensure_geometry_nodes_modifier` before explicitly
+   enabling object/modifier creation or reassignment.
+4. Call `list_node_trees` and retain the exact `tree_ref` when no visible
    editor uniquely identifies the target.
-4. Search large graphs with `get_node_tree_index`.
-5. Export only the relevant nodes and neighbors. Keep `view="auto"`: complete
+5. Search large graphs with `get_node_tree_index`.
+6. Export only the relevant nodes and neighbors. Keep `view="auto"`: complete
    graphs select operations, while targeted subgraphs select semantic detail.
-6. Put the returned `revision` and `tree_ref` into a small patch JSON file.
-7. Edit that file with the client's normal file-edit tool.
-8. For Geometry use `validate_geometry_node_patch`; for Shader or Compositor
+7. Put the returned `revision` and `tree_ref` into a small patch JSON file.
+8. Edit that file with the client's normal file-edit tool.
+9. For Geometry use `validate_geometry_node_patch`; for Shader or Compositor
    use `validate_node_tree_patch`.
-9. Apply with the matching Geometry or generic tool only after validation, then
+10. Apply with the matching Geometry or generic tool only after validation, then
    inspect `actual_diff`, `new_revision`, users,
    and backup disposition.
 
@@ -315,8 +320,8 @@ validation, declarative `node_count`/`link_count`/`interface_item_count`
 assertions, transactional application, and revision readback. It defaults to
 `save_policy="never"`; `on_success` and `required` are explicit save requests.
 
-The patch protocols support common graph/layout operations, Frame
-annotations, group interfaces, Color Ramps, Curve Mappings, allowlisted dynamic
+The patch protocols support common graph/layout operations, Frame annotations,
+interface panels/socket metadata, Color Ramps, Curve Mappings, allowlisted dynamic
 List/Repeat/Simulation items, paired For Each and Blender 5.2 Closure zones, and typed Blender
 IDs and View Layers. The workspace boundary is controlled by
 `BLENDER_MCP_WORKSPACE`; files outside it, non-JSON files, files over 2 MiB, and
@@ -388,7 +393,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.14.2-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.15.0-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -396,7 +401,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.14.2-py3-none-any.whl
+python -m pip install ./blender_mcp-1.15.0-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -545,8 +550,9 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([str
 
 ## Security and known limitations
 
-- `execute_blender_code` can run arbitrary Python inside Blender. Save
-  the `.blend` file first and review high-impact operations.
+- `execute_blender_code` can run arbitrary Python inside Blender. In node
+  workflows it is a capability-gap fallback for the smallest unsupported
+  primitive, not a shortcut for graphs that structured tools can express.
 - The generic mutation protocol covers local Shader and Compositor owners.
   Texture Nodes and unknown add-on/custom nodes are read-only.
 - Published prerelease documentation and localized Manual pages can be

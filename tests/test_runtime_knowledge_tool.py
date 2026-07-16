@@ -56,6 +56,28 @@ class RuntimeKnowledgeToolTests(unittest.TestCase):
         self.assertEqual(compact["params"]["detail"], "compact")
         self.assertEqual(full["params"]["detail"], "full")
 
+    def test_geometry_modifier_bootstrap_forwards_explicit_mutation_flags(self):
+        response = json.loads(server.ensure_geometry_nodes_modifier(
+            None,
+            object_name="PCB Host",
+            node_group_name="PCB Generator",
+            modifier_name="Circuit Board",
+            create_object_if_missing=True,
+            create_modifier_if_missing=True,
+            assign_if_different=False,
+            location=[1.0, 2.0, 3.0],
+        ))
+        self.assertEqual(response["command"], "ensure_geometry_nodes_modifier")
+        self.assertEqual(response["params"], {
+            "object_name": "PCB Host",
+            "node_group_name": "PCB Generator",
+            "modifier_name": "Circuit Board",
+            "create_object_if_missing": True,
+            "create_modifier_if_missing": True,
+            "assign_if_different": False,
+            "location": [1.0, 2.0, 3.0],
+        })
+
     def test_node_type_search_forwards_paging(self):
         response = json.loads(server.search_geometry_node_types(
             None,

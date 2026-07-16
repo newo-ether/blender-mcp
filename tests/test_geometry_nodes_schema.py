@@ -150,6 +150,41 @@ class GeometryNodesSchemaTests(unittest.TestCase):
         self.assertEqual(schema.validate_patch_structure(patch), [])
         self.assertEqual(schema.assert_valid_patch(patch), patch)
 
+    def test_interface_panel_and_metadata_operations_are_structurally_valid(self):
+        patch = sample_patch()
+        patch["operations"] = [
+            {
+                "op": "add_interface_panel",
+                "id": "routing",
+                "name": "Routing",
+                "description": "Trace controls",
+                "default_closed": True,
+            },
+            {
+                "op": "add_interface_socket",
+                "id": "trace_width",
+                "name": "Trace Width",
+                "in_out": "INPUT",
+                "socket_type": "NodeSocketFloat",
+                "parent": "routing",
+                "default": 0.02,
+            },
+            {
+                "op": "set_interface_item",
+                "identifier": "trace_width",
+                "property": "min_value",
+                "value": 0.001,
+            },
+        ]
+        self.assertEqual(schema.validate_patch_structure(patch), [])
+
+        patch["operations"][0]["default_closed"] = "yes"
+        diagnostics = schema.validate_patch_structure(patch)
+        self.assertIn(
+            ("invalid_boolean", "/operations/0/default_closed"),
+            {(item["code"], item["path"]) for item in diagnostics},
+        )
+
     def test_patch_diagnostics_are_path_addressed(self):
         patch = sample_patch()
         patch["base_revision"] = "stale"
