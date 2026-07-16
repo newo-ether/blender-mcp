@@ -209,7 +209,7 @@ Every open Blender process registers a bounded local identity automatically. One
 3. One claim is kept for the complete AI task so related reads and mutations stay on the same file. `get_active_blender_instance` reports that selected identity.
 4. Before giving its final answer, stopping early, or handing the task back, the AI calls `release_blender_instance`. If Blender is already unreachable, the bounded lease remains the fallback and expires automatically.
 5. Instance heartbeats survive `.blend` loads, and a stale registry timestamp is checked against the live endpoint before the instance is rejected.
-6. Disable **Allow AI control** to reserve a window for manual work. A cyan hollow border inside every 3D View means that Blender process is currently claimed; it does not capture mouse or keyboard input.
+6. Disable **Allow AI control** to reserve a window for manual work. A cyan hollow border inside every 3D View means that Blender process is currently claimed, and a Node Editor joins it once the AI writes to that kind of node tree, labelled with the last write. Neither captures mouse or keyboard input.
 
 The add-on first tries the historical loopback endpoint for compatibility, then asks the operating system for a private loopback endpoint when another Blender already owns it. This transport detail is not a user mode and is not shown in the normal UI.
 

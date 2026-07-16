@@ -13,7 +13,7 @@ Use the connected Blender MCP server as the primary interface for live Blender w
 2. For a conceptual Blender question, answer from reliable knowledge or version-correct documentation without probing the scene.
 3. For a live task, confirm that relevant Blender MCP tools are available. If they are absent, report that Blender MCP is not installed or enabled in this client; do not silently switch to GUI automation.
 4. Call list_blender_instances before inspecting scene state. When one instance is ready, select it; when several are ready, require an explicit instance_id or an exact unique match on visible file/scene metadata. Never choose by port, registry order, foreground window, or recency.
-5. Claim the selected instance before mutation. Respect `manual` and `claimed_by_other_client`; do not bypass a human-reserved Blender window.
+5. Claiming is automatic: the first command of any kind, read or write, claims the single available instance. When several are registered, no command runs until one is named, so select the instance up front rather than after a `multiple_instances_require_selection` error. Respect `manual` and `claimed_by_other_client`; do not bypass a human-reserved Blender window.
 6. Start with the smallest read-only inspection that can identify the target and constraints.
 7. Prefer, in order:
    - a dedicated structured tool;
@@ -46,7 +46,7 @@ Do not call every status or inspection tool preemptively. Let the requested outc
 - Validate a node patch before applying it. Keep transactional backups unless the user explicitly prefers otherwise.
 - Prefer modify_verify_save when the task benefits from candidate-count assertions and the user has stated a save policy; its default remains unsaved.
 - Read back the affected object or targeted subgraph after mutation.
-- Before sending the final response for any live Blender task, call release_blender_instance if this MCP process selected or claimed an instance. Release after read-only work as well as mutation, and also before failure or early-stop handoffs. If release cannot reach Blender, report that the lease will expire as a fallback. The hollow viewport border means the instance is currently AI-occupied; it is not an input lock.
+- Before sending the final response for any live Blender task, call release_blender_instance if this MCP process selected or claimed an instance. Release after read-only work as well as mutation, and also before failure or early-stop handoffs, since a claim taken to read still holds the lock until it is released or expires. If release cannot reach Blender, report that the lease will expire as a fallback. The viewport border marks the instance as AI-occupied for the life of the claim, and a Node Editor joins it once the AI writes that kind of tree; neither is an input lock.
 - Use get_viewport_screenshot only when appearance or spatial composition materially affects success. A screenshot is not a substitute for structured verification.
 - Do not save, overwrite, or change the path of a .blend file unless the user asked for that outcome.
 - Do not begin a provider download, paid generation job, or destructive cleanup unless the request already authorizes it or the user confirms it.
