@@ -158,6 +158,41 @@ def run_test():
         "Slim view leaked the warning_propagation UI enum",
     )
 
+    # A socket the user actually changed is kept; one still at the value its node
+    # type ships with is dropped. RNA's prop.default is the property type's zero
+    # value (0.0/''), not the node type's default, so this must be measured
+    # against a pristine node of the same type or non-zero defaults leak back in.
+    slim_math_inputs = {item["id"]: item for item in slim_math.get("inputs", [])}
+    assert_true(
+        any(
+            abs(item["default"] - 3.0) < 1e-6
+            for item in slim_math_inputs.values()
+            if isinstance(item.get("default"), float)
+        ),
+        "Slim view dropped a socket default the user actually set",
+    )
+    pristine_math = tree.nodes.new("ShaderNodeMath")
+    pristine_math.operation = "MULTIPLY"
+    try:
+        pristine_slim = server.export_geometry_node_tree(tree.name, "slim")
+        pristine_record = pristine_slim["tree"]["nodes"][pristine_math.name]
+        assert_true(
+            not pristine_record.get("inputs"),
+            "Slim view kept sockets that are still at the node type's own defaults: "
+            f"{pristine_record.get('inputs')}",
+        )
+    finally:
+        tree.nodes.remove(pristine_math)
+
+    # Probing pristine defaults must not leak throwaway datablocks.
+    assert_true(
+        not [
+            group.name for group in bpy.data.node_groups
+            if "SocketProbe" in group.name
+        ],
+        "Slim export leaked a socket-probe node group",
+    )
+
     # Frames are omitted, and that omission is reported rather than hidden.
     frame = tree.nodes.new("NodeFrame")
     try:

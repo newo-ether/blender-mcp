@@ -95,7 +95,7 @@ def build_benchmark_tree(domain, count):
     return tree
 
 
-def benchmark_tree(server, tree, raw_export):
+def benchmark_tree(server, tree, raw_export, soft_response_bytes):
     reference = tree_ref(tree)
     middle = sorted(node.name for node in tree.nodes)[len(tree.nodes) // 2]
     full_ms, full = timed(lambda: raw_export(reference, "semantic"))
@@ -127,8 +127,20 @@ def benchmark_tree(server, tree, raw_export):
     if public.get("status") == "summary":
         assert_true(bool(public.get("next_action")), "soft-limit summary lacks next action")
         assert_true("nodes" not in public["tree"], "soft-limit summary leaked the full graph")
-    if len(tree.nodes) >= 2048:
-        assert_true(public.get("status") == "summary", "oversized auto export was not summarized")
+    # Summarizing is driven by the response size, not the node count: auto now
+    # reads through the slim view, so a graph that once blew the soft limit can
+    # legitimately come back whole. Assert the contract itself — over the limit
+    # must summarize, under it must deliver the graph.
+    if public["stats"]["json_bytes"] > soft_response_bytes:
+        assert_true(
+            public.get("status") == "summary",
+            "an export over the soft limit was not summarized",
+        )
+    else:
+        assert_true(
+            "nodes" in public["tree"],
+            "an export within the soft limit withheld the graph",
+        )
     if len(tree.nodes) >= 256:
         assert_true(combined_bytes < full_bytes * 0.15, "index-first context is not materially smaller")
     return {
@@ -355,6 +367,11 @@ def run_test():
         run_name="blender_mcp_node_efficiency_test",
     )
     server = namespace["BlenderMCPServer"]()
+    # Read the live threshold rather than mirroring the number, so this test
+    # cannot drift away from the value the server actually enforces.
+    from blender_extension.nodes.constants import NODE_TREE_SOFT_RESPONSE_BYTES
+
+    soft_response_bytes = NODE_TREE_SOFT_RESPONSE_BYTES
     raw_export = lambda reference, view: namespace["_node_export_target"](
         namespace["_node_resolve_tree_ref"](reference), view
     )
@@ -364,7 +381,9 @@ def run_test():
     }
     metrics = {
         domain: {
-            str(len(tree.nodes)): benchmark_tree(server, tree, raw_export)
+            str(len(tree.nodes)): benchmark_tree(
+                server, tree, raw_export, soft_response_bytes
+            )
             for tree in domain_trees
         }
         for domain, domain_trees in trees.items()

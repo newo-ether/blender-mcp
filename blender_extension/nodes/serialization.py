@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import suppress
 
 import bpy
 
@@ -20,6 +21,13 @@ from .dynamic import (
     _node_dynamic_collection_record,
 )
 
+
+# Pristine socket defaults per (tree type, node type). Probing creates and
+# removes a throwaway node group, so cache aggressively: a 96-node material has
+# only a handful of distinct node types. Cleared on unregister with the module.
+_GN_PRISTINE_SOCKET_CACHE = {}
+
+_GN_PRISTINE_PROBE_PREFIX = "__BlenderMCP_SocketProbe__"
 
 def _node_normalize_view(view, label="Node tree"):
     normalized = str(view).strip().lower()
@@ -130,12 +138,59 @@ def _gn_explicit_node_references(node):
             result[identifier] = _gn_json_value(paired_node)
     return result
 
-def _gn_socket_default_is_meaningful(socket):
+def _gn_pristine_socket_defaults(tree, node):
+    """Return a freshly created node's socket defaults, keyed by socket index.
+
+    RNA's prop.default for a socket's default_value is the zero value of the
+    underlying property type (0.0, '', all-zero array), NOT the value the node
+    type ships with. Comparing against it judges Temperature=6500 or Power=1.0
+    to be "non-default" and keeps them, which is exactly backwards. The only
+    faithful baseline is what the node type actually produces, so build one
+    throwaway node of the same type and read its sockets.
+
+    Results are cached per (tree type, node type); a miss returns None and the
+    caller keeps the socket, since omitting a value we cannot prove is default
+    is the unsafe direction.
+    """
+    cache_key = (tree.bl_idname, node.bl_idname)
+    if cache_key in _GN_PRISTINE_SOCKET_CACHE:
+        return _GN_PRISTINE_SOCKET_CACHE[cache_key]
+
+    defaults = None
+    probe_tree = None
+    try:
+        probe_tree = bpy.data.node_groups.new(
+            "." + _GN_PRISTINE_PROBE_PREFIX + node.bl_idname, tree.bl_idname
+        )
+        probe_node = probe_tree.nodes.new(node.bl_idname)
+        defaults = {}
+        for index, socket in enumerate(probe_node.inputs):
+            if not hasattr(socket, "default_value"):
+                continue
+            try:
+                defaults[index] = _gn_json_value(socket.default_value)
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                continue
+    except (RuntimeError, TypeError, ValueError):
+        # Some node types cannot be instantiated outside their real context
+        # (or not in a bare group of this tree type). Fall back to keeping the
+        # socket rather than guessing it away.
+        defaults = None
+    finally:
+        if probe_tree is not None:
+            with suppress(Exception):
+                bpy.data.node_groups.remove(probe_tree, do_unlink=True)
+
+    _GN_PRISTINE_SOCKET_CACHE[cache_key] = defaults
+    return defaults
+
+def _gn_socket_default_is_meaningful(socket, pristine_defaults, index):
     """Return True when a socket default actually informs what the graph computes.
 
-    A linked socket ignores its default entirely, and an unlinked socket sitting
-    at the type default carries no information a reader does not already know
-    from the node type. Either way the value is noise in a reading view.
+    A linked socket ignores its default entirely, and an unlinked socket still
+    sitting at the value its node type ships with tells a reader nothing they
+    could not get from the node type. Either way the value is noise in a
+    reading view. Anything we cannot prove is a default is kept.
     """
     if socket.is_linked:
         return False
@@ -145,21 +200,13 @@ def _gn_socket_default_is_meaningful(socket):
         value = _gn_json_value(socket.default_value)
     except (AttributeError, TypeError, ValueError, RuntimeError):
         return False
-    prop = socket.bl_rna.properties.get("default_value")
-    if prop is None:
+    if not pristine_defaults or index not in pristine_defaults:
         return True
-    try:
-        if getattr(prop, "type", None) in {"FLOAT", "INT", "BOOLEAN"} and getattr(prop, "array_length", 0):
-            default = _gn_json_value(prop.default_array)
-        else:
-            default = _gn_json_value(prop.default)
-    except (AttributeError, TypeError, ValueError, RuntimeError):
-        return True
-    return value != default
+    return value != pristine_defaults[index]
 
-def _gn_slim_socket_record(socket, direction, index):
+def _gn_slim_socket_record(socket, direction, index, pristine_defaults):
     """Emit a socket only when it carries information a reader cannot infer."""
-    if not _gn_socket_default_is_meaningful(socket):
+    if not _gn_socket_default_is_meaningful(socket, pristine_defaults, index):
         return None
     try:
         value = _gn_json_value(socket.default_value)
@@ -247,9 +294,15 @@ def _gn_slim_node_record(node):
     properties = _gn_slim_properties(node)
     if properties:
         record["properties"] = properties
+    owner_tree = node.id_data
+    pristine_defaults = (
+        _gn_pristine_socket_defaults(owner_tree, node)
+        if isinstance(owner_tree, bpy.types.NodeTree)
+        else None
+    )
     inputs = [
         entry for entry in (
-            _gn_slim_socket_record(socket, "INPUT", index)
+            _gn_slim_socket_record(socket, "INPUT", index, pristine_defaults)
             for index, socket in enumerate(node.inputs)
             if socket.enabled or socket.is_linked
         )
