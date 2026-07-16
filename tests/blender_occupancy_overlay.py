@@ -131,45 +131,49 @@ def run_test():
         "creating a compositor tree is a write and must light the border",
     )
 
-    # 3. Reads leave the overlay completely dark.
+    # 3. A read never names itself in the badge or lights a node editor. The
+    #    viewport is not part of this: it answers the claim, not the command.
     reader = make_server(namespace)
     for command in sorted(lifecycle.READ_ONLY_COMMANDS):
         run_command(namespace, reader, command, {"tree_ref": {"tree_type": "GeometryNodeTree"}})
     assert_true(reader.active_command == "", "a read left the badge naming a command")
     assert_true(reader.active_tree_type == "", "a read lit a node editor")
-
-    viewport = FakeArea("VIEW_3D")
     assert_true(
-        not runtime._area_is_occupied(viewport, bool(reader.active_command), ""),
-        "the viewport was bordered for a claim that has only read",
+        runtime._occupancy_status(reader) is None,
+        "a claim that has only read must leave the badge off",
     )
 
-    # 4. A write lights the viewport and names itself, node work or not.
+    # 4. The viewport borders from the moment the claim is live, because the
+    #    claim is an exclusive lock: the user's session is already affected
+    #    whether or not a write has landed yet.
+    viewport = FakeArea("VIEW_3D")
+    assert_true(
+        runtime._area_is_occupied(viewport, ""),
+        "the viewport must border for a live claim, before any write",
+    )
+
+    # 5. A write names itself in the badge, node work or not.
     writer = make_server(namespace)
     run_command(namespace, writer, "bake_simulation", {})
     assert_true(writer.active_command == "bake_simulation", "write did not record its command")
     assert_true(writer.active_tree_type == "", "a non-node write lit a node editor")
     assert_true(
-        runtime._area_is_occupied(viewport, True, ""),
-        "the viewport must border after any write",
-    )
-    assert_true(
         runtime._occupancy_status(writer) == "Claude Code · bake_simulation",
         f"badge text is wrong: {runtime._occupancy_status(writer)!r}",
     )
 
-    # 5. Each node system lights only its own editor.
+    # 6. Each node system lights only its own editor, and only after a write.
     systems = ("GeometryNodeTree", "ShaderNodeTree", "CompositorNodeTree")
     for shown in systems:
         editor = FakeArea("NODE_EDITOR", shown)
         for active in systems:
             assert_true(
-                runtime._area_is_occupied(editor, True, active) == (shown == active),
+                runtime._area_is_occupied(editor, active) == (shown == active),
                 f"a {shown} editor lit for {active} work",
             )
         assert_true(
-            not runtime._area_is_occupied(editor, False, shown),
-            "a node editor bordered before any write",
+            not runtime._area_is_occupied(editor, ""),
+            "a node editor bordered with no node write recorded",
         )
 
     geometry = make_server(namespace)

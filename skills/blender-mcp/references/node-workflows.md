@@ -2,15 +2,22 @@
 
 ## Select the exact tree
 
-1. When the request refers to the visible, open, or current nodes, call get_node_editor_context first.
+1. When the request refers to the visible, open, current, selected, active, or highlighted nodes -- anything pointing at what is on the user's screen rather than naming a tree -- call get_node_editor_context first.
    - UNIQUE_EDITOR or PINNED_EDITOR: use the selected editor and its tree_ref.
    - MULTIPLE_EDITORS: show the bounded editor identities and require an explicit choice; never choose by focus, order, or recency.
    - STALE_CONTEXT: refresh before using any UI-derived target.
    - NO_EDITOR: ask the user to open one, or continue with owner discovery only when the request already names the target.
-2. Otherwise call list_node_trees and filter by tree type or owner kind when possible.
-3. Select the returned owner-addressed tree_ref; do not identify embedded Shader or Compositor trees by display name alone.
-4. Check edit capability, library state, graph size, users, and revision before planning a mutation.
-5. For a missing Scene compositor tree, call ensure_scene_compositor_tree read-only first. Set create_if_missing=true only when the user requested creation or the requested edit clearly requires it.
+
+   Each editor reports active_node and selected_nodes. Those are the exact stable
+   node names, so "change the node I have selected" is answerable directly and
+   needs no guessing from labels or position. Selection is live UI state: read it
+   when it matters and use it immediately, rather than carrying it forward as if
+   it were part of the graph.
+2. When a request names a node by role rather than identity -- "the node controlling the detail", "that colour ramp" -- and the index or a query cannot resolve it to one candidate, ask the user to select it in the Node Editor and say so, then read selected_nodes. In a file with dozens of trees and hundreds of similarly named nodes, one click is faster and more reliable than several rounds of guessing, and it settles which tree is meant at the same time. Do not fall back to this when the request already names the node, or when the index already resolves it.
+3. Otherwise call list_node_trees and filter by tree type or owner kind when possible.
+4. Select the returned owner-addressed tree_ref; do not identify embedded Shader or Compositor trees by display name alone.
+5. Check edit capability, library state, graph size, users, and revision before planning a mutation.
+6. For a missing Scene compositor tree, call ensure_scene_compositor_tree read-only first. Set create_if_missing=true only when the user requested creation or the requested edit clearly requires it.
 
 The Geometry-specific list_geometry_node_trees family remains useful for exact group-name workflows. Prefer the generic owner-addressed family when Material, World, Light, Scene, or cross-domain identity matters.
 

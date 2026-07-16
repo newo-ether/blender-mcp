@@ -28,10 +28,14 @@ Do not call every status or inspection tool preemptively. Let the requested outc
 - Use get_object_info when the target object is already known.
 - Use audit_external_dependencies, inspect_evaluated_mesh, and get_simulation_status instead of diagnostic Python when they answer the question.
 - Use node-tree indexes and targeted exports instead of loading a large graph. Read graphs through the default view=auto, which selects the compact slim view; escalate to operations, semantic, or all only for an identified missing fact, since each step roughly doubles context for less information.
-- When the user means the visible or current nodes, call get_node_editor_context.
-  Continue automatically only for UNIQUE_EDITOR or PINNED_EDITOR. For
-  MULTIPLE_EDITORS require an explicit choice, and refresh after STALE_CONTEXT;
-  never infer a Node Editor from focus, window order, or recency.
+- When the user means the visible, current, or selected nodes, call
+  get_node_editor_context; it reports active_node and selected_nodes as exact
+  stable names. Continue automatically only for UNIQUE_EDITOR or PINNED_EDITOR.
+  For MULTIPLE_EDITORS require an explicit choice, and refresh after
+  STALE_CONTEXT; never infer a Node Editor from focus, window order, or recency.
+- When a request points at a node by role and no index or query resolves it to
+  one candidate, ask the user to select it in the Node Editor rather than
+  guessing through several rounds of names.
 - Use get_runtime_automation_context before version-sensitive Blender Python.
 - Resolve version-correct official Blender documentation with get_blender_documentation_context, search_blender_docs, and get_blender_doc_page when an API or feature contract is uncertain.
 - Treat returned revisions, editability, owner identity, exact names, and runtime schemas as authoritative.

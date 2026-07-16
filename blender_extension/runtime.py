@@ -66,29 +66,26 @@ def tag_redraw():
             area.tag_redraw()
 
 
-def _area_is_occupied(area, has_written, tree_type):
+def _area_is_occupied(area, tree_type):
     """Return True when this editor should show the occupancy border.
 
-    The border means "the AI has changed something here, so your own edits may
-    collide". It is therefore driven by whether a write has happened, not by
-    the claim alone: a client that only reads cannot collide with the user, so
-    bordering the viewport for it would warn about nothing.
+    Two questions, two answers:
 
-    - The 3D viewport carries the border once the AI has written anything at
-      all. It stands in for the application as a whole, so it answers "has this
-      Blender been changed" no matter which editor the user is looking at.
+    - The 3D viewport borders for as long as the claim is live, from the moment
+      it is taken. The claim is an exclusive lock: while it is held, other
+      clients cannot take it and the user's own session is already affected, so
+      "this Blender is occupied" is true immediately and does not wait for a
+      first write. A client that only ever reads has no business claiming.
     - A node editor joins it once the AI has written to that kind of node tree,
-      and both stay lit until the claim ends. They mark "the AI has been
-      working here", not "a command is running this instant", so they do not
-      flicker on and off around each command.
+      and stays lit until the claim ends. It answers the narrower "the AI has
+      been working on these nodes", so it does not flicker on and off around
+      each command.
 
     Matching on the editor's tree_type -- not on a specific tree name -- keeps
     this predictable: it does not depend on whether one particular tree happens
     to be open, and the values are the same strings the commands already use
     (GeometryNodeTree, ShaderNodeTree, CompositorNodeTree).
     """
-    if not has_written:
-        return False
     if area.type == 'VIEW_3D':
         return True
     if area.type == 'NODE_EDITOR' and tree_type:
@@ -176,11 +173,8 @@ def draw_occupancy_border():
     if not region or region.type != 'WINDOW':
         return
     current_area = getattr(bpy.context, "area", None)
-    # active_command is only ever set by a command that can change Blender, so
-    # its presence is exactly "this claim has written something".
-    has_written = bool(getattr(server, "active_command", ""))
     if current_area is None or not _area_is_occupied(
-        current_area, has_written, str(getattr(server, "active_tree_type", "") or "")
+        current_area, str(getattr(server, "active_tree_type", "") or "")
     ):
         return
     inset = _OVERLAY_INSET
