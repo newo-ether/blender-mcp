@@ -33,7 +33,7 @@ def __getattr__(name):
     state_names = {
         "_BLENDER_MCP_INSTANCE_ID": "instance_id",
         "_BLENDER_MCP_FILE_SESSION_ID": "file_session_id",
-        "_BLENDER_MCP_OVERLAY_HANDLE": "overlay_handle",
+        "_BLENDER_MCP_OVERLAY_HANDLES": "overlay_handles",
     }
     if name in state_names:
         return getattr(state, state_names[name])

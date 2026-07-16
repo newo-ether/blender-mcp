@@ -50,8 +50,13 @@ def main():
     server.start()
     if not server.running or not server.socket:
         raise RuntimeError("Blender MCP bridge failed to start")
-    if addon._BLENDER_MCP_OVERLAY_HANDLE is None:
+    if not addon._BLENDER_MCP_OVERLAY_HANDLES:
         raise RuntimeError("AI occupancy overlay handler was not registered")
+    if "SpaceNodeEditor" not in addon._BLENDER_MCP_OVERLAY_HANDLES:
+        raise RuntimeError(
+            "AI occupancy overlay does not cover the Node Editor, where much "
+            "of the AI's work happens"
+        )
 
     deadline = time.monotonic() + args.timeout
     stop_file = Path(args.stop_file)

@@ -15,6 +15,55 @@ import bpy
 
 from .. import state
 from ..errors import BlenderMCPAddonError
+
+# Commands that only observe Blender. They need no claim, precisely because
+# reading cannot conflict with the user's own work -- which is also why they
+# must never light the occupancy overlay: a border over a read would warn about
+# a collision that cannot happen. The claim guard and the overlay both read this
+# one set, so the lock and the border can never disagree about what a command is.
+READ_ONLY_COMMANDS = frozenset({
+    "blender_mcp_handshake", "get_scene_info", "get_object_info",
+    "get_blender_version_context", "get_runtime_automation_context",
+    "get_node_editor_context",
+    "list_node_trees", "export_node_tree", "get_node_tree_index",
+    "get_node_type_schema", "validate_node_tree_patch",
+    "list_geometry_node_trees", "export_geometry_node_tree",
+    "get_geometry_node_type_schema", "search_geometry_node_types",
+    "search_blender_node_assets", "export_blender_node_asset",
+    "get_geometry_node_tree_index", "validate_geometry_node_patch",
+    "get_viewport_screenshot", "get_telemetry_consent",
+    "get_polyhaven_status", "get_hyper3d_status", "get_sketchfab_status",
+    "get_hunyuan3d_status", "get_polyhaven_categories",
+    "search_polyhaven_assets", "search_sketchfab_models",
+    "get_sketchfab_model_preview", "audit_external_dependencies",
+    "plan_external_dependency_relinks", "inspect_evaluated_mesh",
+    "get_simulation_status", "query_node_graph",
+})
+
+_NODE_TREE_TYPES = frozenset({
+    "GeometryNodeTree",
+    "ShaderNodeTree",
+    "CompositorNodeTree",
+})
+
+
+def _command_tree_type(cmd_type, params):
+    """Return the node system a command works on, or "" when it is not node work.
+
+    The overlay lights the node editor matching this value, so it reports only
+    what the parameters state outright. Geometry commands are identified by name
+    because their tree_name carries no type; the generic node tools carry an
+    explicit tree_ref.tree_type. Anything else -- scene queries, arbitrary
+    Python -- returns "" rather than a guess.
+    """
+    tree_ref = params.get("tree_ref")
+    if isinstance(tree_ref, dict):
+        tree_type = tree_ref.get("tree_type")
+        if tree_type in _NODE_TREE_TYPES:
+            return tree_type
+    if "geometry_node" in cmd_type:
+        return "GeometryNodeTree"
+    return ""
 from ..preferences import get_blendermcp_addon_preferences
 from ..runtime import runtime_directory, tag_redraw
 from ..version import BLENDER_MCP_ADDON_VERSION
@@ -49,6 +98,8 @@ class BridgeLifecycleMixin:
         self.socket = None
         self.server_thread = None
         self.busy = False
+        self.active_command = ""
+        self.active_tree_type = ""
         self.claim = None
         self.last_claim_end_reason = ""
         # Blender's timer registry uses callback object identity. Keep one
@@ -163,6 +214,10 @@ class BridgeLifecycleMixin:
         changed = self.claim is not None
         self.claim = None
         self.last_claim_end_reason = reason
+        # The overlay reads these; stale values would carry a finished session's
+        # highlight and badge into the next one.
+        self.active_command = ""
+        self.active_tree_type = ""
         if changed:
             tag_redraw()
         if self.running:
@@ -245,25 +300,24 @@ class BridgeLifecycleMixin:
         self._write_registry_record()
         return {"renewed": True, "expires_at": self.claim["expires_at"]}
 
+    def _command_writes(self, command_type, params):
+        """Return True when a command can change Blender, so the overlay lights.
+
+        Answers from the same allowlist and the same create_if_missing exception
+        the claim guard uses, rather than a second judgement of its own: the
+        border must mean exactly "a command that needed a claim ran", or it will
+        eventually contradict the lock.
+        """
+        if command_type in READ_ONLY_COMMANDS:
+            return False
+        if command_type in CONTROL_PLANE_COMMANDS:
+            return False
+        if command_type == "ensure_scene_compositor_tree":
+            return bool(params.get("create_if_missing", False))
+        return True
+
     def _authorize_command(self, command_type, params):
-        read_only = {
-            "blender_mcp_handshake", "get_scene_info", "get_object_info",
-            "get_blender_version_context", "get_runtime_automation_context",
-            "get_node_editor_context",
-            "list_node_trees", "export_node_tree", "get_node_tree_index",
-            "get_node_type_schema", "validate_node_tree_patch",
-            "list_geometry_node_trees", "export_geometry_node_tree",
-            "get_geometry_node_type_schema", "search_geometry_node_types",
-            "search_blender_node_assets", "export_blender_node_asset",
-            "get_geometry_node_tree_index", "validate_geometry_node_patch",
-            "get_viewport_screenshot", "get_telemetry_consent",
-            "get_polyhaven_status", "get_hyper3d_status", "get_sketchfab_status",
-            "get_hunyuan3d_status", "get_polyhaven_categories",
-            "search_polyhaven_assets", "search_sketchfab_models",
-            "get_sketchfab_model_preview", "audit_external_dependencies",
-            "plan_external_dependency_relinks", "inspect_evaluated_mesh",
-            "get_simulation_status", "query_node_graph",
-        }
+        read_only = READ_ONLY_COMMANDS
         claim_commands = {
             "claim_blender_instance", "renew_blender_instance", "release_blender_instance"
         }
@@ -639,6 +693,17 @@ class BridgeLifecycleMixin:
                 print(f"Executing handler for {cmd_type}")
                 if tracks_busy:
                     self.busy = True
+                    # Only a command that can change Blender lights the overlay.
+                    # Reads are deliberately silent: they need no claim because
+                    # they cannot collide with the user, so bordering the
+                    # viewport for one would warn about nothing. Commands run
+                    # off the UI thread, so the draw callback only reads these.
+                    if self._command_writes(cmd_type, handler_params):
+                        self.active_command = cmd_type
+                        tree_type = _command_tree_type(cmd_type, handler_params)
+                        if tree_type:
+                            self.active_tree_type = tree_type
+                        tag_redraw()
                     self._write_registry_record()
                 result = handler(**handler_params)
                 print(f"Handler execution complete")
@@ -652,7 +717,15 @@ class BridgeLifecycleMixin:
             finally:
                 if tracks_busy:
                     self.busy = False
+                    # active_command and active_tree_type deliberately survive
+                    # the command. Most commands finish in milliseconds, so a
+                    # badge cleared on completion would flicker past unread.
+                    # Keeping the last one makes the badge answer "what has the
+                    # AI just done", which is legible and still true. Both are
+                    # cleared when the claim ends.
                     with suppress(Exception):
                         self._write_registry_record()
+                    with suppress(Exception):
+                        tag_redraw()
         else:
             raise BlenderMCPAddonError("unknown_command", f"Unknown command type: {cmd_type}")

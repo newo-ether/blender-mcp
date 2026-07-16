@@ -21,7 +21,11 @@ from .lifecycle import (
     sync_prefs_to_scene,
 )
 from .preferences import get_blendermcp_addon_preferences
-from .runtime import draw_occupancy_border, on_allow_ai_control_changed
+from .runtime import (
+    OVERLAY_SPACE_TYPES,
+    draw_occupancy_border,
+    on_allow_ai_control_changed,
+)
 
 
 class BLENDERMCP_AddonPreferences(bpy.types.AddonPreferences):
@@ -255,6 +259,40 @@ class BLENDERMCP_OT_OpenTerms(bpy.types.Operator):
 
         return {'FINISHED'}
 
+def _register_overlay_handlers():
+    """Draw the occupancy overlay in every editor the add-on can reach.
+
+    Blender binds a draw handler to one SpaceType and clips its callback to that
+    region, so there is no way to draw a single window-wide frame; each editor
+    must register its own. A SpaceType absent from this Blender build is skipped
+    rather than allowed to break registration.
+    """
+    for space_name in OVERLAY_SPACE_TYPES:
+        if space_name in state.overlay_handles:
+            continue
+        space_type = getattr(bpy.types, space_name, None)
+        if space_type is None or not hasattr(space_type, "draw_handler_add"):
+            continue
+        try:
+            state.overlay_handles[space_name] = space_type.draw_handler_add(
+                draw_occupancy_border,
+                (),
+                'WINDOW',
+                'POST_PIXEL',
+            )
+        except Exception:
+            continue
+
+
+def _unregister_overlay_handlers():
+    for space_name, handle in list(state.overlay_handles.items()):
+        space_type = getattr(bpy.types, space_name, None)
+        if space_type is not None:
+            with suppress(Exception):
+                space_type.draw_handler_remove(handle, 'WINDOW')
+        state.overlay_handles.pop(space_name, None)
+
+
 def register():
     # Scene properties with update callbacks that sync to persistent AddonPreferences
     U = lambda name: _make_scene_update(name)  # shorthand
@@ -359,13 +397,7 @@ def register():
     bpy.utils.register_class(BLENDERMCP_OT_ReleaseAIControl)
     bpy.utils.register_class(BLENDERMCP_OT_OpenTerms)
 
-    if state.overlay_handle is None:
-        state.overlay_handle = bpy.types.SpaceView3D.draw_handler_add(
-            draw_occupancy_border,
-            (),
-            'WINDOW',
-            'POST_PIXEL',
-        )
+    _register_overlay_handlers()
 
     # Register load_post handler for persistence + auto-connect
     bpy.app.handlers.load_post.append(_load_post_handler)
@@ -394,10 +426,7 @@ def unregister():
         bpy.types.blendermcp_server.stop()
         del bpy.types.blendermcp_server
 
-    if state.overlay_handle is not None:
-        with suppress(Exception):
-            bpy.types.SpaceView3D.draw_handler_remove(state.overlay_handle, 'WINDOW')
-        state.overlay_handle = None
+    _unregister_overlay_handlers()
 
     bpy.utils.unregister_class(BLENDERMCP_PT_Panel)
     bpy.utils.unregister_class(BLENDERMCP_OT_SetFreeTrialHyper3DAPIKey)
