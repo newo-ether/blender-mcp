@@ -174,7 +174,11 @@ class NodeTreeToolTests(unittest.TestCase):
                 ))
             destination = Path(response["path"])
             self.assertEqual(response["status"], "written")
-            self.assertEqual(destination, Path(temp_dir) / "complete.json")
+            # Resolve both sides: on Windows, tempfile may yield an 8.3 short
+            # path (e.g. NEWOET~1) when TEMP points at a short-name form, while
+            # the tool canonicalizes via Path.resolve() to the long name. Comparing
+            # unresolved paths spuriously fails when the username contains a space.
+            self.assertEqual(destination.resolve(), (Path(temp_dir) / "complete.json").resolve())
             self.assertTrue(destination.is_file())
             snapshot = json.loads(destination.read_text(encoding="utf-8"))
             self.assertEqual(snapshot["view"], "operations")
