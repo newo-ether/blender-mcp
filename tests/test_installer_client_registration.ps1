@@ -5,7 +5,6 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$installer = Join-Path $root "install.ps1"
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("blender-mcp-installer-clients-" + [guid]::NewGuid().ToString("N"))
 $clientLog = Join-Path $tempRoot "client.log"
 $previousClientLog = $env:FAKE_MCP_LOG
@@ -78,11 +77,7 @@ if /I "%1"=="mcp" if /I "%2"=="add" exit /b 0
 exit /b 2
 '@
 
-    $source = (Get-Content -LiteralPath $installer -Raw -Encoding UTF8) -replace "`r`n", "`n"
-    $mainMarker = "`ntry {`n    Write-Banner"
-    $mainIndex = $source.LastIndexOf($mainMarker, [System.StringComparison]::Ordinal)
-    Assert-True -Condition ($mainIndex -ge 0) -Message "Could not isolate installer function definitions."
-    . ([scriptblock]::Create($source.Substring(0, $mainIndex)))
+    . (Join-Path $PSScriptRoot "import_installer.ps1") -Root $root
 
     $workspace = Join-Path $tempRoot "workspace"
     $serverExecutable = Join-Path $tempRoot "blender-mcp.exe"
@@ -186,6 +181,103 @@ exit /b 2
     Remove-CodexLegacyBlenderMcpEntries -CodexExecutable $codex -PreserveExisting $true
     $calls = @(Get-Content -LiteralPath $clientLog)
     Assert-True -Condition (-not [bool]($calls -match '^codex mcp remove blender$')) -Message "Preserve mode removed a legacy Codex entry."
+
+    $python = Get-Command python -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    Assert-True -Condition ($null -ne $python) -Message "Python is required for the Desktop-only TOML contract test."
+    $codexHome = Join-Path $tempRoot "desktop-only-codex"
+    $codexConfig = Join-Path $codexHome "config.toml"
+    New-Item -ItemType Directory -Path $codexHome -Force | Out-Null
+    @'
+model = "gpt-test"
+
+[mcp_servers.keep_me]
+command = "keep.exe"
+'@ | Set-Content -LiteralPath $codexConfig -Encoding UTF8
+
+    $desktopServer = Join-Path $tempRoot "desktop-only\blender-mcp.exe"
+    $desktopWorkspace = Join-Path $tempRoot "desktop-workspace"
+    Register-CodexConfigMcp `
+        -ConfigPath $codexConfig `
+        -PythonExecutable $python.Source `
+        -ServerExecutable $desktopServer `
+        -Workspace $desktopWorkspace `
+        -Port 9876 `
+        -PreserveExisting $false
+
+    Assert-True -Condition ($script:CodexStatus -eq "configured (config file)") -Message "Desktop-only Codex registration did not add the missing entry."
+    $desktopState = Get-CodexConfigStateWithPython -PythonExecutable $python.Source -ConfigPath $codexConfig
+    Assert-True -Condition $desktopState.exists -Message "Desktop-only config lacks blender_mcp."
+    Assert-True -Condition (Test-SamePath -Left $desktopState.command -Right $desktopServer) -Message "Desktop-only config has the wrong command."
+    Assert-True -Condition (Test-SamePath -Left $desktopState.workspace -Right $desktopWorkspace) -Message "Desktop-only config has the wrong workspace."
+    $desktopConfigText = Get-Content -LiteralPath $codexConfig -Raw -Encoding UTF8
+    Assert-True -Condition ($desktopConfigText -match 'model = "gpt-test"') -Message "Desktop-only registration removed an unrelated top-level setting."
+    Assert-True -Condition ($desktopConfigText -match '\[mcp_servers\.keep_me\]') -Message "Desktop-only registration removed another MCP server."
+    Assert-True -Condition (@(Get-ChildItem -LiteralPath $codexHome -Filter "config.toml.blender-mcp-*.bak").Count -eq 1) -Message "Desktop-only registration did not back up the existing config."
+
+    Register-CodexConfigMcp `
+        -ConfigPath $codexConfig `
+        -PythonExecutable $python.Source `
+        -ServerExecutable $desktopServer `
+        -Workspace $desktopWorkspace `
+        -Port 9876 `
+        -PreserveExisting $false
+    Assert-True -Condition ($script:CodexStatus -eq "already configured") -Message "Matching Desktop-only config was not retained."
+    Assert-True -Condition (@(Get-ChildItem -LiteralPath $codexHome -Filter "config.toml.blender-mcp-*.bak").Count -eq 1) -Message "Matching Desktop-only config created an unnecessary backup."
+
+    $replacementServer = Join-Path $tempRoot "replacement\blender-mcp.exe"
+    Register-CodexConfigMcp `
+        -ConfigPath $codexConfig `
+        -PythonExecutable $python.Source `
+        -ServerExecutable $replacementServer `
+        -Workspace $desktopWorkspace `
+        -Port 9876 `
+        -PreserveExisting $true
+    Assert-True -Condition ($script:CodexStatus -eq "existing different entry preserved") -Message "PreserveExistingMcpEntries did not retain the Desktop-only entry."
+
+    Register-CodexConfigMcp `
+        -ConfigPath $codexConfig `
+        -PythonExecutable $python.Source `
+        -ServerExecutable $replacementServer `
+        -Workspace $desktopWorkspace `
+        -Port 9876 `
+        -PreserveExisting $false
+    Assert-True -Condition ($script:CodexStatus -eq "updated (config file)") -Message "Default Desktop-only behavior did not replace the different entry."
+    $replacementState = Get-CodexConfigStateWithPython -PythonExecutable $python.Source -ConfigPath $codexConfig
+    Assert-True -Condition (Test-SamePath -Left $replacementState.command -Right $replacementServer) -Message "Desktop-only replacement kept the old command."
+
+    $inlineConfig = Join-Path $codexHome "inline.toml"
+    $inlineOriginal = 'mcp_servers = { blender_mcp = { command = "custom.exe", env = { BLENDER_PORT = "9876" } } }'
+    Set-Content -LiteralPath $inlineConfig -Value $inlineOriginal -Encoding UTF8
+    $inlineRejected = $false
+    try {
+        Register-CodexConfigMcp `
+            -ConfigPath $inlineConfig `
+            -PythonExecutable $python.Source `
+            -ServerExecutable $desktopServer `
+            -Workspace $desktopWorkspace `
+            -Port 9876 `
+            -PreserveExisting $false
+    }
+    catch { $inlineRejected = $true }
+    Assert-True -Condition $inlineRejected -Message "An inline TOML layout was rewritten without a safely located table."
+    Assert-True -Condition ((Get-Content -LiteralPath $inlineConfig -Raw).Trim() -eq $inlineOriginal) -Message "Rejected inline TOML was modified."
+
+    $invalidConfig = Join-Path $codexHome "invalid.toml"
+    $invalidOriginal = '[mcp_servers.blender_mcp'
+    Set-Content -LiteralPath $invalidConfig -Value $invalidOriginal -Encoding UTF8
+    $invalidRejected = $false
+    try {
+        Register-CodexConfigMcp `
+            -ConfigPath $invalidConfig `
+            -PythonExecutable $python.Source `
+            -ServerExecutable $desktopServer `
+            -Workspace $desktopWorkspace `
+            -Port 9876 `
+            -PreserveExisting $false
+    }
+    catch { $invalidRejected = $true }
+    Assert-True -Condition $invalidRejected -Message "Invalid Codex TOML was not rejected."
+    Assert-True -Condition ((Get-Content -LiteralPath $invalidConfig -Raw).Trim() -eq $invalidOriginal) -Message "Invalid Codex TOML was modified."
 
     Write-Host "Installer client-registration tests passed." -ForegroundColor Green
 }

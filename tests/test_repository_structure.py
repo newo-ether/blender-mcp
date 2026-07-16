@@ -96,13 +96,20 @@ def import_cycles(graph):
 class RepositoryStructureTests(unittest.TestCase):
     def test_repository_code_does_not_depend_on_agent_execution_files(self):
         forbidden = "." + "codex"
+        allowed_installer_references = {
+            "scripts/installer/discovery.ps1",
+            "tests/test_installer_targets_and_mcpb.ps1",
+        }
         references = [
             path.relative_to(ROOT).as_posix()
             for path in repository_source_files()
             if path != Path(__file__).resolve()
             and forbidden in path.read_text(encoding="utf-8", errors="replace")
         ]
-        self.assertEqual(references, [])
+        # The Windows installer now supports Codex Desktop without Codex CLI,
+        # so only its config-path resolver and focused contract test may name
+        # the shared per-user Codex directory.
+        self.assertEqual(set(references), allowed_installer_references)
 
     def test_repository_code_has_no_user_specific_absolute_paths(self):
         patterns = (
@@ -256,9 +263,27 @@ class RepositoryStructureTests(unittest.TestCase):
             if len(path.read_text(encoding="utf-8").splitlines())
             > MAX_PRODUCTION_MODULE_LINES
         }
-        # The public installer is intentionally one self-contained release asset:
-        # bootstrap.ps1 downloads it directly and its contract tests dot-source it.
-        self.assertEqual(oversized, {"install.ps1"})
+        # install.ps1 remains the stable public entry point; bounded production
+        # modules under scripts/installer contain the implementation.
+        self.assertEqual(oversized, set())
+
+    def test_windows_installer_has_bounded_modules(self):
+        module_root = ROOT / "scripts" / "installer"
+        expected = {
+            "common.ps1",
+            "release.ps1",
+            "skills.ps1",
+            "discovery.ps1",
+            "targets.ps1",
+            "clients.ps1",
+            "codex-config.ps1",
+            "install-main.ps1",
+        }
+        self.assertEqual({path.name for path in module_root.glob("*.ps1")}, expected)
+        self.assertLessEqual(
+            len((ROOT / "install.ps1").read_text(encoding="utf-8-sig").splitlines()),
+            300,
+        )
 
 
 if __name__ == "__main__":

@@ -45,11 +45,13 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercont
 
 `-Scope Process` applies only to the current PowerShell window; it does not
 permanently change the user or machine execution policy. The ASCII
-[bootstrap.ps1](bootstrap.ps1) only fetches and launches the human-readable
-[install.ps1](install.ps1). For a reproducible, version-pinned install, use:
+[bootstrap.ps1](bootstrap.ps1) fetches and launches the stable
+[install.ps1](install.ps1) entry point. That entry loads the bounded modules in
+[`scripts/installer`](scripts/installer) from the local checkout or the matching
+GitHub source archive. For a reproducible, version-pinned install, use:
 
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.14.1/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.14.1
+Set-ExecutionPolicy Bypass -Scope Process -Force; & ([scriptblock]::Create(([string](irm https://raw.githubusercontent.com/newo-ether/blender-mcp/v1.14.2/install.ps1)).TrimStart([char]0xFEFF))) -ReleaseTag v1.14.2
 ```
 
 The explicit `TrimStart` removes the UTF-8 BOM carried by the localized full
@@ -64,16 +66,21 @@ Before changing the machine, the installer:
 3. downloads the latest stable [GitHub Release](https://github.com/newo-ether/blender-mcp/releases/latest);
 4. verifies the wheel, Extension ZIP, portable Skill ZIP, and optional fallback MCPB against `SHA256SUMS.txt`;
 5. installs into a versioned environment such as
-   `%LOCALAPPDATA%\BlenderMCP\venv-1.14.1`;
+   `%LOCALAPPDATA%\BlenderMCP\venv-1.14.2`;
 6. installs the server and the Extension into each selected Blender version without resetting existing Blender preferences;
 7. adds or updates the canonical `blender_mcp` entry for selected clients;
+   Codex CLI is used when available, while a Codex Desktop-only installation is
+   configured through the shared `~/.codex/config.toml` without requiring the CLI;
 8. installs the same portable Skill for selected Codex and Claude Code clients,
    and prepares a verified upload ZIP for Claude Desktop with an explicit
    action-required reminder; Desktop upload is not reported as installed.
 
-Updates are idempotent: an exact matching Codex entry is left alone, while a
-different `blender_mcp` Codex, Claude Code, or Claude Desktop user entry is replaced in place.
-Use `-PreserveExistingMcpEntries` when an existing custom entry must not change.
+Updates are idempotent: an exact matching Codex entry is left alone, a missing
+entry is added, and a different `blender_mcp` Codex, Claude Code, or Claude
+Desktop user entry is replaced by default. Use `-PreserveExistingMcpEntries`
+when an existing custom entry must not change. The Codex Desktop-only fallback
+parses the existing and candidate TOML with Python, preserves unrelated text,
+backs up the file, and refuses an unusual layout it cannot safely isolate.
 Versioned environments allow an update while an older server is still running;
 the current session finishes on the old process and restarted clients use the
 new verified environment. Older `venv-<version>` directories are retained so a
@@ -94,7 +101,7 @@ Use `-Gui` for a WinForms checkbox window.
 
 | Target | Installer behavior |
 | --- | --- |
-| Codex / ChatGPT | One combined target that adds or updates their shared per-user `blender_mcp` stdio configuration and installs one shared Skill under `~/.agents/skills`. |
+| Codex / ChatGPT | One combined target that adds or updates their shared per-user `blender_mcp` stdio configuration and installs one shared Skill under `~/.agents/skills`. Codex Desktop is sufficient; Codex CLI is optional. Without the CLI, the installer validates and safely updates `~/.codex/config.toml`, with a backup before replacement. |
 | Claude Code CLI | Adds or updates `blender_mcp` in user scope and installs the Skill under `~/.claude/skills`; project/local MCP entries are not removed. |
 | Claude Desktop | Safely merges `blender_mcp` into `%APPDATA%\Claude\claude_desktop_config.json`, preserving other settings and making a backup before replacement. It also prepares a verified Skill ZIP for explicit upload. Invalid or unwritable JSON falls back to the checksummed MCPB and Claude's in-app confirmation. |
 | Blender 4.2+ | Every detected supported version is selected by default; deselect any version you do not want to update. |
@@ -381,7 +388,7 @@ Install the server on Windows:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.14.1-py3-none-any.whl
+.\.venv\Scripts\python.exe -m pip install .\blender_mcp-1.14.2-py3-none-any.whl
 ```
 
 On macOS or Linux:
@@ -389,7 +396,7 @@ On macOS or Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./blender_mcp-1.14.1-py3-none-any.whl
+python -m pip install ./blender_mcp-1.14.2-py3-none-any.whl
 ```
 
 Install the Extension in Blender 4.2+:
@@ -434,6 +441,19 @@ Codex CLI and ChatGPT with Codex mode:
 codex mcp add blender_mcp `
   --env BLENDER_MCP_WORKSPACE=C:\path\to\workspace `
   -- C:\path\to\venv\Scripts\blender-mcp.exe
+```
+
+Codex Desktop uses the same `~/.codex/config.toml`. The installer writes this
+equivalent form when Desktop is installed but `codex` is unavailable:
+
+```toml
+[mcp_servers.blender_mcp]
+command = "C:\\path\\to\\venv\\Scripts\\blender-mcp.exe"
+
+[mcp_servers.blender_mcp.env]
+BLENDER_MCP_WORKSPACE = "C:\\path\\to\\workspace"
+BLENDER_HOST = "localhost"
+BLENDER_PORT = "9876"
 ```
 
 Claude Code:
@@ -601,8 +621,9 @@ Build all Release assets:
 | [src/blender_mcp/tools](src/blender_mcp/tools) | MCP tools grouped by instances, scene, documentation, nodes, and providers. |
 | [src/blender_mcp/transport](src/blender_mcp/transport) | Local Blender socket transport and instance routing. |
 | [src/blender_mcp/protocol](src/blender_mcp/protocol) | Pure-Python errors and structured node contracts. |
-| [bootstrap.ps1](bootstrap.ps1) | ASCII one-line entry point that fetches the localized installer. |
-| [install.ps1](install.ps1) | Human-readable Windows Release installer. |
+| [bootstrap.ps1](bootstrap.ps1) | ASCII one-line entry point that fetches the localized installer entry. |
+| [install.ps1](install.ps1) | Stable Windows installer interface and local/remote module loader. |
+| [scripts/installer](scripts/installer) | Bounded installer modules for shared helpers, release assets, Skills, discovery, target selection, client registration, safe Codex TOML fallback, and orchestration. |
 | [scripts/build_release.ps1](scripts/build_release.ps1) | Release asset builder. |
 | [docs/blender-knowledge.md](docs/blender-knowledge.md) | Official documentation and live runtime knowledge guide. |
 | [docs/geometry-nodes.md](docs/geometry-nodes.md) | Geometry Nodes protocol guide. |

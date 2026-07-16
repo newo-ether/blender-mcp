@@ -46,6 +46,8 @@ def archive_files(path: Path) -> set[str]:
         pure = PurePosixPath(name)
         if pure.is_absolute() or ".." in pure.parts:
             raise RuntimeError(f"Unsafe archive member in {path.name}: {name}")
+        if "__pycache__" in pure.parts or pure.suffix in {".pyc", ".pyo"}:
+            raise RuntimeError(f"Generated Python cache in {path.name}: {name}")
     return names
 
 

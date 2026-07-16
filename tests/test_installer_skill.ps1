@@ -16,11 +16,7 @@ function Assert-True {
 }
 
 try {
-    $source = (Get-Content -LiteralPath $installer -Raw -Encoding UTF8) -replace "`r`n", "`n"
-    $mainMarker = "`ntry {`n    Write-Banner"
-    $mainIndex = $source.LastIndexOf($mainMarker, [System.StringComparison]::Ordinal)
-    Assert-True -Condition ($mainIndex -ge 0) -Message "Could not isolate installer function definitions."
-    . ([scriptblock]::Create($source.Substring(0, $mainIndex)))
+    . (Join-Path $PSScriptRoot "import_installer.ps1") -Root $root
 
     $script:UseChinese = $false
     $script:ClaudeDesktopSkillStatus = "not tested"

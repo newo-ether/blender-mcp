@@ -21,11 +21,8 @@ function Assert-True {
 }
 
 try {
-    $source = (Get-Content -LiteralPath $installer -Raw -Encoding UTF8) -replace "`r`n", "`n"
-    $mainMarker = "`ntry {`n    Write-Banner"
-    $mainIndex = $source.LastIndexOf($mainMarker, [System.StringComparison]::Ordinal)
-    Assert-True -Condition ($mainIndex -ge 0) -Message "Could not isolate installer function definitions."
-    . ([scriptblock]::Create($source.Substring(0, $mainIndex)))
+    . (Join-Path $PSScriptRoot "import_installer.ps1") -Root $root
+    $source = Get-Content -LiteralPath (Join-Path $root "scripts\installer\targets.ps1") -Raw -Encoding UTF8
 
     $installerBytes = [System.IO.File]::ReadAllBytes($installer)
     Assert-True -Condition ($installerBytes[0] -eq 0xEF -and $installerBytes[1] -eq 0xBB -and $installerBytes[2] -eq 0xBF) -Message "Localized installer lost its Windows PowerShell 5.1 UTF-8 BOM."
@@ -92,6 +89,21 @@ try {
         -BlenderInstallations @() `
         -NoGui $true
     Assert-True -Condition ($codexSelection.CodexCli -and $codexSelection.CodexDesktop) -Message "The combined Codex/ChatGPT target did not enable the shared configuration."
+
+    $desktopOnlyDetection = [PSCustomObject]@{
+        CodexCliFound = $false
+        CodexDesktopFound = $true
+        CodexConfigPath = "C:\test-home\.codex\config.toml"
+        ClaudeCodeFound = $false
+        ClaudeDesktopFound = $false
+    }
+    $desktopOnlySelection = Select-InstallTargets `
+        -Detection $desktopOnlyDetection `
+        -BlenderInstallations @() `
+        -NoGui $true
+    Assert-True -Condition (-not $desktopOnlySelection.CodexCli) -Message "Desktop-only selection incorrectly claimed that Codex CLI was installed."
+    Assert-True -Condition $desktopOnlySelection.CodexDesktop -Message "Codex Desktop was not selected when Codex CLI was absent."
+    Assert-True -Condition ((Get-CodexConfigPath -CodexHome "" -UserHome "C:\test-home") -eq "C:\test-home\.codex\config.toml") -Message "Codex Desktop shared config path is incorrect."
     Assert-True -Condition ($source -match 'Kind = "Codex"') -Message "The selector lacks the combined Codex target."
     Assert-True -Condition ($source -notmatch 'Kind = "CodexCli"|Kind = "CodexDesktop"') -Message "The selector still exposes separate Codex and ChatGPT targets."
 

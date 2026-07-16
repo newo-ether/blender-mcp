@@ -120,6 +120,12 @@ try {
     New-Item -ItemType Directory -Path $pythonStage -Force | Out-Null
     New-Item -ItemType Directory -Path $schemaStage -Force | Out-Null
     Copy-Item -Path (Join-Path $root "src\blender_mcp\*") -Destination $pythonStage -Recurse -Force
+    Get-ChildItem -LiteralPath $pythonStage -Directory -Recurse -Force |
+        Where-Object { $_.Name -eq "__pycache__" } |
+        Remove-Item -Recurse -Force
+    Get-ChildItem -LiteralPath $pythonStage -File -Recurse -Force |
+        Where-Object { $_.Extension -in @(".pyc", ".pyo") } |
+        Remove-Item -Force
     Copy-Item -Path (Join-Path $root "schemas\*.json") -Destination $schemaStage -Force
 
     $stagedManifest = Join-Path $mcpbStage "manifest.json"
