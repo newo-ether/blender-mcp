@@ -62,4 +62,12 @@ _GN_NODE_PROPERTY_EXCLUDES = {
     "height", "dimensions", "parent", "select", "show_options",
     "show_preview", "show_texture", "use_custom_color", "color",
     "inputs", "outputs", "internal_links", "type", "bl_idname",
+    # Static display metadata declared at class registration time. These are
+    # writable and non-hidden, so the non-default filter in _gn_operation_properties
+    # would otherwise include them (their RNA prop.default is the base-type default
+    # such as '' or 0.0, not the subclass value). They carry no per-instance state
+    # and must not leak into operation/semantic snapshots or patch round-trips.
+    "bl_label", "bl_description", "bl_icon",
+    "bl_width_default", "bl_width_min", "bl_width_max",
+    "bl_height_default", "bl_height_min", "bl_height_max",
 }
