@@ -67,7 +67,7 @@ Do not call every status or inspection tool preemptively. Let the requested outc
 
 ## Load focused guidance
 
-- Read [references/node-workflows.md](references/node-workflows.md) for Geometry, Shader, or Compositor node work, including Blender 5.2 List migration checks.
+- Read [references/node-workflows.md](references/node-workflows.md) for Geometry, Shader, or Compositor node work.
 - Read [references/asset-workflows.md](references/asset-workflows.md) for bundled node assets, PolyHaven, Sketchfab, Hyper3D, or Hunyuan3D.
 - Read [references/render-workflows.md](references/render-workflows.md) when visual output, render configuration, or viewport verification is part of acceptance.
 - Read [references/recovery.md](references/recovery.md) after transport, validation, transaction, or arbitrary-code failures.

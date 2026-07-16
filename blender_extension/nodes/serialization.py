@@ -101,6 +101,8 @@ def _gn_socket_record(socket, direction, index, include_default=True):
     }
     if not bool(socket.enabled):
         record["enabled"] = False
+    if bool(getattr(socket, "hide", False)):
+        record["hide"] = True
     if bool(getattr(socket, "is_multi_input", False)):
         record["multi_input"] = True
     if include_default and hasattr(socket, "default_value"):
@@ -117,6 +119,8 @@ def _gn_operation_socket_record(socket, direction, index):
         record["name"] = socket.name
     if not bool(socket.enabled):
         record["enabled"] = False
+    if bool(getattr(socket, "hide", False)):
+        record["hide"] = True
     if bool(getattr(socket, "is_multi_input", False)):
         record["multi_input"] = True
     if hasattr(socket, "default_value"):

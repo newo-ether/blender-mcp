@@ -76,6 +76,15 @@ def _gn_apply_operations_to_working(working, patch):
                 raise RuntimeError(f"Validated input socket disappeared: {operation['socket']}")
             socket.default_value = _gn_decode_patch_value(operation["value"], node_refs)
 
+        elif op == "set_socket_hide":
+            node = node_refs[operation["node"]]["node"]
+            socket_id = operation["socket"]
+            direction = "output" if socket_id.startswith("output:") else "input"
+            socket = _gn_resolve_patch_socket(node, socket_id, direction, "", [])
+            if socket is None:
+                raise RuntimeError(f"Validated socket disappeared: {socket_id}")
+            socket.hide = bool(operation["value"])
+
         elif op in {"add_link", "remove_link"}:
             from_node = node_refs[operation["from_node"]]["node"]
             to_node = node_refs[operation["to_node"]]["node"]

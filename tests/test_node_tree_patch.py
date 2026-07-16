@@ -96,6 +96,39 @@ class NodeTreePatchTests(unittest.TestCase):
         self.assertIn("non_finite_number", codes)
         self.assertIn("invalid_socket_id", codes)
 
+    def test_set_socket_hide_accepts_both_directions_and_checks_types(self):
+        value = sample_patch()
+        value["capabilities"] = ["graph"]
+        value["operations"] = [
+            {
+                "op": "set_socket_hide",
+                "node": "Group Input",
+                "socket": "output:2:Socket_2",
+                "value": True,
+            },
+            {
+                "op": "set_socket_hide",
+                "node": "Group Output",
+                "socket": "input:0:Socket_0",
+                "value": False,
+            },
+        ]
+        self.assertEqual(patch_schema.validate_patch_structure(value), [])
+
+        value["operations"] = [
+            {
+                "op": "set_socket_hide",
+                "node": "Group Input",
+                "socket": "elsewhere:0:Socket_0",
+                "value": 1,
+            }
+        ]
+        codes = {
+            item["code"] for item in patch_schema.validate_patch_structure(value)
+        }
+        self.assertIn("invalid_socket_id", codes)
+        self.assertIn("invalid_boolean", codes)
+
     def test_dynamic_structures_require_ordered_bounded_values(self):
         value = sample_patch()
         value["operations"] = [{

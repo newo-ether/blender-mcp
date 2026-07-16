@@ -25,6 +25,7 @@
           {"$ref": "#/$defs/renameNode"},
           {"$ref": "#/$defs/setNodeProperty"},
           {"$ref": "#/$defs/setSocketDefault"},
+          {"$ref": "#/$defs/setSocketHide"},
           {"$ref": "#/$defs/addLink"},
           {"$ref": "#/$defs/removeLink"},
           {"$ref": "#/$defs/setNodeLayout"},
@@ -104,6 +105,7 @@
     "renameNode": {"type": "object", "required": ["op", "node", "name"], "properties": {"op": {"const": "rename_node"}, "node": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}}, "additionalProperties": false},
     "setNodeProperty": {"type": "object", "required": ["op", "node", "property", "value"], "properties": {"op": {"const": "set_node_property"}, "node": {"type": "string", "minLength": 1}, "property": {"type": "string", "minLength": 1}, "value": {"$ref": "#/$defs/typedValue"}}, "additionalProperties": false},
     "setSocketDefault": {"type": "object", "required": ["op", "node", "socket", "value"], "properties": {"op": {"const": "set_socket_default"}, "node": {"type": "string", "minLength": 1}, "socket": {"type": "string", "pattern": "^input:[0-9]+:.+$"}, "value": {"$ref": "#/$defs/typedValue"}}, "additionalProperties": false},
+    "setSocketHide": {"type": "object", "required": ["op", "node", "socket", "value"], "properties": {"op": {"const": "set_socket_hide"}, "node": {"type": "string", "minLength": 1}, "socket": {"type": "string", "pattern": "^(input|output):[0-9]+:.+$"}, "value": {"type": "boolean"}}, "additionalProperties": false},
     "linkFields": {
       "type": "object",
       "required": ["op", "from_node", "from_socket", "to_node", "to_socket"],

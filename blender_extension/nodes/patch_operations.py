@@ -195,6 +195,7 @@ def _node_execute_patch_operations(target, patch):
         "nodes_renamed": 0,
         "node_properties_changed": 0,
         "socket_defaults_changed": 0,
+        "sockets_hidden": 0,
         "links_added": 0,
         "links_removed": 0,
         "layouts_changed": 0,
@@ -363,6 +364,30 @@ def _node_execute_patch_operations(target, patch):
                         )
                         diff["socket_defaults_changed"] += 1
                         summary = f"Set default for {operation['node']}"
+
+            elif op == "set_socket_hide":
+                node = resolve_node(operation["node"], f"{path}/node")
+                if node is not None and _node_mutation_allowed(
+                    node, op, path, diagnostics
+                ):
+                    socket_id = operation["socket"]
+                    direction = "output" if socket_id.startswith("output:") else "input"
+                    socket = _gn_resolve_patch_socket(
+                        node, socket_id, direction, f"{path}/socket", diagnostics
+                    )
+                    if socket is not None:
+                        if not hasattr(socket, "hide"):
+                            diagnostics.append(_gn_patch_diagnostic(
+                                "error", "socket_not_hideable", f"{path}/socket",
+                                f"Socket {socket_id} does not support hide",
+                            ))
+                        else:
+                            socket.hide = bool(operation["value"])
+                            diff["sockets_hidden"] += 1
+                            summary = (
+                                f"{'Hide' if operation['value'] else 'Show'} "
+                                f"{operation['node']}:{socket_id}"
+                            )
 
             elif op in {"add_link", "remove_link"}:
                 from_node = resolve_node(operation["from_node"], f"{path}/from_node")

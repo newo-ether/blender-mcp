@@ -35,6 +35,7 @@ def _gn_validate_patch_runtime(tree, patch):
         "nodes_renamed": 0,
         "node_properties_changed": 0,
         "socket_defaults_changed": 0,
+        "sockets_hidden": 0,
         "links_added": 0,
         "links_removed": 0,
         "layouts_changed": 0,
@@ -257,6 +258,31 @@ def _gn_validate_patch_runtime(tree, patch):
                                 ))
                         diff["socket_defaults_changed"] += 1
                         summary = f"Set default {operation['node']}:{operation['socket']}"
+
+            elif op == "set_socket_hide":
+                item = _gn_resolve_patch_node(node_refs, operation["node"], f"{path}/node", diagnostics)
+                if item:
+                    socket_id = operation["socket"]
+                    direction = "output" if socket_id.startswith("output:") else "input"
+                    socket = _gn_resolve_patch_socket(
+                        item["node"], socket_id, direction, f"{path}/socket", diagnostics,
+                    )
+                    if socket is not None:
+                        if not hasattr(socket, "hide"):
+                            diagnostics.append(_gn_patch_diagnostic(
+                                "error", "socket_not_hideable", f"{path}/socket",
+                                f"Socket {socket_id} does not support hide",
+                            ))
+                        else:
+                            if not item["existing"]:
+                                try:
+                                    socket.hide = bool(operation["value"])
+                                except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+                                    diagnostics.append(_gn_patch_diagnostic(
+                                        "error", "rna_assignment_rejected", f"{path}/value", str(exc),
+                                    ))
+                            diff["sockets_hidden"] += 1
+                            summary = f"{'Hide' if operation['value'] else 'Show'} {operation['node']}:{socket_id}"
 
             elif op in {"add_link", "remove_link"}:
                 from_item = _gn_resolve_patch_node(

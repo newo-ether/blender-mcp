@@ -26,6 +26,7 @@ SUPPORTED_PATCH_OPERATIONS = frozenset({
     "rename_node",
     "set_node_property",
     "set_socket_default",
+    "set_socket_hide",
     "add_link",
     "remove_link",
     "set_node_layout",
@@ -55,6 +56,7 @@ _PATCH_OPERATION_FIELDS = {
     "rename_node": ({"op", "node", "name"}, set()),
     "set_node_property": ({"op", "node", "property", "value"}, set()),
     "set_socket_default": ({"op", "node", "socket", "value"}, set()),
+    "set_socket_hide": ({"op", "node", "socket", "value"}, set()),
     "add_link": (
         {"op", "from_node", "from_socket", "to_node", "to_socket"},
         set(),
@@ -407,6 +409,27 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                         "invalid_socket_id",
                         f"{path}/socket",
                         "Socket defaults can only target input:<index>:<identifier>",
+                    )
+                )
+        elif operation_name == "set_socket_hide":
+            socket_value = operation.get("socket")
+            if isinstance(socket_value, str) and not _SOCKET_ID_PATTERN.fullmatch(
+                socket_value
+            ):
+                diagnostics.append(
+                    _diagnostic(
+                        "invalid_socket_id",
+                        f"{path}/socket",
+                        "socket must use an input:<index>:<identifier> or "
+                        "output:<index>:<identifier> socket id",
+                    )
+                )
+            if not isinstance(operation.get("value"), bool):
+                diagnostics.append(
+                    _diagnostic(
+                        "invalid_boolean",
+                        f"{path}/value",
+                        "set_socket_hide value must be a boolean",
                     )
                 )
         elif operation_name == "set_node_layout":

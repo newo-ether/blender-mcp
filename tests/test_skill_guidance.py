@@ -90,8 +90,6 @@ class BlenderMcpSkillTests(unittest.TestCase):
             "execute_blender_code",
             "capability-gap fallback",
             "Do not choose whole-graph Python",
-            "Blender 5.2 List",
-            "Uneven Index Field",
             "Do not save",
         ):
             with self.subTest(required=required):
@@ -109,7 +107,6 @@ class BlenderMcpSkillTests(unittest.TestCase):
             "localized_node_edit",
             "python_fallback",
             "save_safety",
-            "uneven_index_list_migration",
             "visual_verification",
         }
         self.assertEqual({scenario["id"] for scenario in scenarios}, expected_ids)

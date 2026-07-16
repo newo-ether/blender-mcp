@@ -122,19 +122,17 @@ When a gap remains:
 
 An entire graph may be scripted only when the graph cannot be represented by the structured protocol and the unsupported part cannot be isolated. Do not choose whole-graph Python merely because it is shorter to write.
 
-## Evaluate Blender 5.2 List migrations
+## Author readable generated graphs
 
-Use this sequence for requests such as replacing an uneven index field implementation built from Points plus For Each with Blender 5.2 List nodes:
+When you create or extend a node tree, produce a graph a human can read, not only one that evaluates. Readability conventions are as much a part of the deliverable as correctness. Apply these unless the user states otherwise.
 
-1. Locate the existing node group or imported node asset and export only the implementation subgraph.
-2. Identify its observable contract: input geometry or fields, ordering, index behavior, data type, empty-input behavior, and output domain.
-3. Confirm the connected Blender version from runtime evidence.
-4. Search live node types for List and inspect every candidate needed for the proposed replacement. Use export_blender_node_asset first when the implementation is still an asset; do not import it merely to inspect its internals.
-5. Compare candidate sockets, supported data types, field evaluation, and ordering semantics with the existing contract.
-6. Convert only when the live schemas can reproduce the full observable contract. Keep the Points plus For Each implementation when List support is narrower or ambiguous.
-7. Make the smallest patch, validate it, preserve a backup, then verify representative normal, uneven, and empty cases.
+- One socket per Group Input, one wire out. Prefer many Group Input nodes, each exposing a single output socket and carrying a single link, placed next to the node it feeds, over one Group Input fanned out across the whole tree. This is the opposite of DRY: duplicating the Group Input node is what keeps each wire short and local. Hide the other sockets so only the exposed one shows. Express both with structured ops: `add_node` (NodeGroupInput) plus `add_link`, then `set_socket_hide` with `value:true` on every output socket except the one in use. `set_socket_hide` accepts `output:` and `input:` ids, so the same convention cleans up Group Output nodes.
+- Encapsulate with node groups, not frames. Modularization means lifting reusable logic into a nested node group that exposes a small input/output interface, the way a function or class does. Keep nesting shallow: one to three levels. Go deeper only with a stated reason. A top-level tree should mostly read as Group Input to nested groups to Group Output plus parameter wiring. Reference a group with `add_node` whose `node_type` is the group's identifier.
+- Pipeline with frames. Frames are single-tree visual staging, not an encapsulation mechanism; do not conflate them with groups. Wrap each processing stage in its own frame (for example "Generate Initial Grid" around the grid nodes, "Delete Unnecessary Vertices" around a delete-geometry cluster), and leave clear space between frames so stages read as a sequence. Build a frame with `add_node` (NodeFrame), set its title with `set_node_property` on `label`, and attach members with `set_node_layout` `parent`.
+- Never rename built-in nodes. Leave every built-in node at its default name so its type stays identifiable; put commentary in a frame label instead. Renaming a functional node to describe it destroys the type cue and is not allowed. Frame labels are the sanctioned place for names and notes.
+- Frame naming. English frame labels follow title case (capitalize principal words, leave articles and short prepositions lower unless first). Chinese labels have no case rule; short verb-object phrases are typical.
 
-Do not infer that a node is suitable merely because Blender 5.2 exposes a List category. Report the specific missing type, socket, or semantic guarantee when conversion is unsafe.
+The material datablock boundary is the usual isolated gap here: `bpy.data.materials.new` creates a scene datablock the tree patch cannot express, so that one call stays in Python. Assigning an existing material to a Set Material node is NOT a gap: its socket takes an ID reference, so `set_socket_default` on `input:2:Material` with `{"$type":"ID","id_type":"Material","name":"..."}` does it structurally. Isolate only the datablock creation, then return to patches.
 
 ## Respect ownership and linked data
 

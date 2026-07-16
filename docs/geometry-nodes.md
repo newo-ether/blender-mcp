@@ -96,6 +96,10 @@ Version 1 supports:
 
 - `add_node`, `remove_node`, and `rename_node`
 - `set_node_property` and `set_socket_default`
+- `set_socket_hide` to hide or reveal an individual node socket. Unlike
+  `set_socket_default` this accepts both `input:` and `output:` socket IDs, so a
+  Group Input node can expose exactly one output and hide the rest. `value` is a
+  boolean (`true` hides).
 - `add_link` and `remove_link`
 - `set_node_layout`
 - `add_interface_panel`, `add_interface_socket`, `remove_interface_socket`, and

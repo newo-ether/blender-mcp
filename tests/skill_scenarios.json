@@ -19,17 +19,6 @@
     ]
   },
   {
-    "id": "uneven_index_list_migration",
-    "prompt": "检查 Uneven Index Field，判断 Blender 5.2 List 能不能替换 Point 加 For Each。",
-    "live_state": true,
-    "required_phrases": [
-      "Evaluate Blender 5.2 List migrations",
-      "search live node types for List",
-      "Convert only when the live schemas can reproduce",
-      "Keep the Points plus For Each implementation"
-    ]
-  },
-  {
     "id": "localized_node_edit",
     "prompt": "只修改材质节点组里 Roughness Clamp 附近的连接。",
     "live_state": true,

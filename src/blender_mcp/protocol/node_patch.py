@@ -27,6 +27,7 @@ SUPPORTED_OPERATIONS = frozenset({
     "rename_node",
     "set_node_property",
     "set_socket_default",
+    "set_socket_hide",
     "add_link",
     "remove_link",
     "set_node_layout",
@@ -58,6 +59,7 @@ _OPERATION_FIELDS = {
     "rename_node": ({"op", "node", "name"}, set()),
     "set_node_property": ({"op", "node", "property", "value"}, set()),
     "set_socket_default": ({"op", "node", "socket", "value"}, set()),
+    "set_socket_hide": ({"op", "node", "socket", "value"}, set()),
     "add_link": (
         {"op", "from_node", "from_socket", "to_node", "to_socket"}, set()
     ),
@@ -102,6 +104,7 @@ _OPERATION_CAPABILITY = {
     "rename_node": "graph",
     "set_node_property": "graph",
     "set_socket_default": "graph",
+    "set_socket_hide": "graph",
     "add_link": "graph",
     "remove_link": "graph",
     "set_node_layout": "layout",
@@ -511,6 +514,21 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                 diagnostics.append(diagnostic(
                     "invalid_socket_id", f"{path}/socket",
                     "Socket defaults require input:<index>:<identifier>",
+                ))
+        elif operation_name == "set_socket_hide":
+            socket_value = operation.get("socket")
+            if isinstance(socket_value, str) and not _SOCKET_ID_PATTERN.fullmatch(
+                socket_value
+            ):
+                diagnostics.append(diagnostic(
+                    "invalid_socket_id", f"{path}/socket",
+                    "socket must use input:<index>:<identifier> or "
+                    "output:<index>:<identifier>",
+                ))
+            if not isinstance(operation.get("value"), bool):
+                diagnostics.append(diagnostic(
+                    "invalid_boolean", f"{path}/value",
+                    "set_socket_hide value must be a boolean",
                 ))
         elif operation_name in {"add_link", "remove_link"}:
             for field, direction in (("from_socket", "output"), ("to_socket", "input")):

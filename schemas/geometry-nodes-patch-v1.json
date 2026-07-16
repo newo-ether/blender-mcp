@@ -48,6 +48,7 @@
     "nodeRef": {"type": "string", "minLength": 1},
     "inputSocketRef": {"type": "string", "pattern": "^input:[0-9]+:.+$"},
     "outputSocketRef": {"type": "string", "pattern": "^output:[0-9]+:.+$"},
+    "anySocketRef": {"type": "string", "pattern": "^(input|output):[0-9]+:.+$"},
     "layout": {
       "type": "object",
       "properties": {
@@ -114,6 +115,17 @@
             "node": {"$ref": "#/$defs/nodeRef"},
             "socket": {"$ref": "#/$defs/inputSocketRef"},
             "value": true
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["op", "node", "socket", "value"],
+          "properties": {
+            "op": {"const": "set_socket_hide"},
+            "node": {"$ref": "#/$defs/nodeRef"},
+            "socket": {"$ref": "#/$defs/anySocketRef"},
+            "value": {"type": "boolean"}
           },
           "additionalProperties": false
         },

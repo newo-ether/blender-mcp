@@ -185,6 +185,42 @@ class GeometryNodesSchemaTests(unittest.TestCase):
             {(item["code"], item["path"]) for item in diagnostics},
         )
 
+    def test_set_socket_hide_accepts_both_directions(self):
+        patch = sample_patch()
+        patch["operations"] = [
+            {"op": "add_node", "id": "gi", "node_type": "NodeGroupInput"},
+            {
+                "op": "set_socket_hide",
+                "node": "gi",
+                "socket": "output:1:Socket_1",
+                "value": True,
+            },
+            {
+                "op": "set_socket_hide",
+                "node": "Cube",
+                "socket": "input:0:Size",
+                "value": False,
+            },
+        ]
+        self.assertEqual(schema.validate_patch_structure(patch), [])
+
+    def test_set_socket_hide_rejects_bad_socket_and_non_boolean(self):
+        patch = sample_patch()
+        patch["operations"] = [
+            {
+                "op": "set_socket_hide",
+                "node": "Cube",
+                "socket": "sideways:0:Size",
+                "value": "yes",
+            },
+        ]
+        keyed = {
+            (item["code"], item["path"])
+            for item in schema.validate_patch_structure(patch)
+        }
+        self.assertIn(("invalid_socket_id", "/operations/0/socket"), keyed)
+        self.assertIn(("invalid_boolean", "/operations/0/value"), keyed)
+
     def test_patch_diagnostics_are_path_addressed(self):
         patch = sample_patch()
         patch["base_revision"] = "stale"
