@@ -6,7 +6,7 @@ GEOMETRY_NODES_PATCH_SCHEMA = "blender-geometry-nodes-patch/1"
 
 GEOMETRY_NODES_PATCH_VALIDATION_SCHEMA = "blender-geometry-nodes-patch-validation/1"
 
-GEOMETRY_NODES_VIEWS = {"semantic", "operations", "layout", "all"}
+GEOMETRY_NODES_VIEWS = {"slim", "semantic", "operations", "layout", "all"}
 
 GEOMETRY_NODE_TYPE_SCHEMA_DETAILS = {"compact", "full"}
 
@@ -70,4 +70,21 @@ _GN_NODE_PROPERTY_EXCLUDES = {
     "bl_label", "bl_description", "bl_icon",
     "bl_width_default", "bl_width_min", "bl_width_max",
     "bl_height_default", "bl_height_min", "bl_height_max",
+}
+
+# Additional properties dropped by the slim view. These are retained by
+# operations/semantic/all because a patch may legitimately round-trip them, but
+# they describe presentation or diagnostics rather than what a node computes, so
+# the slim reading view omits them.
+_GN_SLIM_NODE_PROPERTY_EXCLUDES = _GN_NODE_PROPERTY_EXCLUDES | {
+    "warning_propagation",
+}
+
+# Node types the slim view omits entirely. Only types that carry no operation
+# and participate in no link belong here: dropping a node that carries links
+# would leave the slim adjacency referencing a node that is not in the record.
+# NodeFrame qualifies (visual grouping only, no sockets). NodeReroute does NOT:
+# it relays real links and must stay so paths remain traversable.
+_GN_SLIM_NODE_TYPE_EXCLUDES = {
+    "NodeFrame",
 }

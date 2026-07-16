@@ -157,7 +157,12 @@ def export_node_tree(
 
     Parameters:
     - tree_ref: Object containing tree_type and owner {kind, name}
-    - view: auto (operations for full graphs, semantic for targeted), semantic, operations, layout, or all
+    - view: auto (slim for full graphs, semantic for targeted), slim, operations,
+      semantic, layout, or all. slim is the compact reading view: node types,
+      operation enums, links, and only the socket defaults that are neither
+      linked over nor at the type default. Escalate to operations for every
+      socket record, semantic for full RNA detail, or all for layout on top —
+      only for an identified missing fact.
     - node_names: Optional stable node names for a targeted subgraph
     - neighbor_depth: Include connected nodes up to 0-5 hops
     - output_path: Optional workspace-constrained .json output path

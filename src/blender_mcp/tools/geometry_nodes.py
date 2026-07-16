@@ -68,7 +68,12 @@ def export_geometry_node_tree(
 
     Parameters:
     - tree_name: Exact Geometry Node group name
-    - view: semantic, compact operations, layout, or all
+    - view: auto (default), slim, operations, semantic, layout, or all.
+      slim is the compact reading view: node types, operation enums, links, and
+      only the socket defaults that are neither linked over nor at the type
+      default. Prefer it to read a whole graph. operations adds every socket
+      record; semantic adds full RNA detail; all adds layout on top. Escalate
+      only for an identified missing fact.
     - node_names: Optional node names for a targeted subgraph export
     - neighbor_depth: Include connected nodes up to 0-5 hops from node_names
     - output_path: Optional .json path constrained to the MCP workspace root

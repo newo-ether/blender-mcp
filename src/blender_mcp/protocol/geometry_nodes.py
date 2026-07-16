@@ -19,7 +19,7 @@ SNAPSHOT_SCHEMA = "blender-geometry-nodes/1"
 PATCH_SCHEMA = "blender-geometry-nodes-patch/1"
 PATCH_VALIDATION_SCHEMA = "blender-geometry-nodes-patch-validation/1"
 PATCH_APPLICATION_SCHEMA = "blender-geometry-nodes-patch-application/1"
-SUPPORTED_VIEWS = frozenset({"semantic", "layout", "all"})
+SUPPORTED_VIEWS = frozenset({"slim", "semantic", "operations", "layout", "all"})
 SUPPORTED_PATCH_OPERATIONS = frozenset({
     "add_node",
     "remove_node",

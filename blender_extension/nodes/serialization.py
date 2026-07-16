@@ -9,6 +9,8 @@ import bpy
 
 from .constants import (
     _GN_NODE_PROPERTY_EXCLUDES,
+    _GN_SLIM_NODE_PROPERTY_EXCLUDES,
+    _GN_SLIM_NODE_TYPE_EXCLUDES,
     GEOMETRY_NODES_SNAPSHOT_SCHEMA,
     GEOMETRY_NODES_VIEWS,
     NODE_TREE_SNAPSHOT_SCHEMA,
@@ -73,17 +75,26 @@ def _gn_socket_id(socket, direction, index):
     return f"{direction.lower()}:{index}:{identifier}"
 
 def _gn_socket_record(socket, direction, index, include_default=True):
+    """Serialize a socket in full, without restating what `id` already encodes.
+
+    `id` is exactly "<direction>:<index>:<identifier>", so index, direction, and
+    identifier were three copies of data already present in every record and are
+    recovered by splitting it. `name` is kept because it is the human-facing
+    label and genuinely differs from identifier for most sockets (a group socket
+    named "W" has identifier "Socket_4"). `enabled` and `multi_input` appear only
+    when they deviate from their overwhelmingly common default, matching how
+    node properties are already filtered.
+    """
     record = {
         "id": _gn_socket_id(socket, direction, index),
-        "index": index,
         "name": socket.name,
-        "identifier": getattr(socket, "identifier", "") or "",
-        "direction": direction,
         "bl_idname": socket.bl_idname,
-        "enabled": bool(socket.enabled),
         "linked": bool(socket.is_linked),
-        "multi_input": bool(getattr(socket, "is_multi_input", False)),
     }
+    if not bool(socket.enabled):
+        record["enabled"] = False
+    if bool(getattr(socket, "is_multi_input", False)):
+        record["multi_input"] = True
     if include_default and hasattr(socket, "default_value"):
         try:
             record["default"] = _gn_json_value(socket.default_value)
@@ -118,6 +129,135 @@ def _gn_explicit_node_references(node):
         if isinstance(paired_node, bpy.types.Node):
             result[identifier] = _gn_json_value(paired_node)
     return result
+
+def _gn_socket_default_is_meaningful(socket):
+    """Return True when a socket default actually informs what the graph computes.
+
+    A linked socket ignores its default entirely, and an unlinked socket sitting
+    at the type default carries no information a reader does not already know
+    from the node type. Either way the value is noise in a reading view.
+    """
+    if socket.is_linked:
+        return False
+    if not hasattr(socket, "default_value"):
+        return False
+    try:
+        value = _gn_json_value(socket.default_value)
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        return False
+    prop = socket.bl_rna.properties.get("default_value")
+    if prop is None:
+        return True
+    try:
+        if getattr(prop, "type", None) in {"FLOAT", "INT", "BOOLEAN"} and getattr(prop, "array_length", 0):
+            default = _gn_json_value(prop.default_array)
+        else:
+            default = _gn_json_value(prop.default)
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        return True
+    return value != default
+
+def _gn_slim_socket_record(socket, direction, index):
+    """Emit a socket only when it carries information a reader cannot infer."""
+    if not _gn_socket_default_is_meaningful(socket):
+        return None
+    try:
+        value = _gn_json_value(socket.default_value)
+    except (AttributeError, TypeError, ValueError, RuntimeError):
+        return None
+    return {"id": _gn_socket_id(socket, direction, index), "default": value}
+
+def _gn_slim_properties(node):
+    """Keep only the properties that define what this node computes."""
+    result = {}
+    for prop in node.bl_rna.properties:
+        identifier = prop.identifier
+        if identifier in _GN_SLIM_NODE_PROPERTY_EXCLUDES or identifier == "rna_type":
+            continue
+        if getattr(prop, "type", None) == "COLLECTION":
+            continue
+        if getattr(prop, "is_hidden", False) or getattr(prop, "is_skip_save", False):
+            continue
+        if getattr(prop, "is_readonly", False):
+            continue
+        try:
+            value = _gn_json_value(getattr(node, identifier))
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            continue
+        include = getattr(prop, "type", None) == "ENUM"
+        if not include:
+            try:
+                default = _gn_json_value(prop.default)
+                include = value != default
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                include = False
+        if include:
+            result[identifier] = value
+    for identifier, value in _gn_explicit_node_references(node).items():
+        result.setdefault(identifier, value)
+    return result
+
+def _gn_slim_link_record(link_record):
+    """Collapse a link to one string: "from_node|socket >> to_node|socket".
+
+    The verbose four-key object costs ~150 bytes per link and dominates a slim
+    export once node records are compact. Socket ids keep their index:identifier
+    form so the string still resolves to an exact socket, and a multi-input sort
+    id is appended as "#n" only when the link carries one.
+    """
+    text = (
+        f"{link_record['from_node']}|{link_record['from_socket']}"
+        f" >> {link_record['to_node']}|{link_record['to_socket']}"
+    )
+    sort_id = link_record.get("multi_input_sort_id")
+    if sort_id is not None:
+        text += f"#{sort_id}"
+    return text
+
+# Interface field values that carry no information: every socket has them unless
+# it says otherwise, so emitting them repeats the default across the whole tree.
+_GN_SLIM_INTERFACE_DEFAULTS = {
+    "default_input": "VALUE",
+    "structure_type": "AUTO",
+}
+
+def _gn_slim_interface_record(item):
+    """Keep the interface fields that define the group's callable contract.
+
+    Drops only fields sitting at their default; a non-default default_input or
+    structure_type (FIELD, IMPLICIT, ...) is real contract and is preserved.
+    """
+    record = _gn_operation_interface_record(item)
+    if record.get("parent") in (None, ""):
+        record.pop("parent", None)
+    for key, default in _GN_SLIM_INTERFACE_DEFAULTS.items():
+        if record.get(key) == default:
+            record.pop(key, None)
+    return record
+
+def _gn_slim_node_record(node):
+    """Emit the minimum a reader needs: identity, type, operation, real defaults.
+
+    Omits `id` (always equal to `name`), empty containers, and every socket whose
+    default is linked-over or at the type default.
+    """
+    record = {"name": node.name, "bl_idname": node.bl_idname}
+    if node.label:
+        record["label"] = node.label
+    properties = _gn_slim_properties(node)
+    if properties:
+        record["properties"] = properties
+    inputs = [
+        entry for entry in (
+            _gn_slim_socket_record(socket, "INPUT", index)
+            for index, socket in enumerate(node.inputs)
+            if socket.enabled or socket.is_linked
+        )
+        if entry is not None
+    ]
+    if inputs:
+        record["inputs"] = inputs
+    return record
 
 def _gn_operation_properties(node):
     """Keep operation-defining enums and non-default writable scalar values."""
@@ -189,6 +329,8 @@ def _gn_rna_properties(value, excludes=None, include_readonly=None):
     return result
 
 def _gn_node_record(node, view):
+    if view == "slim":
+        return _gn_slim_node_record(node)
     if view == "operations":
         return _gn_operation_node_record(node)
     include_semantic = view in {"semantic", "all"}
@@ -366,11 +508,15 @@ def _node_export_tree(
     """Serialize any supported NodeTree through the shared flat graph core."""
     requested_view = str(view or "auto").strip().lower()
     if requested_view == "auto":
-        view = "semantic" if node_names else "operations"
+        # A targeted subgraph is small enough to afford full socket/RNA detail.
+        # A whole graph is not: operations still spends most of its bytes on
+        # socket defaults that are linked over or already at the type default,
+        # so read the complete graph through slim and let the caller escalate.
+        view = "semantic" if node_names else "slim"
     else:
         view = normalizer(view)
     record_factory = record_factory or _node_graph_record
-    include_semantic = view in {"semantic", "operations", "all"}
+    include_semantic = view in {"slim", "semantic", "operations", "all"}
     library = getattr(tree, "library", None)
     try:
         neighbor_depth = int(neighbor_depth)
@@ -380,9 +526,19 @@ def _node_export_tree(
         raise ValueError("neighbor_depth must be an integer from 0 to 5")
 
     ordered_nodes = sorted(tree.nodes, key=lambda item: item.name)
+    if view == "slim":
+        # Frames carry no operation and no links, so omitting them cannot break
+        # the adjacency the slim view exists to convey. Filter only what this
+        # view emits; the revision pass below must still see every node.
+        view_source_nodes = [
+            node for node in ordered_nodes
+            if node.bl_idname not in _GN_SLIM_NODE_TYPE_EXCLUDES
+        ]
+    else:
+        view_source_nodes = ordered_nodes
     view_nodes = {
         node.name: record_factory(node, view)
-        for node in ordered_nodes
+        for node in view_source_nodes
     }
     graph_links = sorted(
         (_gn_link_record(link) for link in tree.links),
@@ -392,9 +548,18 @@ def _node_export_tree(
             link.get("multi_input_sort_id", -1),
         ),
     )
-    view_links = graph_links if include_semantic else []
+    if not include_semantic:
+        view_links = []
+    elif view == "slim":
+        # Convert for the view only. graph_links stays in object form because the
+        # revision pass below hashes it and must not change shape per view.
+        view_links = [_gn_slim_link_record(link) for link in graph_links]
+    else:
+        view_links = graph_links
     full_interface = _gn_tree_interface(tree, True)
-    if view == "operations":
+    if view == "slim":
+        view_interface = [_gn_slim_interface_record(item) for item in tree.interface.items_tree]
+    elif view == "operations":
         view_interface = [_gn_operation_interface_record(item) for item in tree.interface.items_tree]
     else:
         view_interface = full_interface if include_semantic else []
@@ -416,11 +581,18 @@ def _node_export_tree(
         nodes = {
             name: view_nodes[name]
             for name in sorted(included_nodes)
+            if name in view_nodes
         }
-        links = [
-            link for link in view_links
+        # Filter in object form, then render, so this stays correct for slim
+        # (whose view links are strings) as well as the object-shaped views.
+        included_links = [
+            link for link in graph_links
             if link["from_node"] in included_nodes and link["to_node"] in included_nodes
-        ]
+        ] if include_semantic else []
+        links = (
+            [_gn_slim_link_record(link) for link in included_links]
+            if view == "slim" else included_links
+        )
         scope = {
             "kind": "subgraph",
             "requested_nodes": requested_nodes,
@@ -460,11 +632,17 @@ def _node_export_tree(
             "node_count": len(nodes),
             "link_count": len(links),
             "interface_item_count": len(view_interface),
-            "total_node_count": len(view_nodes),
+            # Counts the whole tree, never just what this view emits, so a
+            # caller can always tell what a scoped or filtered export left out.
+            "total_node_count": len(ordered_nodes),
             "total_link_count": len(graph_links),
             "json_bytes": 0,
         },
     }
+    omitted_node_count = len(ordered_nodes) - len(view_nodes)
+    if omitted_node_count:
+        snapshot["stats"]["omitted_node_count"] = omitted_node_count
+        snapshot["view_omits"] = sorted(_GN_SLIM_NODE_TYPE_EXCLUDES)
     if requested_view == "auto":
         snapshot["view_selection"] = {
             "requested": "auto",

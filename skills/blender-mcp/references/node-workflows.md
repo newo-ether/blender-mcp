@@ -23,21 +23,33 @@ The Geometry-specific list_geometry_node_trees family remains useful for exact g
    - named_attributes for Named Attribute readers and writers;
    - shortest_path for one route between exact nodes;
    - upstream, downstream, or slice for bounded reachability.
-3. Call export_node_tree with view=auto by default. It selects operations for a complete graph and semantic for a targeted subgraph. Pass selected node_names and neighbor_depth=1 for local rewiring.
-4. Treat the views as materially different context costs:
-   - operations is the compact working view for formulas, operation enums, relevant defaults, interfaces, and links. Prefer it for most graph inspection, including targeted subgraphs that do not need complete socket or RNA records.
-   - semantic is high-detail output with complete socket and RNA semantics. Request it only when a specific socket contract, property, or default is missing from operations.
+3. Call export_node_tree with view=auto by default. It selects slim for a complete graph and semantic for a targeted subgraph. Pass selected node_names and neighbor_depth=1 for local rewiring.
+4. Treat the views as materially different context costs. Each step up roughly doubles the bytes and buys strictly less per byte:
+
+   | view | ~bytes, 30-node group | ~bytes, 2048-node graph | what it adds |
+   | --- | --- | --- | --- |
+   | slim | ~9 KB | ~530 KB | node types, operation enums, links, only defaults that are neither linked over nor at the type default |
+   | operations | ~29 KB (3x slim) | ~820 KB | every socket record, including linked and default-valued ones |
+   | semantic | ~43 KB (5x slim) | ~1.5 MB | full RNA properties and socket contracts |
+   | all | ~45 KB (5x slim) | ~1.6 MB | layout on top of semantic |
+
+   - slim is the reading view. Prefer it to understand what a graph computes: it preserves every operation enum and every link, and states omitted Frame nodes in stats.omitted_node_count rather than hiding them.
+   - operations adds complete socket records. Request it when a socket's presence, order, or default matters even where slim judged it uninformative.
+   - semantic adds full RNA detail. Request it only for an identified missing socket contract, property, or default.
    - layout contains node placement, dimensions, and parent frames for presentation work.
-   - all is maximum-detail output combining semantic and layout data. It can consume substantial model context even for a medium graph. Never request all speculatively or merely for completeness.
-5. Remember that auto selects semantic for a targeted subgraph. Explicitly request view=operations when a targeted inspection only needs formulas, relevant defaults, interfaces, or links.
-6. Increase neighbor depth only when the current export omits a required connection. Escalate detail only for an identified missing fact.
-7. Record the returned revision and stable node names. Never invent node names from UI labels.
+   - all combines semantic and layout. Never request it speculatively or merely for completeness.
+5. Treat any single export above roughly 25 KB as a context hazard: it may be truncated or spilled to a file by the client, leaving you unable to read it directly. When a full-graph export approaches that size, do not escalate the view. Narrow with get_node_tree_index or query_node_graph, or export a targeted subgraph, and only then escalate detail on the nodes that matter.
+6. Remember that auto selects semantic for a targeted subgraph, which is the expensive view. Explicitly request view=slim when a targeted inspection only needs operations, links, or meaningful defaults.
+7. Increase neighbor depth only when the current export omits a required connection. Escalate detail only for an identified missing fact, never to "see everything".
+8. Record the returned revision and stable node names. Never invent node names from UI labels. Every view reports the same source revision, so a revision read from slim is valid for a patch.
 
 Use this routing rule:
 
 ```text
 fields, paths, links       -> query_node_graph
-local formulas and wiring -> export operations
+whole graph, what it does  -> export slim
+local formulas and wiring  -> export slim with node_names
+every socket record        -> export operations
 exact socket/RNA contract  -> semantic export or node-type schema
 presentation               -> layout export
 ```

@@ -252,7 +252,9 @@ def run_test():
         compact_output["id"] == semantic_output["id"],
         "Compact socket display metadata changed the stable socket ID",
     )
-    if semantic_output["name"] != semantic_output["identifier"]:
+    # identifier is no longer restated; it is the third field of the socket id.
+    semantic_identifier = semantic_output["id"].split(":", 2)[2]
+    if semantic_output["name"] != semantic_identifier:
         assert_true(
             compact_output.get("name") == semantic_output["name"],
             "Compact socket omitted its human-readable name",

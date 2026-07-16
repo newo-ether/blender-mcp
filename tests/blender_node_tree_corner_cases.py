@@ -143,8 +143,10 @@ def run_test():
         "duplicate-name sockets do not have stable distinct IDs",
     )
     mix_record = exported["tree"]["nodes"][mix.name]
+    # `enabled` is emitted only when False, so its absence means an enabled
+    # socket. A disabled socket must still be reported explicitly.
     assert_true(
-        any(not item["enabled"] for item in mix_record["inputs"]),
+        any(item.get("enabled") is False for item in mix_record["inputs"]),
         "disabled conditional sockets were not serialized",
     )
     assert_true(
@@ -315,7 +317,7 @@ def run_test():
         "unicode_round_trip": True,
         "duplicate_socket_ids": [item["id"] for item in duplicate_vectors],
         "disabled_socket_count": sum(
-            not item["enabled"] for item in mix_record["inputs"]
+            item.get("enabled") is False for item in mix_record["inputs"]
         ),
         "multi_input": True,
         "cycle_rejected_by_blender": cycle_rejected,
