@@ -51,16 +51,23 @@ def _command_tree_type(cmd_type, params):
     """Return the node system a command works on, or "" when it is not node work.
 
     The overlay lights the node editor matching this value, so it reports only
-    what the parameters state outright. Geometry commands are identified by name
-    because their tree_name carries no type; the generic node tools carry an
-    explicit tree_ref.tree_type. Anything else -- scene queries, arbitrary
+    what the parameters state outright. Anything else -- scene queries, arbitrary
     Python -- returns "" rather than a guess.
+
+    The tree_ref is read from the patch as well as the top level: the mutating
+    tools take a patch that carries the tree_ref inside it and have no top-level
+    tree_ref of their own, so looking only at params leaves every Shader and
+    Compositor write reporting no tree type at all. Geometry commands are matched
+    by name because their tree_name carries no type.
     """
-    tree_ref = params.get("tree_ref")
-    if isinstance(tree_ref, dict):
-        tree_type = tree_ref.get("tree_type")
-        if tree_type in _NODE_TREE_TYPES:
-            return tree_type
+    for source in (params, params.get("patch")):
+        if not isinstance(source, dict):
+            continue
+        tree_ref = source.get("tree_ref")
+        if isinstance(tree_ref, dict):
+            tree_type = tree_ref.get("tree_type")
+            if tree_type in _NODE_TREE_TYPES:
+                return tree_type
     if "geometry_node" in cmd_type:
         return "GeometryNodeTree"
     return ""

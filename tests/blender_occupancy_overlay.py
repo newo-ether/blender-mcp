@@ -177,14 +177,36 @@ def run_test():
         )
 
     geometry = make_server(namespace)
-    run_command(namespace, geometry, "apply_geometry_node_patch", {"tree_name": "Spring Motion"})
+    run_command(namespace, geometry, "apply_geometry_node_patch", {"patch": {"tree_name": "Spring Motion"}})
     assert_true(
         geometry.active_tree_type == "GeometryNodeTree",
         "geometry commands carry no tree_type and must be identified by name",
     )
-    shader = make_server(namespace)
-    run_command(namespace, shader, "apply_node_tree_patch", {"tree_ref": {"tree_type": "ShaderNodeTree"}})
-    assert_true(shader.active_tree_type == "ShaderNodeTree", "tree_ref tree_type was not honoured")
+
+    # The mutating tools take a patch and have no top-level tree_ref: their
+    # tree_ref lives inside it. Reading only the top level left every Shader and
+    # Compositor write reporting no node system, so their editors never lit.
+    # These params mirror the real handler signatures for that reason.
+    for tree_type in ("ShaderNodeTree", "CompositorNodeTree"):
+        for command, params in (
+            ("apply_node_tree_patch", {"patch": {"tree_ref": {"tree_type": tree_type}}}),
+            (
+                "modify_verify_save",
+                {"patch_kind": "node_tree", "patch": {"tree_ref": {"tree_type": tree_type}}},
+            ),
+        ):
+            server = make_server(namespace)
+            run_command(namespace, server, command, params)
+            assert_true(
+                server.active_tree_type == tree_type,
+                f"{command} did not report {tree_type} from its patch, so that "
+                f"editor would never light",
+            )
+
+    # A tree_ref passed at the top level, as the read tools do, still counts.
+    top_level = make_server(namespace)
+    run_command(namespace, top_level, "apply_node_tree_patch", {"tree_ref": {"tree_type": "ShaderNodeTree"}})
+    assert_true(top_level.active_tree_type == "ShaderNodeTree", "top-level tree_ref was not honoured")
 
     # 6. Losing the claim clears the overlay, so it can never describe a
     #    session that is over. This is what left stale borders behind before.
