@@ -265,6 +265,7 @@ command = "keep.exe"
     $invalidConfig = Join-Path $codexHome "invalid.toml"
     $invalidOriginal = '[mcp_servers.blender_mcp'
     Set-Content -LiteralPath $invalidConfig -Value $invalidOriginal -Encoding UTF8
+    $global:LASTEXITCODE = 0
     $invalidRejected = $false
     try {
         Register-CodexConfigMcp `
@@ -278,6 +279,7 @@ command = "keep.exe"
     catch { $invalidRejected = $true }
     Assert-True -Condition $invalidRejected -Message "Invalid Codex TOML was not rejected."
     Assert-True -Condition ((Get-Content -LiteralPath $invalidConfig -Raw).Trim() -eq $invalidOriginal) -Message "Invalid Codex TOML was modified."
+    Assert-True -Condition ($global:LASTEXITCODE -eq 0) -Message "A handled TOML probe failure leaked into the caller's native exit code."
 
     Write-Host "Installer client-registration tests passed." -ForegroundColor Green
 }

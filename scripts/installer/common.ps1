@@ -224,6 +224,14 @@ function Invoke-CapturedCommand {
     $capturedOutput = @()
     $exitCode = $null
     $previousErrorActionPreference = $ErrorActionPreference
+    $previousLastExitCodeVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+    $hadPreviousLastExitCode = $null -ne $previousLastExitCodeVariable
+    $previousLastExitCode = if ($hadPreviousLastExitCode) {
+        $previousLastExitCodeVariable.Value
+    }
+    else {
+        $null
+    }
     try {
         $ErrorActionPreference = "Continue"
         if ($IncludeErrorOutput) {
@@ -236,6 +244,12 @@ function Invoke-CapturedCommand {
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference
+        if ($hadPreviousLastExitCode) {
+            Set-Variable -Name LASTEXITCODE -Scope Global -Value $previousLastExitCode
+        }
+        else {
+            Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        }
     }
 
     return [PSCustomObject]@{
