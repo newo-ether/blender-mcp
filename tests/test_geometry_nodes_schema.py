@@ -279,6 +279,45 @@ class GeometryNodesSchemaTests(unittest.TestCase):
         }
         self.assertEqual(schema.validate_patch_structure(patch), [])
 
+    def test_field_diagnostics_list_accepted_fields(self):
+        # missing_field / unknown_field must embed the accepted-field set so a
+        # caller can correct the op field naming (id vs node vs from_node) from
+        # the error alone, without a separate schema lookup.
+        patch = sample_patch()
+        patch["operations"][0] = {
+            "op": "set_socket_default",
+            "node": "Cube",
+            "socket": "input:0:Size",
+            "value": 1.0,
+            "rogue_field": True,  # unknown
+        }
+        patch["operations"][1] = {
+            "op": "add_link",
+            "from_node": "A",  # missing from_socket / to_node / to_socket
+        }
+        diagnostics = schema.validate_patch_structure(patch)
+        messages = {item["code"]: item["message"] for item in diagnostics}
+        self.assertIn("unknown_field", messages)
+        self.assertIn("missing_field", messages)
+        self.assertIn("set_socket_default", messages["unknown_field"])
+        self.assertIn("{node, op, socket, value}", messages["unknown_field"])
+        self.assertIn("add_link", messages["missing_field"])
+        self.assertIn(
+            "{from_node, from_socket, op, to_node, to_socket}",
+            messages["missing_field"],
+        )
+
+    def test_patch_not_found_message_includes_workspace_root(self):
+        # The not-found error must reveal the resolved workspace root so a
+        # caller knows where to place a relative patch_path instead of guessing.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "workspace"
+            root.mkdir()
+            with self.assertRaises(schema.GeometryNodesSchemaError) as ctx:
+                schema.read_patch_json("absent/patch.json", root)
+            self.assertIn(str(root), str(ctx.exception))
+            self.assertIn("workspace root", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

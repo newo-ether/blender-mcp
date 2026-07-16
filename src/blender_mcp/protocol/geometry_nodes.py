@@ -124,6 +124,24 @@ def _diagnostic(code: str, path: str, message: str) -> dict[str, str]:
     }
 
 
+def _format_field_set(names: Any) -> str:
+    """Stable brace-set rendering of field names, e.g. '{op, node, socket, value}'."""
+    return "{" + ", ".join(sorted(names)) + "}"
+
+
+def _operation_fields_hint(operation_name: str, required: Any, optional: Any) -> str:
+    """Self-explaining 'accepted fields' suffix for operation diagnostics.
+
+    Embeds the full accepted-field list in missing/unknown_field messages so a
+    caller can correct a patch from the error alone, without a separate schema
+    lookup — the op-field naming (id vs node vs from_node) is otherwise opaque.
+    """
+    req = _format_field_set(required)
+    if optional:
+        return f"{operation_name} accepts required {req}, optional {_format_field_set(optional)}"
+    return f"{operation_name} accepts {req}"
+
+
 def _json_pointer_token(value: str) -> str:
     return value.replace("~", "~0").replace("/", "~1")
 
@@ -150,7 +168,7 @@ def _validate_layout(
             _diagnostic(
                 "unknown_field",
                 f"{path}/{_json_pointer_token(str(field))}",
-                f"Unknown layout field: {field}",
+                f"Unknown layout field: {field} (accepted: {_format_field_set(allowed_fields)})",
             )
         )
     if not any(key in operation for key in ("location", "width", "height", "parent")):
@@ -198,7 +216,7 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
             _diagnostic(
                 "unknown_field",
                 f"/{_json_pointer_token(str(field))}",
-                f"Unknown patch field: {field}",
+                f"Unknown patch field: {field} (accepted: {_format_field_set(_PATCH_TOP_LEVEL_FIELDS)})",
             )
         )
     for field in ("schema", "tree_name", "base_revision", "operations"):
@@ -279,7 +297,7 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                         _diagnostic(
                             "unknown_field",
                             f"/target_user/{_json_pointer_token(str(field))}",
-                            f"Unknown target_user field: {field}",
+                            f"Unknown target_user field: {field} (accepted: {_format_field_set(required_target_fields)})",
                         )
                     )
                 for field in required_target_fields - {"kind"}:
@@ -328,12 +346,13 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
             continue
 
         required, optional = _PATCH_OPERATION_FIELDS[operation_name]
+        hint = _operation_fields_hint(operation_name, required, optional)
         for field in sorted(required - set(operation)):
             diagnostics.append(
                 _diagnostic(
                     "missing_field",
                     f"{path}/{field}",
-                    f"Required operation field is missing: {field}",
+                    f"Required operation field is missing: {field} ({hint})",
                 )
             )
         for field in sorted(set(operation) - required - optional):
@@ -341,7 +360,7 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                 _diagnostic(
                     "unknown_field",
                     f"{path}/{_json_pointer_token(str(field))}",
-                    f"Unknown field for {operation_name}: {field}",
+                    f"Unknown field for {operation_name}: {field} ({hint})",
                 )
             )
         for field in sorted((set(operation) & string_fields) - {"op"}):
@@ -592,13 +611,32 @@ def finalize_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _resolve_workspace_root(
+    workspace_root: str | os.PathLike[str] | None = None,
+) -> Path:
+    """Return the workspace root that bounds relative export/patch paths.
+
+    Precedence: the explicit ``workspace_root`` argument, then the
+    ``BLENDER_MCP_WORKSPACE`` environment variable, then the current working
+    directory. Relative paths are joined to this root; absolute paths must
+    still fall inside it. Centralizing this keeps the boundary discoverable
+    from every error message instead of being an implicit runtime default.
+    """
+    root_value = workspace_root or os.environ.get("BLENDER_MCP_WORKSPACE") or Path.cwd()
+    return Path(root_value).expanduser().resolve()
+
+
 def resolve_workspace_json_path(
     output_path: str | os.PathLike[str],
     workspace_root: str | os.PathLike[str] | None = None,
 ) -> Path:
-    """Resolve an export path and reject writes outside the configured workspace."""
-    root_value = workspace_root or os.environ.get("BLENDER_MCP_WORKSPACE") or Path.cwd()
-    root = Path(root_value).expanduser().resolve()
+    """Resolve an export path and reject writes outside the configured workspace.
+
+    ``output_path`` may be absolute or relative; relative paths resolve against
+    the workspace root (see :func:`_resolve_workspace_root`). The resolved path
+    must end in ``.json`` and stay inside the workspace root.
+    """
+    root = _resolve_workspace_root(workspace_root)
     candidate_input = Path(output_path).expanduser()
     candidate = (
         candidate_input.resolve()
@@ -612,7 +650,9 @@ def resolve_workspace_json_path(
         candidate.relative_to(root)
     except ValueError as exc:
         raise GeometryNodesSchemaError(
-            f"Export path must remain inside workspace root: {root}"
+            f"Export path must stay inside the workspace root: {candidate} is outside "
+            f"{root}. Set workspace_root (or BLENDER_MCP_WORKSPACE) to cover it, "
+            f"or use a path inside that root."
         ) from exc
     return candidate
 
@@ -654,12 +694,20 @@ def read_patch_json(
     workspace_root: str | os.PathLike[str] | None = None,
     max_bytes: int = 4 * 1024 * 1024,
 ) -> Any:
-    """Read a workspace-bound patch file with a conservative size limit."""
+    """Read a workspace-bound patch file with a conservative size limit.
+
+    ``patch_path`` resolves against the workspace root (see
+    :func:`_resolve_workspace_root`); relative paths are joined to that root,
+    so the resolved path shown in errors reveals where to place the file.
+    """
     source = resolve_workspace_json_path(patch_path, workspace_root)
     try:
         size = source.stat().st_size
     except FileNotFoundError as exc:
-        raise GeometryNodesSchemaError(f"Patch file not found: {source}") from exc
+        root = _resolve_workspace_root(workspace_root)
+        raise GeometryNodesSchemaError(
+            f"Patch file not found: {source} (workspace root: {root})"
+        ) from exc
     if size > max_bytes:
         raise GeometryNodesSchemaError(
             f"Patch file exceeds {max_bytes} byte limit: {size} bytes"
