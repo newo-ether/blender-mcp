@@ -1,2 +1,2 @@
-BLENDER_MCP_ADDON_VERSION = (1, 16, 1)
+BLENDER_MCP_ADDON_VERSION = (1, 17, 0)
 __version__ = '.'.join(str(value) for value in BLENDER_MCP_ADDON_VERSION)

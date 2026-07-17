@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "blender_mcp"
-version = "1.16.1"
+version = "1.17.0"
 name = "Blender MCP"
 tagline = "Connect Blender to Model Context Protocol clients"
 maintainer = "BlenderMCP Contributors"
