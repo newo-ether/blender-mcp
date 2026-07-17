@@ -25,6 +25,7 @@ CORE_CASES = (
     ("geometry-linked", "blender_geometry_nodes_linked.py"),
     ("geometry-readonly", "blender_geometry_nodes_readonly.py"),
     ("geometry-scale", "blender_geometry_nodes_scale.py"),
+    ("geometry-writable-edges", "blender_geometry_nodes_writable_edges.py"),
     ("instance-lifecycle", "blender_instance_lifecycle.py"),
     ("node-corners", "blender_node_tree_corner_cases.py"),
     ("node-editor-context", "blender_node_editor_context.py"),

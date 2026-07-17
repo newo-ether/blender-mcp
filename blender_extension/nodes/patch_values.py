@@ -93,10 +93,20 @@ def _gn_validate_value(
 
     array_length = int(getattr(prop, "array_length", 0))
     if array_length:
-        if not isinstance(value, list) or len(value) != array_length:
+        # Blender's RNA array_length can overstate the assignable length for
+        # dynamically sized vector properties: FunctionNodeInputVector.vector
+        # reports array_length 4, yet the instance holds 3 components and RNA
+        # rejects a 4-array with "expected 3". The live value's length is the
+        # true contract, so trust it whenever the owner exposes a current value
+        # and fall back to array_length only when it cannot be read.
+        try:
+            expected_length = len(getattr(owner, property_name))
+        except (TypeError, AttributeError):
+            expected_length = array_length
+        if not isinstance(value, list) or len(value) != expected_length:
             diagnostics.append(_gn_patch_diagnostic(
                 "error", "invalid_array_value", path,
-                f"Expected an array with {array_length} values",
+                f"Expected an array with {expected_length} values",
             ))
             return False
         scalar_type = "FLOAT" if prop.type == "FLOAT" else "INT"
@@ -150,6 +160,18 @@ def _gn_validate_value(
         else:
             try:
                 identifiers = {item.identifier for item in prop.enum_items}
+            except (AttributeError, RuntimeError, TypeError):
+                identifiers = set()
+            if not identifiers:
+                # NodeSocketMenu.default_value and other runtime-resolved enums
+                # expose no items through RNA (prop.enum_items is empty even
+                # though the socket accepts a fixed set), so a membership check
+                # here produces the useless "Expected one of: " with no options
+                # and rejects every legal value. Accept any string and let the
+                # transactional RNA assignment be the authority — its rejection
+                # names the real options ("not found in ('Evaluated', ...)").
+                valid = isinstance(enum_value, str)
+            else:
                 valid = isinstance(enum_value, str) and enum_value in identifiers
                 if not valid:
                     diagnostics.append(_gn_patch_diagnostic(
@@ -157,8 +179,6 @@ def _gn_validate_value(
                         f"Expected one of: {', '.join(sorted(identifiers))}",
                     ))
                     return False
-            except (AttributeError, RuntimeError, TypeError):
-                valid = isinstance(enum_value, str)
     elif prop.type == "POINTER":
         try:
             _gn_decode_patch_value(value, node_refs)

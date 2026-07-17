@@ -116,6 +116,7 @@ class BlenderTestRuntimeTests(unittest.TestCase):
                 "blender_geometry_nodes_linked.py",
                 "blender_geometry_nodes_readonly.py",
                 "blender_geometry_nodes_scale.py",
+                "blender_geometry_nodes_writable_edges.py",
                 "blender_instance_lifecycle.py",
                 "blender_node_bootstrap.py",
                 "blender_node_tree_corner_cases.py",
