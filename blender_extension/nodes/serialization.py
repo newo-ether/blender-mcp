@@ -286,6 +286,21 @@ def _gn_slim_interface_record(item):
             record.pop(key, None)
     return record
 
+def _gn_slim_omits_node(node):
+    """Whether the slim view drops this node from its emitted graph entirely.
+
+    Only nodes that carry no operation and participate in no link may be
+    dropped. NodeFrame qualifies — *except* a labeled frame: the label is the
+    sole sanctioned channel for authoring intent (which nodes form a stage, what
+    that stage is for), so a labeled frame is preserved as a compact record
+    rather than discarded.
+    """
+    if node.bl_idname not in _GN_SLIM_NODE_TYPE_EXCLUDES:
+        return False
+    if node.bl_idname == "NodeFrame" and node.label:
+        return False
+    return True
+
 def _gn_slim_node_record(node):
     """Emit the minimum a reader needs: identity, type, operation, real defaults.
 
@@ -295,6 +310,16 @@ def _gn_slim_node_record(node):
     record = {"name": node.name, "bl_idname": node.bl_idname}
     if node.label:
         record["label"] = node.label
+    parent = node.parent
+    if parent is not None and parent.bl_idname == "NodeFrame" and parent.label:
+        # Frame membership is the only intent grouping slim preserves. Emit it
+        # only when the frame itself survives into slim (i.e. it is labeled), so
+        # the reference can never dangle against a node the view dropped.
+        record["frame"] = parent.name
+    if node.bl_idname == "NodeFrame":
+        # A frame carries no operation and no sockets; its label and membership
+        # are the entire payload. Only labeled frames reach this record.
+        return record
     properties = _gn_slim_properties(node)
     if properties:
         record["properties"] = properties
@@ -587,12 +612,14 @@ def _node_export_tree(
 
     ordered_nodes = sorted(tree.nodes, key=lambda item: item.name)
     if view == "slim":
-        # Frames carry no operation and no links, so omitting them cannot break
-        # the adjacency the slim view exists to convey. Filter only what this
-        # view emits; the revision pass below must still see every node.
+        # Unlabeled frames and other operation-free, link-free nodes carry
+        # nothing the slim adjacency needs, so drop them. A *labeled* frame is
+        # kept (as a compact record) because its label is authoring intent.
+        # Filter only what this view emits; the revision pass below must still
+        # see every node.
         view_source_nodes = [
             node for node in ordered_nodes
-            if node.bl_idname not in _GN_SLIM_NODE_TYPE_EXCLUDES
+            if not _gn_slim_omits_node(node)
         ]
     else:
         view_source_nodes = ordered_nodes
@@ -702,7 +729,12 @@ def _node_export_tree(
     omitted_node_count = len(ordered_nodes) - len(view_nodes)
     if omitted_node_count:
         snapshot["stats"]["omitted_node_count"] = omitted_node_count
-        snapshot["view_omits"] = sorted(_GN_SLIM_NODE_TYPE_EXCLUDES)
+        # Report the node types actually dropped, not the static candidate set:
+        # a labeled frame is retained, so NodeFrame appears here only when some
+        # frame was genuinely omitted.
+        snapshot["view_omits"] = sorted({
+            node.bl_idname for node in ordered_nodes if _gn_slim_omits_node(node)
+        }) if view == "slim" else sorted(_GN_SLIM_NODE_TYPE_EXCLUDES)
     if requested_view == "auto":
         snapshot["view_selection"] = {
             "requested": "auto",

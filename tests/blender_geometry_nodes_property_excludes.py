@@ -7,8 +7,9 @@ Locks in three related guarantees:
    ``min``/``max``) is NOT serialized into operation/semantic/all snapshots,
    while operation-defining enums and genuine per-instance state still are.
 2. The ``slim`` reading view stays smaller than ``operations``, keeps operation
-   enums, emits string links whose endpoints all resolve, omits only Frames, and
-   reports that omission instead of hiding it.
+   enums, emits string links whose endpoints all resolve, omits only *unlabeled*
+   Frames (a labeled frame is authoring intent and is kept as a compact record
+   with its members' membership), and reports that omission instead of hiding it.
 3. ``semantic`` sockets do not restate ``index``/``direction``/``identifier``
    (all recoverable from the socket id) nor default flags, while keeping the
    human-facing ``name``.
@@ -212,6 +213,32 @@ def run_test():
         )
     finally:
         tree.nodes.remove(frame)
+
+    # A *labeled* frame is authoring intent, not noise: slim keeps it as a
+    # compact record and records each member's frame, and does not list it as
+    # omitted.
+    labeled_frame = tree.nodes.new("NodeFrame")
+    labeled_frame.label = "Routing Stage"
+    join_node = tree.nodes[join_name]
+    join_node.parent = labeled_frame
+    try:
+        framed = server.export_geometry_node_tree(tree.name, "slim")
+        frame_record = framed["tree"]["nodes"].get(labeled_frame.name)
+        assert_true(
+            frame_record is not None and frame_record.get("label") == "Routing Stage",
+            "Slim view dropped a labeled frame's intent",
+        )
+        assert_true(
+            "NodeFrame" not in (framed.get("view_omits") or []),
+            "Slim view reported a retained labeled frame as omitted",
+        )
+        assert_true(
+            framed["tree"]["nodes"][join_name].get("frame") == labeled_frame.name,
+            "Slim view dropped frame membership for a framed node",
+        )
+    finally:
+        join_node.parent = None
+        tree.nodes.remove(labeled_frame)
 
     # Slim links are strings, and every endpoint must resolve to an emitted node.
     slim_names = set(slim["tree"]["nodes"])
