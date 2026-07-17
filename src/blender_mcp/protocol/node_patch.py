@@ -11,6 +11,10 @@ from typing import Any, Mapping
 
 from .node_tree import (
     NodeTreeSchemaError,
+    ZONE_CAPABILITY,
+    ZONE_HALF_PAIR_NODE_TYPES,
+    ZONE_OPERATION_CONTRACT,
+    ZONE_OPERATIONS,
     resolve_workspace_json_path,
     validate_tree_ref,
 )
@@ -18,6 +22,37 @@ from .node_tree import (
 PATCH_SCHEMA = "blender-node-tree-patch/1"
 PATCH_VALIDATION_SCHEMA = "blender-node-tree-patch-validation/1"
 PATCH_APPLICATION_SCHEMA = "blender-node-tree-patch-application/1"
+
+RESPONSE_DETAIL_LEVELS = ("summary", "operations", "full")
+
+
+def shape_application_response(result: Any, detail: str) -> Any:
+    """Trim an apply response to the requested verbosity for the LLM channel.
+
+    A successful apply echoes every operation's status plus a per-link
+    ``actual_diff``; on a 98-hide patch that is ~14 KB of ``"applied"`` noise
+    with near-zero information, since ``semantic_diff`` and ``verification``
+    already summarize the outcome. ``detail`` lets a caller drop that weight:
+
+    - ``"full"`` (default): unchanged — the complete, schema-shaped response.
+    - ``"operations"``: keep the per-op list, drop the verbose ``actual_diff``.
+    - ``"summary"``: drop both; ``semantic_diff``/``verification`` carry the gist.
+
+    Only the heavy keys are removed and only for a non-full level, which the
+    response marks with ``response_detail`` so the reduction is never silent.
+    Failure responses (which carry ``diagnostics``/``plan`` instead) are left
+    untouched — their payload is exactly what a caller needs to recover.
+    """
+    if detail == "full" or not isinstance(result, dict):
+        return result
+    if result.get("status") != "applied":
+        return result
+    trimmed = dict(result)
+    trimmed.pop("actual_diff", None)
+    if detail == "summary":
+        trimmed.pop("operations", None)
+    trimmed["response_detail"] = detail
+    return trimmed
 SUPPORTED_CAPABILITIES = frozenset({
     "graph", "layout", "interface", "annotation", "dynamic", "id_reference",
 })
@@ -41,8 +76,7 @@ SUPPORTED_OPERATIONS = frozenset({
     "add_dynamic_item",
     "remove_dynamic_item",
     "set_dynamic_item",
-    "add_foreach_zone",
-    "add_closure_zone",
+    *ZONE_OPERATIONS,
 })
 MAX_OPERATIONS = 500
 MAX_PATCH_BYTES = 2 * 1024 * 1024
@@ -91,12 +125,7 @@ _OPERATION_FIELDS = {
     "set_dynamic_item": (
         {"op", "node", "collection", "index", "property", "value"}, set()
     ),
-    "add_foreach_zone": (
-        {"op", "input_id", "output_id"}, {"input_name", "output_name", "location"}
-    ),
-    "add_closure_zone": (
-        {"op", "input_id", "output_id"}, {"input_name", "output_name", "location"}
-    ),
+    **ZONE_OPERATION_CONTRACT,
 }
 _OPERATION_CAPABILITY = {
     "add_node": "graph",
@@ -118,8 +147,7 @@ _OPERATION_CAPABILITY = {
     "add_dynamic_item": "dynamic",
     "remove_dynamic_item": "dynamic",
     "set_dynamic_item": "dynamic",
-    "add_foreach_zone": "dynamic",
-    "add_closure_zone": "dynamic",
+    **ZONE_CAPABILITY,
 }
 _STRING_FIELDS = {
     "id", "node_type", "name", "node", "property", "socket", "from_node",
@@ -441,9 +469,10 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
             continue
         operation_name = operation.get("op")
         if operation_name not in SUPPORTED_OPERATIONS:
+            valid = ", ".join(sorted(SUPPORTED_OPERATIONS))
             diagnostics.append(diagnostic(
                 "unsupported_operation", f"{path}/op",
-                f"Unsupported operation: {operation_name!r}",
+                f"Unsupported operation: {operation_name!r}. Valid ops: {valid}",
             ))
             continue
         required_capabilities.add(_OPERATION_CAPABILITY[operation_name])
@@ -470,6 +499,29 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                         f"Created node id is duplicated: {reference}",
                     ))
                 created_ids.add(reference)
+            node_type = operation.get("node_type")
+            if isinstance(node_type, str):
+                zone_op = ZONE_HALF_PAIR_NODE_TYPES.get(node_type)
+                if zone_op is not None:
+                    if zone_op in ZONE_OPERATIONS:
+                        hint = (
+                            f"{node_type} is a zone half-pair that must be created with "
+                            f"{zone_op} so input and output are paired atomically; an unpaired "
+                            f"half-pair is a state the Node Editor never produces and the next "
+                            f"tree evaluation can hang or crash Blender."
+                        )
+                    else:
+                        hint = (
+                            f"{node_type} is a zone half-pair that must be created paired; "
+                            f"an unpaired half-pair is a state the Node Editor never produces "
+                            f"and the next tree evaluation can hang or crash Blender. The paired "
+                            f"zone op ({zone_op}) is not yet supported by the structured patch; "
+                            f"create it via bpy.ops.node.{zone_op} through execute_blender_code "
+                            f"and continue with patches for the surrounding wiring."
+                        )
+                    diagnostics.append(diagnostic(
+                        "unsupported_node_type", f"{path}/node_type", hint,
+                    ))
             properties = operation.get("properties", {})
             if not isinstance(properties, Mapping):
                 diagnostics.append(diagnostic(
@@ -597,7 +649,7 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                 contains_id_reference = _validate_finite_json_value(
                     operation.get("value"), f"{path}/value", diagnostics
                 ) or contains_id_reference
-        elif operation_name in {"add_foreach_zone", "add_closure_zone"}:
+        elif operation_name in ZONE_OPERATIONS:
             for field in ("input_id", "output_id"):
                 reference = operation.get(field)
                 if isinstance(reference, str):

@@ -15,6 +15,34 @@ OWNER_KINDS = {"MATERIAL", "WORLD", "LIGHT", "SCENE", "NODE_GROUP"}
 VIEWS = {"semantic", "operations", "layout", "all"}
 _REVISION_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
+# Paired-zone operations share the same field contract across the Geometry and
+# generic node-tree protocols (input_id/output_id required; input_name/output_name/
+# location optional). Declared once here so a new zone type is added in exactly one
+# place instead of being scattered across both protocol modules.
+ZONE_OPERATIONS = ("add_foreach_zone", "add_closure_zone", "add_repeat_zone")
+ZONE_OPERATION_FIELDS = (
+    {"op", "input_id", "output_id"},
+    {"input_name", "output_name", "location"},
+)
+ZONE_OPERATION_CONTRACT = {name: ZONE_OPERATION_FIELDS for name in ZONE_OPERATIONS}
+ZONE_CAPABILITY = {name: "dynamic" for name in ZONE_OPERATIONS}
+
+# A zone is one input node + one output node bound by pairing. The two halves are
+# not legal `add_node` targets: they can only exist paired, and an unpaired half is a
+# state the Node Editor never produces. Adding one through `add_node` creates that
+# unreachable state and the next tree evaluation can hang or crash Blender. Map each
+# half to the zone op that builds the pair atomically so the rejection can point at it.
+ZONE_HALF_PAIR_NODE_TYPES = {
+    "GeometryNodeRepeatInput": "add_repeat_zone",
+    "GeometryNodeRepeatOutput": "add_repeat_zone",
+    "GeometryNodeForeachGeometryElementInput": "add_foreach_zone",
+    "GeometryNodeForeachGeometryElementOutput": "add_foreach_zone",
+    "GeometryNodeSimulationInput": "add_simulation_zone",
+    "GeometryNodeSimulationOutput": "add_simulation_zone",
+    "NodeClosureInput": "add_closure_zone",
+    "NodeClosureOutput": "add_closure_zone",
+}
+
 
 class NodeTreeSchemaError(ValueError):
     """Raised when a generic node-tree document or path is invalid."""

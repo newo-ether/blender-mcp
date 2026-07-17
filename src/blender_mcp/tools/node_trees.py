@@ -17,6 +17,8 @@ from ..protocol.node_patch import (
 )
 from ..protocol.node_patch import (
     NodeTreePatchError,
+    RESPONSE_DETAIL_LEVELS,
+    shape_application_response,
 )
 from ..protocol.node_patch import (
     assert_valid_patch as assert_valid_node_patch,
@@ -487,6 +489,7 @@ def apply_node_tree_patch(
     patch_path: str = "",
     keep_backup: bool = True,
     user_prompt: str = "",
+    response_detail: str = "full",
 ) -> str:
     """Apply an owner-addressed patch through a verified transaction.
 
@@ -501,7 +504,33 @@ def apply_node_tree_patch(
     - patch_path: JSON file below BLENDER_MCP_WORKSPACE
     - keep_backup: Preserve the pre-commit owner/tree as a fake-user backup
     - user_prompt: Original user prompt for telemetry
+    - response_detail: Verbosity of a successful apply response. "full"
+      (default) returns the per-operation status list and the per-link
+      actual_diff; "operations" drops actual_diff; "summary" drops both and
+      relies on semantic_diff/verification. Use a leaner level for large,
+      uniform patches to save context.
     """
+    if response_detail not in RESPONSE_DETAIL_LEVELS:
+        return json.dumps(
+            {
+                "schema": NODE_PATCH_APPLICATION_SCHEMA,
+                "status": "rejected",
+                "applied": False,
+                "mutated": False,
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "invalid_response_detail",
+                    "path": "/response_detail",
+                    "message": (
+                        "response_detail must be one of "
+                        f"{', '.join(RESPONSE_DETAIL_LEVELS)}"
+                    ),
+                }],
+                "plan": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
     dispatched = False
     try:
         has_inline_patch = patch is not None
@@ -548,6 +577,7 @@ def apply_node_tree_patch(
             "apply_node_tree_patch",
             {"patch": patch_document, "keep_backup": keep_backup},
         )
+        result = shape_application_response(result, response_detail)
         return json.dumps(result, ensure_ascii=False, indent=2)
     except (NodeTreePatchError, NodeTreeSchemaError) as e:
         diagnostics = getattr(e, "diagnostics", None) or [{

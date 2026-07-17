@@ -195,10 +195,13 @@ def _gn_apply_operations_to_working(working, patch):
                 _gn_decode_patch_value(operation["value"], node_refs),
             )
 
-        elif op in {"add_foreach_zone", "add_closure_zone"}:
+        elif op in {"add_foreach_zone", "add_closure_zone", "add_repeat_zone"}:
             if op == "add_foreach_zone":
                 input_type = "GeometryNodeForeachGeometryElementInput"
                 output_type = "GeometryNodeForeachGeometryElementOutput"
+            elif op == "add_repeat_zone":
+                input_type = "GeometryNodeRepeatInput"
+                output_type = "GeometryNodeRepeatOutput"
             else:
                 input_type = "NodeClosureInput"
                 output_type = "NodeClosureOutput"

@@ -167,6 +167,15 @@ class NodeTreePatchTests(unittest.TestCase):
             {item["code"] for item in diagnostics},
             {"unknown_field", "unsupported_operation"},
         )
+        # An unsupported op must be discoverable from the diagnostic alone: the
+        # message lists every valid op so a caller stops guessing names.
+        unsupported = next(
+            item for item in diagnostics
+            if item["code"] == "unsupported_operation"
+        )
+        self.assertIn("Valid ops:", unsupported["message"])
+        for op_name in ("add_node", "set_socket_default", "rename_node"):
+            self.assertIn(op_name, unsupported["message"])
 
     def test_operation_count_limit_is_enforced(self):
         value = sample_patch()
@@ -181,6 +190,91 @@ class NodeTreePatchTests(unittest.TestCase):
         value["capabilities"] = ["graph"]
         diagnostics = patch_schema.validate_patch_structure(value)
         self.assertIn("too_many_operations", {item["code"] for item in diagnostics})
+
+    def test_add_repeat_zone_shares_zone_field_contract(self):
+        value = sample_patch()
+        value["operations"] = [
+            {
+                "op": "add_repeat_zone",
+                "input_id": "rin",
+                "output_id": "rout",
+                "location": [120.0, 40.0],
+            }
+        ]
+        value["capabilities"] = ["graph", "dynamic"]
+        diagnostics = patch_schema.validate_patch_structure(value)
+        self.assertEqual(diagnostics, [], diagnostics)
+
+    def test_zone_half_pair_node_types_are_rejected_at_add_node(self):
+        # These node types can only exist paired; an unpaired half-pair hangs the next
+        # tree evaluation. The contract must reject them at add_node and name the zone op.
+        value = sample_patch()
+        value["operations"] = [
+            {
+                "op": "add_node",
+                "id": "raw_zone_half",
+                "node_type": "NodeClosureInput",
+            }
+        ]
+        value["capabilities"] = ["graph"]
+        diagnostics = patch_schema.validate_patch_structure(value)
+        codes = {item["code"] for item in diagnostics}
+        self.assertIn("unsupported_node_type", codes)
+        message = next(item["message"] for item in diagnostics if item["code"] == "unsupported_node_type")
+        self.assertIn("add_closure_zone", message)
+        self.assertIn("half-pair", message)
+
+
+class ResponseDetailShaping(unittest.TestCase):
+    def _applied_response(self) -> dict:
+        return {
+            "schema": patch_schema.PATCH_APPLICATION_SCHEMA,
+            "status": "applied",
+            "applied": True,
+            "mutated": True,
+            "new_revision": "sha256:" + "b" * 64,
+            "revision": "sha256:" + "b" * 64,
+            "semantic_diff": {"nodes_added": 1},
+            "verification": {"node_count": 3, "link_count": 2, "interface_item_count": 0},
+            "operations": [{"index": 0, "op": "add_node", "status": "applied"}],
+            "actual_diff": {"nodes_added": ["Image"], "links_added": [{"a": 1}]},
+        }
+
+    def test_full_is_unchanged(self):
+        response = self._applied_response()
+        shaped = patch_schema.shape_application_response(response, "full")
+        self.assertEqual(shaped, response)
+        self.assertNotIn("response_detail", shaped)
+
+    def test_operations_drops_actual_diff_only(self):
+        shaped = patch_schema.shape_application_response(self._applied_response(), "operations")
+        self.assertNotIn("actual_diff", shaped)
+        self.assertIn("operations", shaped)
+        self.assertEqual(shaped["response_detail"], "operations")
+        # semantic_diff and verification always survive — they are the summary.
+        self.assertIn("semantic_diff", shaped)
+        self.assertIn("verification", shaped)
+
+    def test_summary_drops_operations_and_actual_diff(self):
+        shaped = patch_schema.shape_application_response(self._applied_response(), "summary")
+        self.assertNotIn("actual_diff", shaped)
+        self.assertNotIn("operations", shaped)
+        self.assertEqual(shaped["response_detail"], "summary")
+        self.assertIn("new_revision", shaped)
+        self.assertIn("revision", shaped)
+
+    def test_rejection_is_never_trimmed(self):
+        rejection = {
+            "schema": patch_schema.PATCH_APPLICATION_SCHEMA,
+            "status": "rejected",
+            "applied": False,
+            "mutated": False,
+            "diagnostics": [{"severity": "error", "code": "x", "path": "", "message": "m"}],
+            "plan": [],
+        }
+        for detail in patch_schema.RESPONSE_DETAIL_LEVELS:
+            shaped = patch_schema.shape_application_response(rejection, detail)
+            self.assertEqual(shaped, rejection)
 
 
 if __name__ == "__main__":

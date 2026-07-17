@@ -20,6 +20,8 @@ from ..protocol.geometry_nodes import (
 )
 from ..protocol.node_patch import (
     NodeTreePatchError,
+    RESPONSE_DETAIL_LEVELS,
+    shape_application_response,
 )
 from ..protocol.node_patch import (
     assert_valid_patch as assert_valid_node_patch,
@@ -496,6 +498,7 @@ def apply_geometry_node_patch(
     patch_path: str = "",
     keep_backup: bool = True,
     user_prompt: str = "",
+    response_detail: str = "full",
 ) -> str:
     """Apply a Geometry Nodes patch through a copy-on-write transaction.
 
@@ -514,7 +517,33 @@ def apply_geometry_node_patch(
     - patch_path: Workspace-relative path to a patch JSON file
     - keep_backup: Keep the pre-commit NodeTree as a fake-user backup
     - user_prompt: Original user prompt for telemetry
+    - response_detail: Verbosity of a successful apply response. "full"
+      (default) returns the per-operation status list and the per-link
+      actual_diff; "operations" drops actual_diff; "summary" drops both and
+      relies on semantic_diff/verification. Use a leaner level for large,
+      uniform patches (e.g. dozens of set_socket_hide ops) to save context.
     """
+    if response_detail not in RESPONSE_DETAIL_LEVELS:
+        return json.dumps(
+            {
+                "schema": PATCH_APPLICATION_SCHEMA,
+                "status": "rejected",
+                "applied": False,
+                "mutated": False,
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "invalid_response_detail",
+                    "path": "/response_detail",
+                    "message": (
+                        "response_detail must be one of "
+                        f"{', '.join(RESPONSE_DETAIL_LEVELS)}"
+                    ),
+                }],
+                "plan": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
     dispatched = False
     try:
         has_inline_patch = patch is not None
@@ -563,6 +592,7 @@ def apply_geometry_node_patch(
             "apply_geometry_node_patch",
             {"patch": patch_document, "keep_backup": keep_backup},
         )
+        result = shape_application_response(result, response_detail)
         return json.dumps(result, ensure_ascii=False, indent=2)
     except GeometryNodesSchemaError as e:
         logger.error(f"Invalid Geometry Nodes patch file: {str(e)}")

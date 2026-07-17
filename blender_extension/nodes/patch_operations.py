@@ -225,7 +225,10 @@ def _node_execute_patch_operations(target, patch):
         if item is None:
             diagnostics.append(_gn_patch_diagnostic(
                 "error", "node_not_found", path,
-                f"Node reference not found: {reference}",
+                f"Node reference not found: {reference}. Within one patch, refer "
+                f"to a node by the 'id' its add_node gave it; across patches "
+                f"those ids are not valid — use the Blender node name returned "
+                f"in the previous patch's 'created_nodes'.",
             ))
             return None
         if item["removed"]:
@@ -620,13 +623,16 @@ def _node_execute_patch_operations(target, patch):
                     diff["dynamic_structures_changed"] += 1
                     summary = f"Set dynamic item {item_index}.{property_name}"
 
-            elif op in {"add_foreach_zone", "add_closure_zone"}:
+            elif op in {"add_foreach_zone", "add_closure_zone", "add_repeat_zone"}:
                 input_id, output_id = operation["input_id"], operation["output_id"]
                 if input_id in node_refs or output_id in node_refs:
                     raise ValueError("Zone node references must be unique")
                 if op == "add_foreach_zone":
                     input_type = "GeometryNodeForeachGeometryElementInput"
                     output_type = "GeometryNodeForeachGeometryElementOutput"
+                elif op == "add_repeat_zone":
+                    input_type = "GeometryNodeRepeatInput"
+                    output_type = "GeometryNodeRepeatOutput"
                 else:
                     input_type = "NodeClosureInput"
                     output_type = "NodeClosureOutput"

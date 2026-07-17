@@ -195,7 +195,11 @@ def _gn_resolve_patch_node(node_refs, reference, path, diagnostics):
     item = node_refs.get(reference)
     if item is None:
         diagnostics.append(_gn_patch_diagnostic(
-            "error", "node_not_found", path, f"Node reference not found: {reference}",
+            "error", "node_not_found", path,
+            f"Node reference not found: {reference}. Within one patch, refer to "
+            f"a node by the 'id' its add_node gave it; across patches those ids "
+            f"are not valid — use the Blender node name returned in the previous "
+            f"patch's 'created_nodes'.",
         ))
         return None
     if item["removed"]:

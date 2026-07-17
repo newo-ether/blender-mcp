@@ -20,6 +20,26 @@ PATCH_SCHEMA = "blender-geometry-nodes-patch/1"
 PATCH_VALIDATION_SCHEMA = "blender-geometry-nodes-patch-validation/1"
 PATCH_APPLICATION_SCHEMA = "blender-geometry-nodes-patch-application/1"
 SUPPORTED_VIEWS = frozenset({"slim", "semantic", "operations", "layout", "all"})
+
+# This module is loaded by path as a standalone unit (see its docstring), so it keeps
+# its own copies of the zone contracts instead of importing them. node_tree.py is the
+# single source of truth; mirror any change there.
+ZONE_OPERATIONS = ("add_foreach_zone", "add_closure_zone", "add_repeat_zone")
+ZONE_OPERATION_CONTRACT = {
+    name: ({"op", "input_id", "output_id"}, {"input_name", "output_name", "location"})
+    for name in ZONE_OPERATIONS
+}
+ZONE_HALF_PAIR_NODE_TYPES = {
+    "GeometryNodeRepeatInput": "add_repeat_zone",
+    "GeometryNodeRepeatOutput": "add_repeat_zone",
+    "GeometryNodeForeachGeometryElementInput": "add_foreach_zone",
+    "GeometryNodeForeachGeometryElementOutput": "add_foreach_zone",
+    "GeometryNodeSimulationInput": "add_simulation_zone",
+    "GeometryNodeSimulationOutput": "add_simulation_zone",
+    "NodeClosureInput": "add_closure_zone",
+    "NodeClosureOutput": "add_closure_zone",
+}
+
 SUPPORTED_PATCH_OPERATIONS = frozenset({
     "add_node",
     "remove_node",
@@ -38,8 +58,7 @@ SUPPORTED_PATCH_OPERATIONS = frozenset({
     "add_dynamic_item",
     "remove_dynamic_item",
     "set_dynamic_item",
-    "add_foreach_zone",
-    "add_closure_zone",
+    *ZONE_OPERATIONS,
 })
 
 _REVISION_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -94,12 +113,7 @@ _PATCH_OPERATION_FIELDS = {
     "set_dynamic_item": (
         {"op", "node", "collection", "index", "property", "value"}, set()
     ),
-    "add_foreach_zone": (
-        {"op", "input_id", "output_id"}, {"input_name", "output_name", "location"}
-    ),
-    "add_closure_zone": (
-        {"op", "input_id", "output_id"}, {"input_name", "output_name", "location"}
-    ),
+    **ZONE_OPERATION_CONTRACT,
 }
 
 
@@ -336,11 +350,13 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
             continue
         operation_name = operation.get("op")
         if operation_name not in SUPPORTED_PATCH_OPERATIONS:
+            valid = ", ".join(sorted(SUPPORTED_PATCH_OPERATIONS))
             diagnostics.append(
                 _diagnostic(
                     "unsupported_operation",
                     f"{path}/op",
-                    f"Unsupported operation: {operation_name!r}",
+                    f"Unsupported operation: {operation_name!r}. "
+                    f"Valid ops: {valid}",
                 )
             )
             continue
@@ -378,6 +394,29 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                         )
                     )
                 created_ids.add(created_id)
+            node_type = operation.get("node_type")
+            if isinstance(node_type, str):
+                zone_op = ZONE_HALF_PAIR_NODE_TYPES.get(node_type)
+                if zone_op is not None:
+                    if zone_op in ZONE_OPERATIONS:
+                        hint = (
+                            f"{node_type} is a zone half-pair that must be created with "
+                            f"{zone_op} so input and output are paired atomically; an unpaired "
+                            f"half-pair is a state the Node Editor never produces and the next "
+                            f"tree evaluation can hang or crash Blender."
+                        )
+                    else:
+                        hint = (
+                            f"{node_type} is a zone half-pair that must be created paired; "
+                            f"an unpaired half-pair is a state the Node Editor never produces "
+                            f"and the next tree evaluation can hang or crash Blender. The paired "
+                            f"zone op ({zone_op}) is not yet supported by the structured patch; "
+                            f"create it via bpy.ops.node.{zone_op} through execute_blender_code "
+                            f"and continue with patches for the surrounding wiring."
+                        )
+                    diagnostics.append(
+                        _diagnostic("unsupported_node_type", f"{path}/node_type", hint)
+                    )
             if "properties" in operation and not isinstance(operation["properties"], Mapping):
                 diagnostics.append(
                     _diagnostic(
@@ -489,7 +528,7 @@ def validate_patch_structure(patch: Any) -> list[dict[str, str]]:
                 diagnostics.append(
                     _diagnostic("invalid_index", f"{path}/index", "index must be a non-negative integer")
                 )
-        elif operation_name in {"add_foreach_zone", "add_closure_zone"}:
+        elif operation_name in ZONE_OPERATIONS:
             for field in ("input_id", "output_id"):
                 created_id = operation.get(field)
                 if isinstance(created_id, str):

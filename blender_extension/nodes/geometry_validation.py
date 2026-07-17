@@ -525,7 +525,7 @@ def _gn_validate_patch_runtime(tree, patch):
                             f"{type(exc).__name__}: {exc}",
                         ))
 
-            elif op in {"add_foreach_zone", "add_closure_zone"}:
+            elif op in {"add_foreach_zone", "add_closure_zone", "add_repeat_zone"}:
                 input_id, output_id = operation["input_id"], operation["output_id"]
                 if input_id in node_refs or output_id in node_refs:
                     diagnostics.append(_gn_patch_diagnostic(
@@ -537,6 +537,9 @@ def _gn_validate_patch_runtime(tree, patch):
                         if op == "add_foreach_zone":
                             input_type = "GeometryNodeForeachGeometryElementInput"
                             output_type = "GeometryNodeForeachGeometryElementOutput"
+                        elif op == "add_repeat_zone":
+                            input_type = "GeometryNodeRepeatInput"
+                            output_type = "GeometryNodeRepeatOutput"
                         else:
                             input_type = "NodeClosureInput"
                             output_type = "NodeClosureOutput"

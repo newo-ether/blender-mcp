@@ -307,6 +307,49 @@ class GeometryNodesSchemaTests(unittest.TestCase):
             messages["missing_field"],
         )
 
+    def test_add_repeat_zone_is_a_supported_zone_operation(self):
+        # Regression for the crash where Repeat zones were built as two unpaired
+        # add_node calls. The zone op must be accepted and share the foreach contract.
+        patch = sample_patch()
+        patch["operations"] = [
+            {
+                "op": "add_repeat_zone",
+                "input_id": "rin",
+                "output_id": "rout",
+                "location": [200.0, 0.0],
+            }
+        ]
+        diagnostics = schema.validate_patch_structure(patch)
+        self.assertEqual(diagnostics, [], diagnostics)
+        self.assertIn("add_repeat_zone", schema.SUPPORTED_PATCH_OPERATIONS)
+        self.assertIn(
+            "add_repeat_zone",
+            schema.ZONE_HALF_PAIR_NODE_TYPES["GeometryNodeRepeatInput"],
+        )
+
+    def test_zone_half_pair_node_types_are_rejected_at_add_node(self):
+        # An unpaired GeometryNodeRepeatInput hangs the next tree evaluation; the
+        # contract must refuse to create one through add_node and point at the op
+        # that builds the pair atomically.
+        for half_type, expected_op in (
+            ("GeometryNodeRepeatInput", "add_repeat_zone"),
+            ("GeometryNodeRepeatOutput", "add_repeat_zone"),
+            ("GeometryNodeSimulationInput", "add_simulation_zone"),
+        ):
+            with self.subTest(node_type=half_type):
+                patch = sample_patch()
+                patch["operations"] = [
+                    {"op": "add_node", "id": "raw_half", "node_type": half_type}
+                ]
+                diagnostics = schema.validate_patch_structure(patch)
+                hits = [
+                    item for item in diagnostics
+                    if item["code"] == "unsupported_node_type"
+                ]
+                self.assertEqual(len(hits), 1, diagnostics)
+                self.assertIn(expected_op, hits[0]["message"])
+                self.assertIn("half-pair", hits[0]["message"])
+
     def test_patch_not_found_message_includes_workspace_root(self):
         # The not-found error must reveal the resolved workspace root so a
         # caller knows where to place a relative patch_path instead of guessing.
