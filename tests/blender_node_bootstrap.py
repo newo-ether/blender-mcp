@@ -176,6 +176,30 @@ def run_test() -> dict:
     assert validation["semantic_diff"]["interface_items_changed"] == 2
     application = server.apply_geometry_node_patch(patch, keep_backup=False)
     assert application["status"] == "applied", application
+    # "revision" must mean the same thing on every response: the tree's revision
+    # as this response was produced. A caller chaining patches reaches for
+    # result["revision"] without branching on status, so it must be there and it
+    # must be the post-apply value, not the base.
+    assert application["revision"] == application["new_revision"], application
+    assert application["revision"] != application["base_revision"], application
+
+    chained = {
+        "schema": "blender-geometry-nodes-patch/1",
+        "tree_name": group_name,
+        "base_revision": application["revision"],
+        "operations": [
+            {"op": "add_node", "id": "probe", "node_type": "GeometryNodeCurvePrimitiveLine"},
+        ],
+    }
+    chained_application = server.apply_geometry_node_patch(chained, keep_backup=False)
+    assert chained_application["status"] == "applied", chained_application
+
+    # A rejection must report the revision too, or the caller has no way back.
+    stale = dict(chained, base_revision="sha256:" + "0" * 64)
+    stale_application = server.apply_geometry_node_patch(stale, keep_backup=False)
+    assert stale_application["status"] == "rejected", stale_application
+    assert stale_application["revision"] == chained_application["revision"], stale_application
+    assert stale_application["revision"] == stale_application["current_revision"], stale_application
 
     tree = bpy.data.node_groups[group_name]
     interface = list(tree.interface.items_tree)
@@ -235,6 +259,16 @@ def run_test() -> dict:
         shader_patch, keep_backup=False
     )
     assert shader_application["status"] == "applied", shader_application
+    assert shader_application["revision"] == shader_application["new_revision"], shader_application
+
+    stale_shader = dict(shader_patch, base_revision="sha256:" + "0" * 64)
+    stale_shader_application = server.apply_node_tree_patch(
+        stale_shader, keep_backup=False
+    )
+    assert stale_shader_application["status"] == "rejected", stale_shader_application
+    assert (
+        stale_shader_application["revision"] == shader_application["revision"]
+    ), stale_shader_application
     shader = bpy.data.node_groups[shader_name]
     shader_interface = list(shader.interface.items_tree)
     assert [item.item_type for item in shader_interface] == ["PANEL", "SOCKET"]

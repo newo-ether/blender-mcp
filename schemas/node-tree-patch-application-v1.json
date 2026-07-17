@@ -11,9 +11,13 @@
     "mutated": {"oneOf": [{"type": "boolean"}, {"const": "unknown"}]},
     "tree_ref": {"type": ["object", "null"]},
     "previous_owner_name": {"type": "string"},
-    "base_revision": {"type": "string"},
+    "base_revision": {"type": ["string", "null"]},
     "current_revision": {"type": "string"},
     "new_revision": {"type": "string"},
+    "revision": {
+      "type": "string",
+      "description": "The tree's revision as this response was produced: new_revision when applied, current_revision otherwise. Stable across statuses so a caller can chain patches without branching on status."
+    },
     "users_reassigned": {"type": "array", "items": {"type": "object"}},
     "backup": {"type": ["object", "null"]},
     "created_nodes": {"type": "object"},

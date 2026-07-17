@@ -35,6 +35,7 @@ def _gn_apply_patch_transaction(tree, patch, keep_backup=True, _commit_guard=Non
             "tree_name": tree.name,
             "base_revision": patch.get("base_revision"),
             "current_revision": validation["current_revision"],
+            "revision": validation["current_revision"],
             "diagnostics": validation["diagnostics"],
             "plan": validation["plan"],
         }
@@ -145,6 +146,11 @@ def _gn_apply_patch_transaction(tree, patch, keep_backup=True, _commit_guard=Non
             "previous_tree_name": original_name,
             "base_revision": validation["current_revision"],
             "new_revision": committed_snapshot["revision"],
+            # Stable alias: "the tree's revision as this response was produced",
+            # whatever the status. Chaining patches otherwise means branching on
+            # status to pick between new_revision and current_revision, and the
+            # obvious result["revision"] silently reads None.
+            "revision": committed_snapshot["revision"],
             "shared_tree_policy": policy,
             "users_reassigned": [record for record, _handle in selected_users],
             "backup": backup,
@@ -210,6 +216,7 @@ def _gn_apply_patch_transaction(tree, patch, keep_backup=True, _commit_guard=Non
             _gn_patch_diagnostic("error", "rollback_incomplete", "", message)
             for message in rollback_errors
         )
+        rolled_back_revision = _gn_export_tree(tree, "all")["revision"]
         return {
             "schema": "blender-geometry-nodes-patch-application/1",
             "status": "rollback_failed" if rollback_errors else "rolled_back",
@@ -217,7 +224,8 @@ def _gn_apply_patch_transaction(tree, patch, keep_backup=True, _commit_guard=Non
             "mutated": bool(rollback_errors),
             "tree_name": original_name,
             "base_revision": patch.get("base_revision"),
-            "current_revision": _gn_export_tree(tree, "all")["revision"],
+            "current_revision": rolled_back_revision,
+            "revision": rolled_back_revision,
             "diagnostics": rollback_diagnostics,
             "plan": validation["plan"],
         }

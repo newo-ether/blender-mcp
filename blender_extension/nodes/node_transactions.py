@@ -51,6 +51,9 @@ def _node_apply_scene_tree_transaction(
             "applied": False,
             "mutated": False,
             "tree_ref": target["tree_ref"],
+            "base_revision": patch.get("base_revision"),
+            "current_revision": validation["current_revision"],
+            "revision": validation["current_revision"],
             "diagnostics": validation["diagnostics"],
             "plan": validation["plan"],
         }
@@ -62,6 +65,9 @@ def _node_apply_scene_tree_transaction(
             "applied": False,
             "mutated": False,
             "tree_ref": target["tree_ref"],
+            "base_revision": patch.get("base_revision"),
+            "current_revision": validation["current_revision"],
+            "revision": validation["current_revision"],
             "diagnostics": [_gn_patch_diagnostic(
                 "error", "apply_not_supported", "/tree_ref",
                 capabilities["mutation_reason"],
@@ -182,6 +188,11 @@ def _node_apply_scene_tree_transaction(
             "previous_owner_name": scene.name,
             "base_revision": validation["current_revision"],
             "new_revision": committed_snapshot["revision"],
+            # Stable alias: "the tree's revision as this response was produced",
+            # whatever the status. Chaining patches otherwise means branching on
+            # status to pick between new_revision and current_revision, and the
+            # obvious result["revision"] silently reads None.
+            "revision": committed_snapshot["revision"],
             "users_reassigned": [{
                 "kind": "SCENE_COMPOSITOR_POINTER",
                 "scene": scene.name,
@@ -256,6 +267,9 @@ def _node_apply_scene_tree_transaction(
             _gn_patch_diagnostic("error", "rollback_incomplete", "", message)
             for message in rollback_errors
         )
+        rolled_back_revision = _node_export_target(
+            _node_resolve_tree_ref(target["tree_ref"]), "all"
+        )["revision"]
         return {
             "schema": "blender-node-tree-patch-application/1",
             "status": "rollback_failed" if rollback_errors else "rolled_back",
@@ -263,9 +277,8 @@ def _node_apply_scene_tree_transaction(
             "mutated": bool(rollback_errors),
             "tree_ref": target["tree_ref"],
             "base_revision": patch.get("base_revision"),
-            "current_revision": _node_export_target(
-                _node_resolve_tree_ref(target["tree_ref"]), "all"
-            )["revision"],
+            "current_revision": rolled_back_revision,
+            "revision": rolled_back_revision,
             "diagnostics": diagnostics,
             "plan": validation["plan"],
         }
@@ -292,6 +305,9 @@ def _node_apply_patch_transaction(
             "applied": False,
             "mutated": False,
             "tree_ref": target["tree_ref"],
+            "base_revision": patch.get("base_revision"),
+            "current_revision": validation["current_revision"],
+            "revision": validation["current_revision"],
             "diagnostics": validation["diagnostics"],
             "plan": validation["plan"],
         }
@@ -303,6 +319,9 @@ def _node_apply_patch_transaction(
             "applied": False,
             "mutated": False,
             "tree_ref": target["tree_ref"],
+            "base_revision": patch.get("base_revision"),
+            "current_revision": validation["current_revision"],
+            "revision": validation["current_revision"],
             "diagnostics": [_gn_patch_diagnostic(
                 "error", "apply_not_supported", "/tree_ref",
                 capabilities["mutation_reason"],
@@ -402,6 +421,8 @@ def _node_apply_patch_transaction(
             "previous_owner_name": original_name,
             "base_revision": validation["current_revision"],
             "new_revision": committed_snapshot["revision"],
+            # Stable alias; see the compositor path above.
+            "revision": committed_snapshot["revision"],
             "users_reassigned": original_snapshot["users"],
             "backup": backup,
             "created_nodes": execution["created_nodes"],
@@ -475,6 +496,7 @@ def _node_apply_patch_transaction(
             _gn_patch_diagnostic("error", "rollback_incomplete", "", message)
             for message in rollback_errors
         )
+        rolled_back_revision = _node_export_target(target, "all")["revision"]
         return {
             "schema": "blender-node-tree-patch-application/1",
             "status": "rollback_failed" if rollback_errors else "rolled_back",
@@ -482,7 +504,8 @@ def _node_apply_patch_transaction(
             "mutated": bool(rollback_errors),
             "tree_ref": target["tree_ref"],
             "base_revision": patch.get("base_revision"),
-            "current_revision": _node_export_target(target, "all")["revision"],
+            "current_revision": rolled_back_revision,
+            "revision": rolled_back_revision,
             "diagnostics": diagnostics,
             "plan": validation["plan"],
         }

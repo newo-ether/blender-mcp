@@ -14,6 +14,10 @@
     "base_revision": {"type": ["string", "null"]},
     "current_revision": {"type": "string"},
     "new_revision": {"type": "string"},
+    "revision": {
+      "type": "string",
+      "description": "The tree's revision as this response was produced: new_revision when applied, current_revision otherwise. Stable across statuses so a caller can chain patches without branching on status."
+    },
     "shared_tree_policy": {
       "enum": ["reject", "single_user_copy", "mutate_shared"]
     },
@@ -125,7 +129,7 @@
       "if": {"properties": {"status": {"const": "applied"}}},
       "then": {
         "required": [
-          "tree_name", "previous_tree_name", "base_revision", "new_revision",
+          "tree_name", "previous_tree_name", "base_revision", "new_revision", "revision",
           "shared_tree_policy", "users_reassigned", "backup",
           "created_nodes", "created_interface_sockets", "modifier_input_adapters",
           "operations", "semantic_diff", "actual_diff", "warnings", "verification"
