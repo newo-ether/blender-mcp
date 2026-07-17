@@ -82,10 +82,10 @@ class BlenderConnection:
         with self._io_lock:
             self._drop_socket()
 
-    def receive_full_response(self, sock, buffer_size=BRIDGE_RECEIVE_BUFFER_BYTES):
+    def receive_full_response(self, sock, buffer_size=BRIDGE_RECEIVE_BUFFER_BYTES, timeout=None):
         """Receive the complete response, potentially in multiple chunks"""
         chunks = []
-        sock.settimeout(BRIDGE_RESPONSE_TIMEOUT_SECONDS)
+        sock.settimeout(timeout if timeout is not None else BRIDGE_RESPONSE_TIMEOUT_SECONDS)
 
         try:
             while True:
@@ -137,8 +137,19 @@ class BlenderConnection:
         else:
             raise ConnectionError("No data received")
 
-    def send_command(self, command_type: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Send a command to Blender and return the response"""
+    def send_command(
+        self,
+        command_type: str,
+        params: Dict[str, Any] = None,
+        timeout: float | None = None,
+    ) -> Dict[str, Any]:
+        """Send a command to Blender and return the response.
+
+        ``timeout`` overrides the default bridge response timeout for this one
+        call. Callers running code that can hang Blender (an unbounded loop, a
+        poison node-tree evaluation) pass a small value so the bridge reports
+        ``blender_timeout`` quickly instead of blocking on the global ceiling.
+        """
         prepared_params = dict(params or {})
         if self.params_enricher is not None:
             prepared_params = self.params_enricher(command_type, prepared_params)
@@ -163,8 +174,13 @@ class BlenderConnection:
                 )
                 self.sock.sendall(json.dumps(command).encode('utf-8'))
                 logger.info("Command sent, waiting for response...")
-                self.sock.settimeout(BRIDGE_RESPONSE_TIMEOUT_SECONDS)
-                response_data = self.receive_full_response(self.sock)
+                effective_timeout = (
+                    timeout if timeout is not None else BRIDGE_RESPONSE_TIMEOUT_SECONDS
+                )
+                self.sock.settimeout(effective_timeout)
+                response_data = self.receive_full_response(
+                    self.sock, timeout=effective_timeout
+                )
                 logger.info(f"Received {len(response_data)} bytes of data")
 
                 response = json.loads(response_data.decode('utf-8'))

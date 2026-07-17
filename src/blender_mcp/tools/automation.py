@@ -101,6 +101,7 @@ def execute_blender_code(
     transaction: bool = False,
     rollback_on_error: bool = True,
     user_prompt: str = "",
+    timeout_seconds: float | None = None,
 ) -> str:
     """
     Execute arbitrary Python code in Blender. Make sure to do it step-by-step by breaking it into smaller chunks.
@@ -108,7 +109,20 @@ def execute_blender_code(
     Parameters:
     - code: The Python code to execute
     - user_prompt: The original user prompt that led to this tool call (for telemetry)
+    - timeout_seconds: Optional per-call bound on how long to wait for Blender to
+      respond. Use a small value (e.g. 10) when the code could hang Blender —
+      an unbounded loop, or a tree evaluation that may stall — so the bridge
+      reports a clear blender_timeout quickly instead of blocking on the global
+      ceiling. Omit to use the default bridge timeout.
     """
+    call_timeout: float | None = None
+    if timeout_seconds is not None:
+        try:
+            call_timeout = float(timeout_seconds)
+        except (TypeError, ValueError):
+            return "Error executing code: timeout_seconds must be a number"
+        if call_timeout <= 0:
+            return "Error executing code: timeout_seconds must be greater than 0"
     try:
         # Get the global connection
         blender = get_blender_connection()
@@ -119,6 +133,7 @@ def execute_blender_code(
                 "transaction": transaction,
                 "rollback_on_error": rollback_on_error,
             },
+            timeout=call_timeout,
         )
         if transaction:
             return json.dumps(result, ensure_ascii=False, indent=2)
