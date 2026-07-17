@@ -8,7 +8,7 @@ from mcp.server.fastmcp import Context
 
 from ..host import get_blender_connection, mcp
 from ..observability.decorators import telemetry_tool
-from ..protocol.errors import BlenderMCPError
+from ..protocol.errors import BlenderMCPError, unresolved_application_result
 from ..protocol.geometry_nodes import (
     PATCH_APPLICATION_SCHEMA,
     PATCH_VALIDATION_SCHEMA,
@@ -515,6 +515,7 @@ def apply_geometry_node_patch(
     - keep_backup: Keep the pre-commit NodeTree as a fake-user backup
     - user_prompt: Original user prompt for telemetry
     """
+    dispatched = False
     try:
         has_inline_patch = patch is not None
         has_patch_path = bool(patch_path)
@@ -555,6 +556,9 @@ def apply_geometry_node_patch(
         patch_document = assert_valid_patch(patch_document)
 
         blender = get_blender_connection()
+        # Past this point the command reaches Blender and may commit before any
+        # failure surfaces here, so a later exception cannot prove "not mutated".
+        dispatched = True
         result = blender.send_command(
             "apply_geometry_node_patch",
             {"patch": patch_document, "keep_backup": keep_backup},
@@ -582,19 +586,7 @@ def apply_geometry_node_patch(
     except Exception as e:
         logger.error(f"Error applying Geometry Nodes patch: {str(e)}")
         return json.dumps(
-            {
-                "schema": PATCH_APPLICATION_SCHEMA,
-                "status": "failed",
-                "applied": False,
-                "mutated": False,
-                "diagnostics": [{
-                    "severity": "error",
-                    "code": "application_transport_error",
-                    "path": "",
-                    "message": str(e),
-                }],
-                "plan": [],
-            },
+            unresolved_application_result(PATCH_APPLICATION_SCHEMA, dispatched, e),
             ensure_ascii=False,
             indent=2,
         )

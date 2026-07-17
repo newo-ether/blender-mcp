@@ -6,9 +6,9 @@
   "required": ["schema", "status", "applied", "mutated"],
   "properties": {
     "schema": {"const": "blender-node-tree-patch-application/1"},
-    "status": {"enum": ["applied", "rejected", "rolled_back", "rollback_failed", "failed"]},
+    "status": {"enum": ["applied", "rejected", "rolled_back", "rollback_failed", "failed", "unknown"]},
     "applied": {"type": "boolean"},
-    "mutated": {"type": "boolean"},
+    "mutated": {"oneOf": [{"type": "boolean"}, {"const": "unknown"}]},
     "tree_ref": {"type": ["object", "null"]},
     "previous_owner_name": {"type": "string"},
     "base_revision": {"type": "string"},

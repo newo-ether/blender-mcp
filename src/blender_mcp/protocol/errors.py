@@ -59,3 +59,53 @@ def classify_exception(error: BaseException, *, operation: str = "") -> BlenderM
 def raise_classified(error: BaseException, *, operation: str = "") -> None:
     """Raise a classified failure without duplicating exception context."""
     raise classify_exception(error, operation=operation) from error
+
+
+UNRESOLVED_MUTATION = "unknown"
+
+_UNDISPATCHED_HINT = (
+    "The patch never reached Blender, so no datablock was touched. "
+    "Fix the reported cause and resend the same patch."
+)
+_DISPATCHED_HINT = (
+    "The patch was dispatched to Blender and this failure surfaced afterwards, so it "
+    "cannot prove whether the transaction committed. Read the tree back (export or "
+    "query_node_graph) and compare against the patch before resending: replaying an "
+    "already-committed patch duplicates its additive operations."
+)
+
+
+def unresolved_application_result(
+    schema: str,
+    dispatched: bool,
+    error: BaseException,
+) -> dict[str, Any]:
+    """Describe a patch application whose outcome the server cannot assert.
+
+    A failure raised before dispatch proves nothing was mutated. A failure raised at or
+    after dispatch proves nothing at all: the addon commits inside Blender, so the
+    transaction may already have landed while the response was lost. Reporting
+    ``mutated: false`` there is a claim the server cannot support, and callers who
+    believe it retry and double-apply. ``unknown`` is deliberately truthy so that a
+    caller testing ``if result["mutated"]`` degrades toward reading back rather than
+    toward blind retry.
+    """
+    return {
+        "schema": schema,
+        "status": UNRESOLVED_MUTATION if dispatched else "failed",
+        "applied": False,
+        "mutated": UNRESOLVED_MUTATION if dispatched else False,
+        "diagnostics": [{
+            "severity": "error",
+            "code": (
+                "application_unresolved_after_dispatch"
+                if dispatched
+                else "application_transport_error"
+            ),
+            "path": "",
+            "message": (
+                f"{error}. {_DISPATCHED_HINT if dispatched else _UNDISPATCHED_HINT}"
+            ),
+        }],
+        "plan": [],
+    }
