@@ -22,6 +22,7 @@ from ..errors import BlenderMCPAddonError
 # a collision that cannot happen. The claim guard and the overlay both read this
 # one set, so the lock and the border can never disagree about what a command is.
 READ_ONLY_COMMANDS = frozenset({
+    "inspect_node_layout", "audit_node_layout", "plan_node_layout",
     "blender_mcp_handshake", "get_scene_info", "get_object_info",
     "get_blender_version_context", "get_runtime_automation_context",
     "get_node_editor_context",
@@ -646,6 +647,9 @@ class BridgeLifecycleMixin:
             "get_blender_version_context": self.get_blender_version_context,
             "get_runtime_automation_context": self.get_runtime_automation_context,
             "get_node_editor_context": self.get_node_editor_context,
+            "inspect_node_layout": self.inspect_node_layout,
+            "audit_node_layout": self.audit_node_layout,
+            "plan_node_layout": self.plan_node_layout,
             "list_node_trees": self.list_node_trees,
             "create_node_group": self.create_node_group,
             "ensure_scene_compositor_tree": self.ensure_scene_compositor_tree,

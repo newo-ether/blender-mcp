@@ -81,16 +81,19 @@
   },
   {
     "id": "layout_post_pass",
-    "prompt": "搭完这组节点后，把布局强制格式化：不重叠、不回线、Group Input 就近单线、多入线不交叉。",
+    "prompt": "生成的节点按参考工程的阶段式布局排版。所有功能节点必须在框里，每框至少四个节点、最多十几个，允许按语义嵌套，禁止堆砌小框。",
     "live_state": true,
-    "required_phrases": [
-      "layout post pass",
-      "no two nodes or frames",
-      "strictly less than",
-      "exactly one outgoing link",
-      "no more than about 250 px",
-      "top to bottom",
-      "restructure the graph first"
+    "evaluation": "Inspect the generated graph; phrase presence is not behavioral verification.",
+    "acceptance": [
+      "Functional modules have subgroup interfaces; ordinary processing steps stay in Frames, without a subgroup per step.",
+      "Every functional node has a Frame parent, including input, output and reroute nodes.",
+      "Each Frame has 4-19 direct children. Nested Frames count as one child and are checked independently.",
+      "Frames follow meaningful processing stages. No filler nodes or decorative nesting satisfy the count.",
+      "Local related inputs may share a compact Group Input; unused sockets are hidden.",
+      "The main path reads left to right, with local feeders and consistent repeated columns.",
+      "inspect_node_layout and audit_node_layout establish membership, counts and bounds; legacy installations may use audit_node_frames.py for counts only.",
+      "plan_node_layout uses an explicit main_path after semantic membership is correct; the candidate is validated and applied through the domain transaction tools.",
+      "A fresh post-apply audit and actual wire inspection replace predicted or cached bounds as acceptance evidence; every authored subgroup is checked."
     ]
   }
 ]

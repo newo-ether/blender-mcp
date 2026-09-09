@@ -67,6 +67,11 @@ belong in a versioned v2 envelope.
 
 ## Public tools
 
+For presentation changes, use the [layout workflow](node-layout.md):
+`inspect_node_layout`, `audit_node_layout`, and `plan_node_layout` measure,
+diagnose, and propose a candidate for the existing domain transaction tools.
+Plans preserve semantic membership and require post-apply display verification.
+
 | Tool | Role | Changes Blender |
 | --- | --- | --- |
 | `get_node_editor_context` | Resolve visible Node Editors and their current owner-addressed tree without implicit focus/order selection | No |

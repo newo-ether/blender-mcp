@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/newo-ether/blender-mcp/schemas/node-layout-plan-v1.json",
+  "title": "Blender read-only node layout candidate plan",
+  "type": "object",
+  "required": ["schema", "status", "will_mutate", "patch"],
+  "properties": {
+    "schema": {"const": "blender-node-layout-plan/1"},
+    "status": {"enum": ["planned", "blocked", "stale_revision", "read_only"]},
+    "will_mutate": {"const": false},
+    "patch": {"type": ["object", "null"]}
+  },
+  "allOf": [
+    {"if": {"properties": {"status": {"const": "planned"}}}, "then": {
+      "required": ["revision", "tree_ref", "predicted_audit", "requires_post_apply_measurement"],
+      "properties": {"patch": {"type": "object", "required": ["schema", "base_revision", "operations"]}, "requires_post_apply_measurement": {"const": true}}
+    }, "else": {"properties": {"patch": {"type": "null"}}}}
+  ]
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .patch_operations import _node_add_paired_zone, _node_dynamic_collection
 from .patch_values import _gn_decode_patch_value, _gn_resolve_patch_socket
+from .layout_assignment import assign_node_layout
 
 
 def _gn_apply_operations_to_working(working, patch):
@@ -37,11 +38,7 @@ def _gn_apply_operations_to_working(working, patch):
             for property_name, value in operation.get("properties", {}).items():
                 setattr(node, property_name, _gn_decode_patch_value(value, node_refs))
             layout = operation.get("layout", {})
-            for field in ("location", "width", "height"):
-                if field in layout:
-                    setattr(node, field, layout[field])
-            if layout.get("parent") is not None:
-                node.parent = node_refs[layout["parent"]]["node"]
+            assign_node_layout(node, layout, lambda ref: node_refs[ref]["node"])
             created_nodes[reference] = node.name
             result["node_name"] = node.name
 
@@ -112,14 +109,7 @@ def _gn_apply_operations_to_working(working, patch):
 
         elif op == "set_node_layout":
             node = node_refs[operation["node"]]["node"]
-            for field in ("location", "width", "height"):
-                if field in operation:
-                    setattr(node, field, operation[field])
-            if "parent" in operation:
-                node.parent = (
-                    node_refs[operation["parent"]]["node"]
-                    if operation["parent"] is not None else None
-                )
+            assign_node_layout(node, operation, lambda ref: node_refs[ref]["node"])
 
         elif op == "add_interface_socket":
             parent_ref = operation.get("parent")

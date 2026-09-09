@@ -15,6 +15,8 @@ model-generation tools while adding:
 
 - owner-aware Geometry, Shader, and Compositor discovery, export, validation,
   and transactional edits;
+- [node layout inspection, auditing, and planning](docs/node-layout.md), with
+  measured bounds, nested stage Frames, and a reviewed transactional layout patch;
 - version-aware official Manual, Python API, Release Notes, live node-schema,
   and installed Essentials queries;
 - a checksummed GitHub Release containing the Blender Extension, Python wheel,

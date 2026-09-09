@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/newo-ether/blender-mcp/schemas/node-layout-audit-v1.json",
+  "title": "Blender node layout audit",
+  "type": "object",
+  "required": ["schema", "tree_ref", "revision", "valid", "will_mutate", "bounds_complete", "bounds_verified", "visual_layout_checked", "wire_checks", "diagnostics", "diagnostic_counts", "diagnostics_truncated", "frame_child_counts"],
+  "properties": {
+    "schema": {"const": "blender-node-layout-audit/1"},
+    "will_mutate": {"const": false},
+    "valid": {"type": "boolean"},
+    "bounds_complete": {"type": "boolean"},
+    "bounds_verified": {"type": "boolean"},
+    "visual_layout_checked": {"const": false},
+    "wire_checks": {"const": "endpoint_order_only"},
+    "diagnostics_truncated": {"type": "boolean"},
+    "frame_child_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "diagnostic_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "diagnostics": {"type": "array", "items": {"type": "object", "required": ["code", "nodes", "severity"], "properties": {"severity": {"enum": ["error", "warning"]}, "nodes": {"type": "array", "items": {"type": "string"}}}}}
+  }
+}

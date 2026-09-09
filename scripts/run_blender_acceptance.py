@@ -19,6 +19,7 @@ TESTS = ROOT / "tests"
 ALL_VERSIONS = ("4.2", "5.1", "5.2")
 ALL_SUITES = ("smoke", "core", "improve", "multi", "extension")
 CORE_CASES = (
+    ("node-layout", "blender_node_layout.py"),
     ("node-bootstrap", "blender_node_bootstrap.py"),
     ("compositor-initialization", "blender_compositor_initialization.py"),
     ("compositor-transactions", "blender_compositor_nodes_transactions.py"),

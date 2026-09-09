@@ -16,6 +16,9 @@ from .tools.instances import (
     release_blender_instance,
 )
 from .tools.nodes import (
+    inspect_node_layout,
+    audit_node_layout,
+    plan_node_layout,
     apply_geometry_node_patch,
     apply_node_tree_patch,
     create_node_group,
@@ -79,6 +82,9 @@ from .tools.scene import (
 from .transport.connection import BlenderConnection, _redact_command_params
 
 __all__ = [
+    "inspect_node_layout",
+    "audit_node_layout",
+    "plan_node_layout",
     "main",
     "mcp",
     "get_blender_connection",

@@ -43,6 +43,9 @@ paths = [
   "nodes/diagnostics.py",
   "nodes/dynamic.py",
   "nodes/editor_context.py",
+  "nodes/layout.py",
+  "nodes/layout_core.py",
+  "nodes/layout_assignment.py",
   "nodes/export.py",
   "nodes/geometry_operations.py",
   "nodes/geometry_transactions.py",
@@ -78,5 +81,8 @@ paths = [
   "schemas/node-tree-patch-v1.json",
   "schemas/node-tree-patch-validation-v1.json",
   "schemas/node-tree-v1.json",
+  "schemas/node-layout-v1.json",
+  "schemas/node-layout-audit-v1.json",
+  "schemas/node-layout-plan-v1.json",
   "schemas/node-type-schema-v1.json",
 ]

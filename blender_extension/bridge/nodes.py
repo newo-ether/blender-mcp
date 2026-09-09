@@ -30,6 +30,7 @@ from ..nodes.constants import (
 from ..nodes.geometry_transactions import _gn_apply_patch_transaction
 from ..nodes.geometry_validation import _gn_validate_patch_runtime
 from ..nodes.editor_context import _node_editor_context
+from ..nodes.layout import inspect_layout, audit_node_layout, plan_node_layout
 from ..nodes.node_transactions import _node_apply_patch_transaction
 from ..nodes.node_validation import _node_validate_patch_runtime
 from ..nodes.query import _node_query_graph, _node_soft_limit_response, _node_tree_index
@@ -60,6 +61,18 @@ from ..nodes.workflow import _blendermcp_check_workflow_assertions
 
 
 class NodeCommandsMixin:
+    def inspect_node_layout(self, tree_ref, refresh=False, context_id=""):
+        return inspect_layout(tree_ref, refresh, context_id)
+
+    def audit_node_layout(self, tree_ref, refresh=False, context_id="", min_children=4,
+                          max_children=19, min_gap=20, diagnostic_limit=200):
+        return audit_node_layout(tree_ref, refresh, context_id, min_children, max_children, min_gap, diagnostic_limit)
+
+    def plan_node_layout(self, tree_ref, expected_revision, main_path=None, refresh=False,
+                         context_id="", size_hints=None, horizontal_gap=80, vertical_gap=40, stage_gap=140):
+        return plan_node_layout(tree_ref, expected_revision, main_path, refresh, context_id,
+                                size_hints, horizontal_gap, vertical_gap, stage_gap)
+
     def get_scene_info(self):
         """Get information about the current Blender scene"""
         try:

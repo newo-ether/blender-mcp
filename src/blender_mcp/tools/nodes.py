@@ -1,6 +1,7 @@
 """Compatibility facade for node tools now grouped by capability."""
 
 from .automation import execute_blender_code, get_viewport_screenshot
+from .layout import inspect_node_layout, audit_node_layout, plan_node_layout
 from .geometry_nodes import (
     apply_geometry_node_patch,
     ensure_geometry_nodes_modifier,
@@ -29,6 +30,9 @@ from .node_trees import (
 )
 
 __all__ = [
+    "inspect_node_layout",
+    "audit_node_layout",
+    "plan_node_layout",
     "apply_geometry_node_patch",
     "apply_node_tree_patch",
     "create_node_group",

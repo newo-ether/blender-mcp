@@ -11,6 +11,7 @@
 在保留上游 BlenderMCP 场景、对象、视口、资产和模型生成工具的基础上，本项目新增了：
 
 - 按材质、世界、灯光、场景和节点组准确定归属的查找、导出、校验和事务式编辑工具；
+- [节点排版测量、审计与规划](docs/node-layout.md)：测量实际边界，检查所有节点入框及每框 4–19 个直接子节点，按主路径与嵌套 Frame 生成可校验的排版 patch；
 - 可按 Blender 版本查询官方手册、Python API、版本说明、当前节点定义和内置 Essentials 资产；
 - 可直接发布的 GitHub Release，其中包含 Blender 扩展、Python wheel、Claude Desktop MCPB、可移植 Blender MCP Agent Skill 和校验文件；
 - 可自动检测客户端和 Blender 的 Windows 一键安装器；

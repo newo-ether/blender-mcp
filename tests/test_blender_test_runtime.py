@@ -121,6 +121,7 @@ class BlenderTestRuntimeTests(unittest.TestCase):
                 "blender_node_bootstrap.py",
                 "blender_node_tree_corner_cases.py",
                 "blender_node_editor_context.py",
+                "blender_node_layout.py",
                 "blender_node_tree_model_efficiency.py",
                 "blender_node_tree_validation.py",
                 "blender_node_trees_readonly.py",

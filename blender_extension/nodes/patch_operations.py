@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .layout_assignment import assign_node_layout
+
 import bpy
 
 from .common import _gn_patch_diagnostic
@@ -291,17 +293,10 @@ def _node_execute_patch_operations(target, patch):
                                 _gn_decode_patch_value(value, node_refs),
                             )
                     layout = operation.get("layout", {})
-                    for field in ("location", "width", "height"):
-                        if field in layout:
-                            setattr(node, field, layout[field])
-                    if layout.get("parent") is not None:
-                        parent = resolve_node(
-                            layout["parent"], f"{path}/layout/parent"
-                        )
-                        if parent is not None:
-                            if parent.bl_idname != "NodeFrame":
-                                raise ValueError("Node parent must be a Frame")
-                            node.parent = parent
+                    assign_node_layout(
+                        node, layout,
+                        lambda ref: resolve_node(ref, f"{path}/layout/parent"),
+                    )
                     diff["nodes_added"] += 1
                     summary = f"Add {node.bl_idname} as {reference}"
 
@@ -442,18 +437,10 @@ def _node_execute_patch_operations(target, patch):
                 if node is not None and _node_mutation_allowed(
                     node, op, path, diagnostics
                 ):
-                    for field in ("location", "width", "height"):
-                        if field in operation:
-                            setattr(node, field, operation[field])
-                    if "parent" in operation:
-                        if operation["parent"] is None:
-                            node.parent = None
-                        else:
-                            parent = resolve_node(operation["parent"], f"{path}/parent")
-                            if parent is not None:
-                                if parent == node or parent.bl_idname != "NodeFrame":
-                                    raise ValueError("Node parent must be a different Frame")
-                                node.parent = parent
+                    assign_node_layout(
+                        node, operation,
+                        lambda ref: resolve_node(ref, f"{path}/parent"),
+                    )
                     diff["layouts_changed"] += 1
                     summary = f"Update layout for {operation['node']}"
 

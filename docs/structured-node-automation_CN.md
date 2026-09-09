@@ -46,6 +46,11 @@ ShaderNodeTree 或 CompositorNodeTree
 
 ## 公开工具
 
+节点排版使用独立的[排版流程](node-layout.md)：`inspect_node_layout` 读取实际边界与连接，
+`audit_node_layout` 检查全部节点入框、每框 4–19 个直接子节点、包含关系、重叠与连线端点顺序，
+`plan_node_layout` 按主路径和嵌套 Frame 生成候选 patch，再交给已有领域事务工具校验、应用。
+模块用 Subgroup，处理步骤用 Frame；语义分组先完成，工具保留这些边界。应用后必须刷新并复查，预测结果不等于视觉验收。
+
 | 工具 | 用途 | 修改 Blender |
 | --- | --- | --- |
 | `get_node_editor_context` | 解析可见节点编辑器及当前归属节点树，不按焦点或顺序猜测 | 否 |

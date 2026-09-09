@@ -114,7 +114,7 @@ class BlenderMcpSkillTests(unittest.TestCase):
         guidance = self.canonical_guidance().lower()
         for scenario in scenarios:
             self.assertTrue(scenario["prompt"].strip(), scenario["id"])
-            for phrase in scenario["required_phrases"]:
+            for phrase in scenario.get("required_phrases", []):
                 with self.subTest(scenario=scenario["id"], phrase=phrase):
                     self.assertIn(phrase.lower(), guidance)
         conceptual = next(
@@ -145,21 +145,14 @@ class BlenderMcpSkillTests(unittest.TestCase):
         self.assertIn("read-only work", guidance)
         self.assertIn("failure or early-stop handoffs", guidance)
 
-    def test_layout_post_pass_hard_constraints(self):
-        guidance = self.canonical_guidance().lower()
-        for required in (
-            "layout post pass",
-            "no two nodes or frames",
-            "strictly less than the target node center x",
-            "exactly one outgoing link",
-            "no more than about 250 px",
-            "top to bottom",
-            "fix every violation",
-            "restructure the graph first",
-            "never deliver a graph with a violating layout",
-        ):
-            with self.subTest(required=required):
-                self.assertIn(required, guidance)
+    def test_skill_markdown_local_links_resolve(self):
+        for path in SKILL_ROOT.rglob("*.md"):
+            for target in re.findall(r"\[[^]]+\]\(([^)]+)\)", path.read_text(encoding="utf-8")):
+                if "://" in target or target.startswith("#"):
+                    continue
+                destination = (path.parent / target.split("#", 1)[0]).resolve()
+                self.assertTrue(destination.is_relative_to(SKILL_ROOT.resolve()), target)
+                self.assertTrue(destination.is_file(), f"{path}: {target}")
 
 
 class McpGuidanceTests(unittest.TestCase):

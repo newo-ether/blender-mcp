@@ -3,6 +3,9 @@ from __future__ import annotations
 import unittest
 
 EXPECTED_TOOL_NAMES = {
+    "inspect_node_layout",
+    "audit_node_layout",
+    "plan_node_layout",
     "apply_external_dependency_relinks",
     "apply_geometry_node_patch",
     "apply_node_tree_patch",
