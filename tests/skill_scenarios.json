@@ -89,11 +89,18 @@
       "Every functional node has a Frame parent, including input, output and reroute nodes.",
       "Each Frame has 4-19 direct children. Nested Frames count as one child and are checked independently.",
       "Frames follow meaningful processing stages. No filler nodes or decorative nesting satisfy the count.",
-      "Local related inputs may share a compact Group Input; unused sockets are hidden.",
-      "The main path reads left to right, with local feeders and consistent repeated columns.",
+      "Every Group Input exposes one used output and has exactly one outgoing link; dead inputs are removed and fan-out becomes separate local inputs with the same interface socket identity.",
+      "Unrelated node/frame bounds never overlap or touch; intentional nested-frame containment is allowed.",
+      "Every link has a strictly positive horizontal edge gap, including auxiliary and cross-frame links.",
+      "Each Group Input is in its consumer's Frame, at most 250 canvas units to its left center-to-center, and aligned to its receiving socket.",
+      "Distinct fan-in sources follow target socket order; actual crossings and node-body occlusion are checked.",
+      "Neighboring nodes in each local vertical stack use their measured edge gap, targeting 20-40 canvas units and never exceeding 60; oversized fixed rows and blank fill space fail acceptance.",
+      "The main path reads left to right, with consistent repeated columns and unchanged built-in node names.",
+      "Within each semantic step, compare legal orders/columns/positions to minimize total internal wire length under every constraint; optimize nested steps first and preserve computation and membership.",
+      "Wire-length estimates are identified as estimates, and a single valid planner candidate is not claimed to be a proven shortest layout.",
       "inspect_node_layout and audit_node_layout establish membership, counts and bounds; legacy installations may use audit_node_frames.py for counts only.",
       "plan_node_layout uses an explicit main_path after semantic membership is correct; the candidate is validated and applied through the domain transaction tools.",
-      "A fresh post-apply audit and actual wire inspection replace predicted or cached bounds as acceptance evidence; every authored subgroup is checked."
+      "A fresh post-apply audit, supplemental strict checks and actual wire inspection establish zero strict-rule violations; every authored subgroup is checked and unverified evidence cannot be reported as a pass."
     ]
   }
 ]

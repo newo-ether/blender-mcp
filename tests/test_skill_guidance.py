@@ -62,12 +62,16 @@ class BlenderMcpSkillTests(unittest.TestCase):
 
     def test_skill_references_exist_and_cover_safe_workflow(self):
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        linked_paths = re.findall(r"\[[^]]+\]\((references/[^)]+)\)", skill_text)
+        linked_paths = [
+            target.split("#", 1)[0]
+            for target in re.findall(r"\[[^]]+\]\((references/[^)]+)\)", skill_text)
+        ]
         self.assertEqual(
             set(linked_paths),
             {
                 "references/asset-workflows.md",
                 "references/node-workflows.md",
+                "references/node-layout-style.md",
                 "references/recovery.md",
                 "references/render-workflows.md",
             },
